@@ -76,6 +76,5 @@ pip install physicaloptix
 
 ## Status
 
-This package is in early development (pre-v0.1.0). No coronagraph mask
-(focal-plane / Lyot) is modelled yet, so `on_axis_psf` is currently the
-telescope PSF.
+Early development (v0.0.1). No coronagraph mask (focal-plane / Lyot) is
+modelled yet, so `on_axis_psf` is currently the telescope PSF.

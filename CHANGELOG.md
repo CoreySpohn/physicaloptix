@@ -11,5 +11,3 @@
 ### Miscellaneous Chores
 
 * release 0.0.1 ([155d963](https://github.com/CoreySpohn/physicaloptix/commit/155d96329592b79d33db01981350de5023da7c07))
-
-## Changelog
