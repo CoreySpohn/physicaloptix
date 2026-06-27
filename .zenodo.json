@@ -1,0 +1,28 @@
+{
+  "upload_type": "software",
+  "creators": [
+    {
+      "orcid": "0000-0002-3138-0240",
+      "affiliation": "NASA Goddard Space Flight Center, Greenbelt, MD",
+      "name": "Spohn, Corey"
+    }
+  ],
+  "license": "MIT",
+  "title": "physicaloptix",
+  "description": "physicaloptix is an open-source JAX library providing physical-optics PSF and diffraction modeling, built on dLux, for the Habitable Worlds Observatory direct imaging simulation suite.",
+  "keywords": [
+    "physical optics",
+    "point spread function",
+    "diffraction",
+    "Habitable Worlds Observatory",
+    "direct imaging",
+    "JAX"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/CoreySpohn/physicaloptix",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    }
+  ]
+}
