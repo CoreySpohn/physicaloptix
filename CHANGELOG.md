@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0](https://github.com/CoreySpohn/physicaloptix/compare/v0.0.1...v0.1.0) (2026-06-27)
+
+
+### Features
+
+* **speckle:** add AnalyticSpeckleField generator ([676ef4e](https://github.com/CoreySpohn/physicaloptix/commit/676ef4e4d6fa91307f11e8874527c0ace456b5d8))
+
 ## 0.0.1 (2026-06-27)
 
 
