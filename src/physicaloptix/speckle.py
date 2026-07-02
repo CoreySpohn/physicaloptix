@@ -21,6 +21,7 @@ export) and constructs the field.
 """
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 from jaxtyping import Array
 from optixstuff.speckle import AbstractSpeckleField
@@ -109,3 +110,170 @@ class AnalyticSpeckleField(AbstractSpeckleField):
         else:
             delta = jnp.abs(g_eps) ** 2
         return delta / self.normalization
+
+
+class SpeckleProcess(eqx.Module):
+    """One parameter set for the Tier-G speckle process; views derive from it.
+
+    Holds the spatial ingredients (``E_nom``, ``G``) together with the
+    per-mode temporal PSD specification (knee + slope + per-mode rms), so the
+    generator view and any future inference view (the state-space ``(A, Q)``
+    of a filter) derive from the SAME parameters and cannot drift apart (the
+    "one parameter set, two views" refactor of
+    physicaloptix-setup ``brain/OBSERVATORY_STATE_MODEL.md`` sec 11).
+
+    :meth:`draw` samples one frozen realization -- spectral-synthesis
+    amplitudes from the PSD and uniform random phases -- and returns it as an
+    :class:`AnalyticSpeckleField` (the sampled/generator view, unchanged).
+    Ensembles are many draws with different keys; each draw's per-mode rms is
+    exact (the random amplitudes are renormalized mode-by-mode), so the WFE
+    budget is honored draw by draw rather than only in expectation.
+
+    The PSD is the SCoOB-style knee form ``(1 + (f / knee)^2)^(slope / 2)``,
+    evaluated on a fixed log-spaced frequency grid straddling the knee.
+    ``per_mode_rms`` is in the same mode units as ``G``'s mode coordinate.
+    """
+
+    e_nom: Array  # complex (y, x): nominal focal field
+    G: Array  # complex (m, y, x): d(E_focal)/d(mode)
+    per_mode_rms: Array  # float (m,): rms drift per mode
+    knee_hz: float
+    slope: float
+    normalization: float
+    pixel_scale_lod: float
+    epoch_jd: float
+    coherent: bool = eqx.field(static=True)
+    n_freq: int = eqx.field(static=True)
+    decades_below: float = eqx.field(static=True)
+    decades_above: float = eqx.field(static=True)
+
+    def __init__(
+        self,
+        e_nom,
+        G,
+        per_mode_rms,
+        knee_hz,
+        normalization,
+        *,
+        slope=-2.0,
+        pixel_scale_lod=0.25,
+        epoch_jd=J2000_JD,
+        coherent=False,
+        n_freq=64,
+        decades_below=0.7,
+        decades_above=2.3,
+    ):
+        """Build the process parameter object.
+
+        Args:
+            e_nom: Complex nominal focal field, shape ``(y, x)``.
+            G: Complex sensitivity ``d(E_focal)/d(mode)``, shape ``(m, y, x)``.
+            per_mode_rms: Per-mode rms drift, scalar (broadcast to every
+                mode) or shape ``(m,)``.
+            knee_hz: Temporal PSD knee frequency in Hz
+                (``1 / (2 pi tau)`` for a decorrelation time ``tau``).
+            normalization: Intensity that maps to unit contrast.
+            slope: High-frequency PSD power-law slope. Default -2.
+            pixel_scale_lod: Native pixel scale in lambda/D per pixel.
+            epoch_jd: Julian Date mapping to ``time_s = 0``. Default J2000.
+            coherent: Drawn fields include the pinning cross term.
+            n_freq: Number of spectral-synthesis frequencies.
+            decades_below: Frequency-grid extent below the knee (decades).
+            decades_above: Frequency-grid extent above the knee (decades).
+        """
+        self.e_nom = e_nom
+        self.G = G
+        self.per_mode_rms = jnp.broadcast_to(
+            jnp.asarray(per_mode_rms, dtype=float), (G.shape[0],)
+        )
+        self.knee_hz = knee_hz
+        self.slope = slope
+        self.normalization = normalization
+        self.pixel_scale_lod = pixel_scale_lod
+        self.epoch_jd = epoch_jd
+        self.coherent = coherent
+        self.n_freq = n_freq
+        self.decades_below = decades_below
+        self.decades_above = decades_above
+
+    def __check_init__(self):
+        """Validate that per_mode_rms matches G's mode axis."""
+        if self.per_mode_rms.shape != (self.G.shape[0],):
+            raise ValueError(
+                f"per_mode_rms has shape {self.per_mode_rms.shape}; expected "
+                f"({self.G.shape[0]},) to match G's mode axis"
+            )
+
+    @classmethod
+    def from_decorrelation(
+        cls,
+        e_nom,
+        G,
+        *,
+        decorr_hours,
+        total_rms,
+        normalization,
+        **kwargs,
+    ):
+        """Parameterize by decorrelation time and a total WFE budget.
+
+        The knee is ``1 / (2 pi tau)`` so the field decorrelates over roughly
+        ``decorr_hours``, and the budget is split evenly over the modes
+        (``per_mode_rms = total_rms / sqrt(m)``; rms adds in quadrature).
+        This is the proven eac1_dlux script parameterization promoted into
+        the library.
+        """
+        tau_s = decorr_hours * 3600.0
+        m = G.shape[0]
+        return cls(
+            e_nom,
+            G,
+            total_rms / jnp.sqrt(float(m)),
+            1.0 / (2.0 * jnp.pi * tau_s),
+            normalization,
+            **kwargs,
+        )
+
+    def frequencies_hz(self) -> Array:
+        """The fixed log-spaced spectral-synthesis frequency grid."""
+        log_knee = jnp.log10(self.knee_hz)
+        return jnp.logspace(
+            log_knee - self.decades_below, log_knee + self.decades_above, self.n_freq
+        )
+
+    def psd(self, frequencies_hz) -> Array:
+        """Temporal PSD (knee form) evaluated at ``frequencies_hz``."""
+        return (1.0 + (frequencies_hz / self.knee_hz) ** 2) ** (self.slope / 2.0)
+
+    def draw(self, key) -> AnalyticSpeckleField:
+        """Sample one frozen realization of the process.
+
+        Amplitudes are PSD-shaped Gaussian draws renormalized so each mode's
+        synthesized ``eps_k(t)`` has exactly ``per_mode_rms[k]`` rms
+        (``Var[eps_k] = 0.5 sum_j a_kj^2``); phases are uniform on
+        ``[0, 2 pi)``. Independent realizations come from independent keys.
+        """
+        k_amp, k_phase = jax.random.split(key)
+        m = self.G.shape[0]
+        f = self.frequencies_hz()
+        amp = jnp.sqrt(self.psd(f))[None, :] * jax.random.normal(
+            k_amp, (m, self.n_freq)
+        )
+        amp = amp * (
+            self.per_mode_rms[:, None]
+            / jnp.sqrt(0.5 * jnp.sum(amp**2, axis=1, keepdims=True))
+        )
+        phases = jax.random.uniform(
+            k_phase, (m, self.n_freq), minval=0.0, maxval=2.0 * jnp.pi
+        )
+        return AnalyticSpeckleField(
+            self.e_nom,
+            self.G,
+            amp,
+            f,
+            phases,
+            normalization=self.normalization,
+            pixel_scale_lod=self.pixel_scale_lod,
+            epoch_jd=self.epoch_jd,
+            coherent=self.coherent,
+        )

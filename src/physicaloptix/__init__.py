@@ -13,11 +13,12 @@ one from an optixstuff primary and hand it over, no dLux in sight.
 from physicaloptix._version import __version__
 from physicaloptix.apertures import to_dlux_aperture
 from physicaloptix.coronagraph import DLuxCoronagraph, psf
-from physicaloptix.speckle import AnalyticSpeckleField
+from physicaloptix.speckle import AnalyticSpeckleField, SpeckleProcess
 
 __all__ = [
     "AnalyticSpeckleField",
     "DLuxCoronagraph",
+    "SpeckleProcess",
     "__version__",
     "psf",
     "to_dlux_aperture",
