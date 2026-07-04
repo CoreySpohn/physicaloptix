@@ -15,9 +15,11 @@ renderer consumes them directly).
 
 import equinox as eqx
 
+from physicaloptix.linearize import linearize as _linearize
+
 
 class Stage(eqx.Module):
-    """A named step of the train: an element or propagator."""
+    """A named step of the path: an element or propagator."""
 
     name: str = eqx.field(static=True)
     op: eqx.Module
@@ -74,3 +76,11 @@ class OpticalPath(eqx.Module):
             if stage.name in taps:
                 tapped[stage.name] = field
         return field, tapped
+
+    def linearize(self, field, basis, **kwargs):
+        """Build the (E_nom, G) linearization of this path around ``field``.
+
+        See :func:`physicaloptix.linearize.linearize` for the arguments
+        (``wavelength_nm`` is required; ``method`` defaults to ``"auto"``).
+        """
+        return _linearize(self, field, basis, **kwargs)

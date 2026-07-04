@@ -7,9 +7,11 @@ lives here.
 The propagation core is owned: ``Grid`` /
 ``PlaneKind`` / ``Field`` data model, the continuous-FT MFT pair
 (``cmft_fwd`` / ``cmft_bwd``) with the plane-aware ``Fraunhofer`` wrapper and
-construction-time sampling gates, ``SampledOptic`` and the ``MultiScaleVortex``
-ladder, and the ``OpticalPath`` fold with static taps -- validated against
-the cds_pipeline EAC-1 AAVC (acceptance gates in ``tests/validation/``).
+construction-time sampling gates, ``SampledOptic`` / ``ModeBasis`` and the
+``MultiScaleVortex`` ladder, and the ``OpticalPath`` fold with static taps
+and ``linearize`` (the unified (E_nom, G) entry point feeding the speckle
+layer and ``physicaloptix.stats``) -- validated against the cds_pipeline
+EAC-1 AAVC (acceptance gates in ``tests/validation/``).
 
 ``DLuxCoronagraph`` (with ``to_dlux_aperture`` and the ``psf`` facade) is the
 legacy dLux-backed path behind optixstuff's ``AbstractCoronagraph``, kept
@@ -23,7 +25,9 @@ from physicaloptix.apertures import to_dlux_aperture
 from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
 from physicaloptix.coronagraph import DLuxCoronagraph, psf
 from physicaloptix.diagnostics import mft_sampling_parameter
-from physicaloptix.elements import MultiScaleVortex, SampledOptic
+from physicaloptix.diff import diff_spec
+from physicaloptix.elements import ModeBasis, MultiScaleVortex, SampledOptic
+from physicaloptix.linearize import Linearization, linearity_residual, linearize
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.speckle import AnalyticSpeckleField, SpeckleProcess
 from physicaloptix.transforms import Fraunhofer, cmft_bwd, cmft_fwd
@@ -34,6 +38,8 @@ __all__ = [
     "Field",
     "Fraunhofer",
     "Grid",
+    "Linearization",
+    "ModeBasis",
     "MultiScaleVortex",
     "OpticalPath",
     "PlaneKind",
@@ -44,6 +50,9 @@ __all__ = [
     "__version__",
     "cmft_bwd",
     "cmft_fwd",
+    "diff_spec",
+    "linearity_residual",
+    "linearize",
     "mft_sampling_parameter",
     "psf",
     "to_dlux_aperture",
