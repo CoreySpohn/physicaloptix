@@ -1,0 +1,13 @@
+# EAC-1 off-axis segmented primary.
+#
+# Geometry as recorded in the HWO Coronagraph Design Survey baseline pupil
+# FITS headers (pupil_eac1_*.fits.gz: NR / GS / SPTP parameter cards and the
+# D_CIRCUM / D_INSCRB keywords).
+name: EAC-1
+circumscribed_diameter_m: 7.2
+inscribed_diameter_m: 5.96
+segmentation:
+  type: hexagonal
+  n_rings: 2
+  segment_point_to_point_m: 1.65
+  gap_m: 0.004

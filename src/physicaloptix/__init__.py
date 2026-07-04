@@ -20,6 +20,12 @@ the linear speckle generator (E_nom, G) and is backend-free.
 """
 
 from physicaloptix._version import __version__
+from physicaloptix.apertures import (
+    eac1_primary,
+    load_primary_yaml,
+    normalize_unit_energy,
+    rasterize_primary,
+)
 from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
 from physicaloptix.diagnostics import mft_sampling_parameter
 from physicaloptix.diff import diff_spec
@@ -50,8 +56,12 @@ __all__ = [
     "cmft_bwd",
     "cmft_fwd",
     "diff_spec",
+    "eac1_primary",
     "linearity_residual",
     "linearize",
+    "load_primary_yaml",
     "mft_sampling_parameter",
+    "normalize_unit_energy",
+    "rasterize_primary",
     "render_path",
 ]
