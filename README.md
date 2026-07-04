@@ -19,20 +19,20 @@ multi-scale vortex, and the `OpticalPath` fold with construction-time
 sampling gates, validated against the HWO Coronagraph Design Survey
 (cds_pipeline) EAC-1 AAVC to an on-axis null of 3.05e-11 (0.2 percent of the
 reference; the acceptance gates live in `tests/validation/`).
-[dLux](https://github.com/LouisDesdoigts/dLux) remains the legacy backend
-behind `DLuxCoronagraph` until the path-backed adapter replaces it.
 
-The key piece is `DLuxCoronagraph`, which implements optixstuff's
-`AbstractCoronagraph`. Build one from an optixstuff primary and hand it to any
-downstream tool: it is consumed as an `AbstractCoronagraph`, so coronagraphoto
-and jaxEDITH get dLux-propagated PSFs by dependency injection, without depending
-on physicaloptix or dLux themselves.
+The key piece is `PathCoronagraph`, which implements optixstuff's
+`AbstractCoronagraph`: build an `OpticalPath` (entrance pupil to Lyot plane),
+wrap it, and hand it to any downstream tool. Its IWA and scalar performance
+curves are derived from the propagated PSFs at construction, never declared.
 
 ```python
 import physicaloptix as po
 
-coro = po.DLuxCoronagraph.from_primary(primary)      # optixstuff in, dLux hidden
-psf = coro.on_axis_psf(600.0, pixel_scale_rad, npix)  # PSF out
+coro = po.PathCoronagraph.from_path(
+    core_path, pupil_field, diameter_m=6.0, owa_lod=32.0
+)
+psf = coro.on_axis_psf(600.0, pixel_scale_rad, npix)   # unit-flux PSF out
+eta = coro.throughput(6.0, 600.0)                      # derived, not declared
 ```
 
 ## What physicaloptix is *not*
@@ -64,15 +64,17 @@ Built on [JAX](https://github.com/google/jax) and
   stages folded once, with static taps for free instrumented propagation.
 - **The speckle layer** — `SpeckleProcess` / `AnalyticSpeckleField`, the
   linear speckle generator (E_nom, G) behind optixstuff's `AbstractSpeckleField`.
-- **The legacy dLux path** — `to_dlux_aperture`, `DLuxCoronagraph`, and the
-  `psf(primary, ...)` facade, kept until the path-backed adapter lands.
+- **Interop** (`physicaloptix.interop`) — `PathCoronagraph`, the
+  optixstuff `AbstractCoronagraph` adapter: cached-Lyot image interface and
+  scalar curves (throughput, core area/intensity, occulter transmission)
+  derived from a build-time separation sweep.
 
 ### Ecosystem position
 
 ```mermaid
 flowchart TB
     optix["<b>optixstuff</b><br/>Telescope · Coronagraph · Detector · OpticalPath"]
-    physopt["<b>physicaloptix</b><br/>Owned propagation core / diffraction<br/>OpticalPath · DLuxCoronagraph (legacy)"]
+    physopt["<b>physicaloptix</b><br/>Owned propagation core / diffraction<br/>OpticalPath · PathCoronagraph"]
     yippy["<b>yippy</b><br/>Sampled-YIP PSF interpolation"]
     corono["<b>coronagraphoto</b><br/>2D image simulation"]
     jaxedith["<b>jaxEDITH</b><br/>Exposure-time / yield"]
@@ -93,6 +95,7 @@ pip install physicaloptix
 ## Status
 
 Early development. The owned core propagates a full apodized vortex
-coronagraph chain (see `tests/validation/`); the legacy `DLuxCoronagraph`
-facade models no mask yet, so its `on_axis_psf` is the telescope PSF until
-the path-backed adapter replaces it.
+coronagraph chain (see `tests/validation/`), and `PathCoronagraph` serves it
+through the optixstuff interface with derived performance curves. The optical
+model is monochromatic and scalar; broadband propagation and the Stark yield
+data package are the next milestones.

@@ -5,7 +5,6 @@ from pathlib import Path
 
 import jax
 import numpy as np
-import optixstuff as ox
 import pytest
 
 # The deep-contrast path is x64-mandatory (f32 floors the dark hole at ~3e-4);
@@ -55,26 +54,3 @@ def eac1_cache():
     if path is not None:
         return np.load(path)
     pytest.skip(f"cds EAC-1 reference cache not found (set {EAC1_CACHE_ENV})")
-
-
-@pytest.fixture
-def eac5_primary():
-    """An EAC-5-like segmented hex primary (37 segments, D = 10.033 m)."""
-    return ox.SegmentedPrimary(
-        diameter_m=10.033,
-        area_m2=65.16,
-        n_rings=3,
-        n_segments=37,
-        segment_gap_m=0.012,
-    )
-
-
-@pytest.fixture
-def simple_primary():
-    """A simple 6 m circular primary."""
-    return ox.SimplePrimary(diameter_m=6.0)
-
-
-def nyquist_rad(diameter_m, wavelength_m=600e-9):
-    """Roughly Nyquist pixel scale (rad/pixel): (lambda/D) / 4."""
-    return (wavelength_m / diameter_m) / 4.0
