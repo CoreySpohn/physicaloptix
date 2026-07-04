@@ -6,13 +6,21 @@ simulation suite.
 ## What physicaloptix is
 
 `physicaloptix` turns an [optixstuff](https://github.com/CoreySpohn/optixstuff)
-hardware description into point-spread functions by wave-optics propagation,
-using [dLux](https://github.com/LouisDesdoigts/dLux) as the (hidden, swappable)
-backend. It is a downstream consumer of optixstuff — parallel to
+hardware description into point-spread functions by wave-optics propagation.
+It is a downstream consumer of optixstuff — parallel to
 [coronagraphoto](https://github.com/CoreySpohn/coronagraphoto) (2D image
 simulation) and [jaxEDITH](https://github.com/CoreySpohn/jaxedith)
 (exposure-time and yield calculations) — so optixstuff itself stays free of
 diffraction code.
+
+Since 2026-07 the propagation core is owned (the greenfield build): a
+plane-aware `Field`/`Grid` data model, the continuous-FT MFT pair, the
+multi-scale vortex, and the `OpticalTrain` fold with construction-time
+sampling gates, validated against the HWO Coronagraph Design Survey
+(cds_pipeline) EAC-1 AAVC to an on-axis null of 3.05e-11 (0.2 percent of the
+reference; the acceptance gates live in `tests/validation/`).
+[dLux](https://github.com/LouisDesdoigts/dLux) remains the legacy backend
+behind `DLuxCoronagraph` until the train-backed adapter replaces it.
 
 The key piece is `DLuxCoronagraph`, which implements optixstuff's
 `AbstractCoronagraph`. Build one from an optixstuff primary and hand it to any
@@ -40,16 +48,24 @@ psf = coro.on_axis_psf(600.0, pixel_scale_rad, npix)  # PSF out
 
 ## Architecture
 
-Built on [JAX](https://github.com/google/jax),
-[Equinox](https://github.com/patrick-kidger/equinox), and
-[dLux](https://github.com/LouisDesdoigts/dLux), `physicaloptix` provides:
+Built on [JAX](https://github.com/google/jax) and
+[Equinox](https://github.com/patrick-kidger/equinox), `physicaloptix` provides:
 
-- **The optixstuff -> dLux adapter** — `to_dlux_aperture`, a `singledispatch`
-  that renders each optixstuff primary type into a dLux aperture (segmented hex
-  -> `MultiAperture`, simple circular -> `CircularAperture`).
-- **A dLux-backed coronagraph** — `DLuxCoronagraph`, an optixstuff
-  `AbstractCoronagraph` producing `on_axis_psf` / `off_axis_psf` by propagation.
-- **A facade** — `psf(primary, ...)`, a one-liner from primary to PSF.
+- **The owned core** (`physicaloptix.core`) — `Grid` (all-static, half-pixel
+  offset, continuous-FT weights), `PlaneKind`-tagged `Field` pytrees, and
+  `Spectrum` for chromatic fields.
+- **Propagators** (`physicaloptix.transforms`) — the validated `cmft_fwd` /
+  `cmft_bwd` continuous-FT MFT pair and the plane-aware `Fraunhofer` wrapper,
+  with sampling diagnostics evaluated at construction time.
+- **Elements** (`physicaloptix.elements`) — grid-stamped `SampledOptic` for
+  ingested masks and the `MultiScaleVortex` ladder (hcipy port; reaches the
+  cds EAC-1 on-axis null).
+- **The train** (`physicaloptix.train`) — `OpticalTrain`, named plane-checked
+  stages folded once, with static taps for free instrumented propagation.
+- **The speckle layer** — `SpeckleProcess` / `AnalyticSpeckleField`, the
+  Tier-G (E_nom, G) product behind optixstuff's `AbstractSpeckleField`.
+- **The legacy dLux path** — `to_dlux_aperture`, `DLuxCoronagraph`, and the
+  `psf(primary, ...)` facade, kept until the train-backed adapter lands.
 
 ### Ecosystem position
 
