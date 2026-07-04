@@ -7,13 +7,17 @@ full nonlinear map ``eps -> Path(E_in * exp(i 2 pi (B . eps) / lambda))`` at
 ``eps = 0`` and exist as autodiff cross-checks; all three agree to roundoff
 on a linear chain.
 
+Amplitude bases (``kind="amplitude"``) linearize the fractional-amplitude
+map ``E * (1 + B . eps)``: their columns are ``Path(B_k * E_in)`` with no
+phase factor, so G is achromatic for them.
+
 Memory policy: mode stacks at pupil resolution are the wall (a dense basis at
 2048^2 in complex128 is tens of MB per mode), so the analytic method streams
 mode chunks through a vmapped propagation when the full stack would exceed
 ``memory_budget_bytes``; ``jvp`` is a host-side loop, memory-flat by
 construction. The chromatic (per-band or lambda-scaled) extension is not
 implemented yet; the ``kind`` tag is recorded so the lambda-scaling shortcut,
-when it lands, can refuse non-OPD bases (its ``(lambda0/lambda)^2`` rule
+when it lands, applies only to OPD bases (its ``(lambda0/lambda)^2`` rule
 comes from the phase factor and does not apply to amplitude modes).
 """
 
@@ -108,11 +112,19 @@ def _replace_data(field, data):
 
 
 def perturbed_map(path, field, basis, wavelength_nm):
-    """The nonlinear map ``eps -> E_focal`` the linearization approximates."""
+    """The nonlinear map ``eps -> E_focal`` the linearization approximates.
+
+    OPD modes perturb the phase (``E * exp(i 2 pi (B . eps) / lambda)``);
+    amplitude modes perturb the field multiplicatively
+    (``E * (1 + B . eps)``, fractional amplitude, achromatic).
+    """
 
     def run(eps):
-        opd = jnp.tensordot(eps, basis.B, axes=1)
-        data = field.data * jnp.exp(_phase_factor(wavelength_nm) * opd)
+        mode_map = jnp.tensordot(eps, basis.B, axes=1)
+        if basis.kind == "opd":
+            data = field.data * jnp.exp(_phase_factor(wavelength_nm) * mode_map)
+        else:
+            data = field.data * (1.0 + mode_map)
         out, _ = path.propagate(_replace_data(field, data))
         return out.data
 
@@ -151,11 +163,6 @@ def linearize(
     Returns:
         A ``Linearization``.
     """
-    if basis.kind != "opd":
-        raise NotImplementedError(
-            f"linearize supports kind='opd' bases; got kind={basis.kind!r} "
-            "(amplitude columns are a planned extension)"
-        )
     e_nom_field, _ = path.propagate(field)
     n_modes = basis.n_modes
 
@@ -168,7 +175,9 @@ def linearize(
             chunk_size = max(1, int(memory_budget_bytes // per_mode))
 
     if resolved == "analytic":
-        factor = _phase_factor(wavelength_nm)
+        # OPD columns carry the phase factor; amplitude columns are the
+        # propagated fractional-amplitude modes themselves (achromatic).
+        factor = _phase_factor(wavelength_nm) if basis.kind == "opd" else 1.0
         propagate_stack = jax.vmap(
             lambda data: path.propagate(_replace_data(field, data))[0].data
         )

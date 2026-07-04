@@ -30,7 +30,7 @@ class ModeBasis(eqx.Module):
     kind: str = eqx.field(static=True, default="opd")
 
     def __check_init__(self):
-        """Validate the mode stack and coefficient shapes."""
+        """Validate the mode stack, coefficient shapes, and kind tag."""
         if self.B.ndim != 3:
             raise ValueError(
                 f"mode stack B must be 3D (m, y, x), got shape {self.B.shape}"
@@ -40,6 +40,8 @@ class ModeBasis(eqx.Module):
                 f"coeffs has shape {self.coeffs.shape}; expected "
                 f"({self.B.shape[0]},) to match the mode stack"
             )
+        if self.kind not in ("opd", "amplitude"):
+            raise ValueError(f"kind must be 'opd' or 'amplitude', got {self.kind!r}")
 
     @property
     def n_modes(self):

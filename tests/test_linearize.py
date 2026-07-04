@@ -101,11 +101,10 @@ class TestLinearizationProduct:
         full = path.linearize(field, basis, wavelength_nm=WL_NM)
         np.testing.assert_array_equal(np.asarray(lin.G), np.asarray(full.G))
 
-    def test_rejects_non_opd_basis(self, setup):
-        path, field, basis = setup
-        amp = ModeBasis(B=basis.B, coeffs=basis.coeffs, kind="amplitude")
-        with pytest.raises(NotImplementedError, match="opd"):
-            path.linearize(field, amp, wavelength_nm=WL_NM)
+    def test_rejects_unknown_basis_kind(self, setup):
+        _, _, basis = setup
+        with pytest.raises(ValueError, match="kind"):
+            ModeBasis(B=basis.B, coeffs=basis.coeffs, kind="banana")
 
 
 class TestLinearity:
@@ -135,3 +134,32 @@ class TestSpeckleBridge:
         speckle_field = process.draw(jax.random.PRNGKey(0))
         delta = speckle_field.realize(wavelength_nm=WL_NM, time_s=0.0)
         assert delta.shape == lin.e_nom.shape
+
+
+class TestAmplitudeKind:
+    def test_analytic_matches_jvp_for_amplitude_modes(self, setup):
+        path, field, basis = setup
+        amp = ModeBasis(B=basis.B, coeffs=basis.coeffs, kind="amplitude")
+        lin_a = path.linearize(field, amp, wavelength_nm=WL_NM, method="analytic")
+        lin_j = path.linearize(field, amp, wavelength_nm=WL_NM, method="jvp")
+        np.testing.assert_allclose(
+            np.asarray(lin_a.G), np.asarray(lin_j.G), rtol=0, atol=1e-12
+        )
+        assert lin_a.kind == "amplitude"
+
+    def test_amplitude_columns_are_achromatic(self, setup):
+        """Amplitude modes carry no phase factor: G is wavelength-free."""
+        path, field, basis = setup
+        amp = ModeBasis(B=basis.B, coeffs=basis.coeffs, kind="amplitude")
+        lin_500 = path.linearize(field, amp, wavelength_nm=500.0)
+        lin_1000 = path.linearize(field, amp, wavelength_nm=1000.0)
+        np.testing.assert_array_equal(np.asarray(lin_500.G), np.asarray(lin_1000.G))
+
+    def test_amplitude_linear_model_is_exact(self, setup):
+        """E(eps) = E (1 + B.eps) is affine: the linear model is exact."""
+        path, field, basis = setup
+        amp = ModeBasis(B=basis.B, coeffs=basis.coeffs, kind="amplitude")
+        lin = path.linearize(field, amp, wavelength_nm=WL_NM)
+        rng = np.random.default_rng(0)
+        eps = 0.05 * jnp.asarray(rng.standard_normal(4))
+        assert linearity_residual(path, field, amp, lin, eps) < 1e-12
