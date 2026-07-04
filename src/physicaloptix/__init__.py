@@ -29,6 +29,7 @@ from physicaloptix.linearize import Linearization, linearity_residual, linearize
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.speckle import AnalyticSpeckleField, SpeckleProcess
 from physicaloptix.transforms import Fraunhofer, cmft_bwd, cmft_fwd
+from physicaloptix.viz import render_path
 
 __all__ = [
     "AnalyticSpeckleField",
@@ -52,4 +53,5 @@ __all__ = [
     "linearity_residual",
     "linearize",
     "mft_sampling_parameter",
+    "render_path",
 ]
