@@ -3,13 +3,13 @@
 import os
 from pathlib import Path
 
-import jax
 import numpy as np
 import pytest
+from hwoutils import enable_x64
 
 # The deep-contrast path is x64-mandatory (f32 floors the dark hole at ~3e-4);
 # set it once for the whole suite so gate tests and unit tests agree.
-jax.config.update("jax_enable_x64", True)
+enable_x64()
 
 EAC1_CACHE_ENV = "PHYSICALOPTIX_EAC1_CACHE"
 _DATA_DIRS = (

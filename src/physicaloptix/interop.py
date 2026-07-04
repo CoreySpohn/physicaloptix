@@ -24,6 +24,7 @@ achromatic), and ``time_s`` is accepted for interface conformance.
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.conversions import arcsec_to_lambda_d, rad_to_arcsec
 from jaxtyping import Array
 from optixstuff.coronagraph import AbstractCoronagraph
 
@@ -185,8 +186,12 @@ class PathCoronagraph(AbstractCoronagraph):
     # -- image interface ---------------------------------------------------
 
     def _requested_grid(self, wavelength_nm, pixel_scale_rad, npixels):
-        lod_rad = float(wavelength_nm) * 1e-9 / self.diameter_m
-        return Grid.focal(int(npixels), float(pixel_scale_rad) / lod_rad)
+        pixel_scale_lod = arcsec_to_lambda_d(
+            rad_to_arcsec(float(pixel_scale_rad)),
+            float(wavelength_nm),
+            self.diameter_m,
+        )
+        return Grid.focal(int(npixels), float(pixel_scale_lod))
 
     def _psf(self, field, grid):
         science = Fraunhofer(grid_in=self.input_field.grid, grid_out=grid)

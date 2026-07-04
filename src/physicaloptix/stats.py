@@ -9,11 +9,16 @@ live propagations and frozen exports alike.
 """
 
 import jax.numpy as jnp
+from hwoutils.radial import radial_distance
 from jax.scipy.special import i0e
 
 
 def dark_zone_mask(grid, *, iwa_lod, owa_lod):
     """Boolean annulus mask on a focal grid (radii in lambda/D).
+
+    The grid's half-pixel-offset center coincides with the shared radial
+    convention (``(n - 1) / 2`` in index space), so the radius map comes
+    from ``hwoutils.radial.radial_distance``.
 
     Args:
         grid: The focal-plane ``Grid`` (coordinates in lambda/D).
@@ -23,9 +28,7 @@ def dark_zone_mask(grid, *, iwa_lod, owa_lod):
     Returns:
         Boolean array of shape ``(npix, npix)``.
     """
-    coords = jnp.asarray(grid.coords)
-    xx, yy = jnp.meshgrid(coords, coords)
-    radius = jnp.hypot(xx, yy)
+    radius = radial_distance((grid.npix, grid.npix)) * grid.dx
     return (radius >= iwa_lod) & (radius <= owa_lod)
 
 
