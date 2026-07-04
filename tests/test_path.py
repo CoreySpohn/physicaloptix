@@ -1,4 +1,4 @@
-"""Tests for Stage/OpticalTrain composition, plane checking, and taps."""
+"""Tests for Stage/OpticalPath composition, plane checking, and taps."""
 
 import equinox as eqx
 import jax.numpy as jnp
@@ -7,7 +7,7 @@ import pytest
 
 from physicaloptix.core import Field, Grid, PlaneKind
 from physicaloptix.elements import SampledOptic
-from physicaloptix.train import OpticalTrain, Stage
+from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.transforms import Fraunhofer
 
 
@@ -22,7 +22,7 @@ def simple_chain():
         transmission=jnp.asarray(disk), grid=pupil_grid, plane=PlaneKind.PUPIL
     )
     prop = Fraunhofer(grid_in=pupil_grid, grid_out=focal_grid)
-    train = OpticalTrain(stages=(Stage("stop", stop), Stage("science", prop)))
+    train = OpticalPath(stages=(Stage("stop", stop), Stage("science", prop)))
     field = Field(
         data=jnp.ones((32, 32), dtype=complex),
         grid=pupil_grid,
@@ -60,7 +60,7 @@ class TestSampledOptic:
             optic(field)
 
 
-class TestTrain:
+class TestOpticalPath:
     def test_propagate_returns_field_and_empty_taps(self, simple_chain):
         train, field, _ = simple_chain
         out, taps = train.propagate(field)
@@ -96,7 +96,7 @@ class TestTrain:
             plane=PlaneKind.FOCAL,
         )
         with pytest.raises(ValueError, match="plane"):
-            OpticalTrain(stages=(train.stages[0], Stage("bad", focal_optic)))
+            OpticalPath(stages=(train.stages[0], Stage("bad", focal_optic)))
 
     def test_propagate_is_jit_clean(self, simple_chain):
         train, field, _ = simple_chain

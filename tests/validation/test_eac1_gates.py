@@ -1,6 +1,6 @@
-"""EAC-1 AAVC acceptance gates: the greenfield chain vs the cds_pipeline cache.
+"""EAC-1 AAVC acceptance gates: the owned chain vs the cds_pipeline cache.
 
-These are the project's validation-spine gates (physicaloptix-setup manifest):
+The gates:
 
 - Gate 0: the bare telescope PSF matches cds/HCIPy at machine precision.
 - Gate 1: off-axis (planet) PSFs through the full AAVC chain match to ~1e-5.
@@ -18,7 +18,7 @@ import pytest
 
 from physicaloptix.core import Field, Grid, PlaneKind
 from physicaloptix.elements import MultiScaleVortex, SampledOptic
-from physicaloptix.train import OpticalTrain, Stage
+from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.transforms import Fraunhofer, cmft_fwd
 
 
@@ -51,7 +51,7 @@ def aavc(eac1_cache):
     vortex = MultiScaleVortex.build(
         charge=charge, npup=npup, cap_num_airy0=npup // 2, band_subtract=True
     )
-    train = OpticalTrain(
+    train = OpticalPath(
         stages=(
             Stage("pupil_stop", pupil_optic("pupil_stop")),
             Stage("apodizer", pupil_optic("apodizer")),

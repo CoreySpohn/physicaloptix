@@ -105,5 +105,5 @@ class Fraunhofer(eqx.Module):
         )
 
     def __call__(self, field):
-        """Alias for :meth:`forward` (the OpticalTrain fold convention)."""
+        """Alias for :meth:`forward` (the OpticalPath fold convention)."""
         return self.forward(field)

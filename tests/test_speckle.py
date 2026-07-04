@@ -1,4 +1,4 @@
-"""Tests for AnalyticSpeckleField (the Tier-G generator as an optixstuff field)."""
+"""Tests for AnalyticSpeckleField (the linear generator as an optixstuff field)."""
 
 import jax
 import jax.numpy as jnp

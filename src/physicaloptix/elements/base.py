@@ -24,9 +24,10 @@ class Element(eqx.Module):
 class SampledOptic(Element):
     """An ingested transmission array, stamped with the grid it was sampled on.
 
-    For measured or design-optimized masks (a cds apodizer or Lyot FITS):
-    hard-edged, applied by pointwise multiplication, and refusing any field on
-    a mismatched grid rather than resampling behind your back.
+    For measured or design-optimized masks (e.g. an apodizer or Lyot stop
+    ingested from a design-survey FITS): hard-edged, applied by pointwise
+    multiplication, and refusing any field on a mismatched grid rather than
+    resampling behind your back.
     """
 
     transmission: Array

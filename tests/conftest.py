@@ -15,8 +15,10 @@ jax.config.update("jax_enable_x64", True)
 EAC1_CACHE_ENV = "PHYSICALOPTIX_EAC1_CACHE"
 _EAC1_CANDIDATES = (
     Path(__file__).parent / "data" / "cds_eac1_ref.npz",
+    # Development-workspace fallback path.
     Path(__file__).parents[3]
-    / "hwo-mission-control/burn/physicaloptix-setup/scripts/eac1_dlux/data"
+    / "hwo-mission-control/burn/physicaloptix-setup"  # internal-ref-ok
+    / "scripts/eac1_dlux/data"  # internal-ref-ok
     / "cds_eac1_ref.npz",
 )
 

@@ -1,12 +1,11 @@
 """The continuous-FT matrix Fourier transform pair.
 
-The validated foundation of the library (promoted from the eac1_dlux
-``multiscale_vortex.py`` spike, descended from Soummer's MFT): a two-sided
-matrix DFT carrying the input grid's integration weight, so focal-plane values
-approximate the continuous Fourier integral. That property is what lets
-multi-scale vortex levels at different samplings add coherently and Babinet
-subtractions cancel exactly -- a discrete-FT-normalized MFT (dLux's built-in)
-cannot combine across scales.
+The foundation of the library, after Soummer's matrix Fourier transform: a
+two-sided matrix DFT carrying the input grid's integration weight, so
+focal-plane values approximate the continuous Fourier integral. That property
+is what lets multi-scale vortex levels at different samplings add coherently
+and Babinet subtractions cancel exactly, which a discrete-FT-normalized MFT
+cannot do across scales.
 
 Everything is dimensionless: pupil coordinates in pupil diameters
 ([-0.5, 0.5] spans the pupil), focal coordinates in lambda/D. ``backward`` is

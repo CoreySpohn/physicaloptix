@@ -5,10 +5,10 @@ zero pytree leaves and rides in the treedef. Two grids built the same way
 compare and hash equal, which is what makes jit caching stable and lets
 elements stamp the grid they were sampled on.
 
-Coordinates follow the validated ``cmft`` convention: a half-pixel-offset
-symmetric grid ``(arange(npix) - npix/2 + 0.5) * dx`` with no sample at r = 0
-(the vortex ``atan2`` NaN-gradient trap is dead by construction), and
-``weights = dx**2`` as the continuous-FT integration weight.
+Coordinates follow a half-pixel-offset convention,
+``(arange(npix) - npix/2 + 0.5) * dx``, with no sample at r = 0 (the vortex
+``atan2`` NaN-gradient trap is dead by construction), and ``weights = dx**2``
+as the continuous-FT integration weight.
 """
 
 import equinox as eqx

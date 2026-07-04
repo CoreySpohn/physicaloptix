@@ -113,14 +113,13 @@ class AnalyticSpeckleField(AbstractSpeckleField):
 
 
 class SpeckleProcess(eqx.Module):
-    """One parameter set for the Tier-G speckle process; views derive from it.
+    """One parameter set for the linear speckle process; views derive from it.
 
     Holds the spatial ingredients (``E_nom``, ``G``) together with the
     per-mode temporal PSD specification (knee + slope + per-mode rms), so the
     generator view and any future inference view (the state-space ``(A, Q)``
-    of a filter) derive from the SAME parameters and cannot drift apart (the
-    "one parameter set, two views" refactor of
-    physicaloptix-setup ``brain/OBSERVATORY_STATE_MODEL.md`` sec 11).
+    of a filter) derive from the SAME parameters and cannot drift apart ("one
+    parameter set, two views").
 
     :meth:`draw` samples one frozen realization -- spectral-synthesis
     amplitudes from the PSD and uniform random phases -- and returns it as an
@@ -220,8 +219,6 @@ class SpeckleProcess(eqx.Module):
         The knee is ``1 / (2 pi tau)`` so the field decorrelates over roughly
         ``decorr_hours``, and the budget is split evenly over the modes
         (``per_mode_rms = total_rms / sqrt(m)``; rms adds in quadrature).
-        This is the proven eac1_dlux script parameterization promoted into
-        the library.
         """
         tau_s = decorr_hours * 3600.0
         m = G.shape[0]

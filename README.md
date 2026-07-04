@@ -13,14 +13,14 @@ simulation) and [jaxEDITH](https://github.com/CoreySpohn/jaxedith)
 (exposure-time and yield calculations) — so optixstuff itself stays free of
 diffraction code.
 
-Since 2026-07 the propagation core is owned (the greenfield build): a
+The propagation core is owned: a
 plane-aware `Field`/`Grid` data model, the continuous-FT MFT pair, the
-multi-scale vortex, and the `OpticalTrain` fold with construction-time
+multi-scale vortex, and the `OpticalPath` fold with construction-time
 sampling gates, validated against the HWO Coronagraph Design Survey
 (cds_pipeline) EAC-1 AAVC to an on-axis null of 3.05e-11 (0.2 percent of the
 reference; the acceptance gates live in `tests/validation/`).
 [dLux](https://github.com/LouisDesdoigts/dLux) remains the legacy backend
-behind `DLuxCoronagraph` until the train-backed adapter replaces it.
+behind `DLuxCoronagraph` until the path-backed adapter replaces it.
 
 The key piece is `DLuxCoronagraph`, which implements optixstuff's
 `AbstractCoronagraph`. Build one from an optixstuff primary and hand it to any
@@ -60,19 +60,19 @@ Built on [JAX](https://github.com/google/jax) and
 - **Elements** (`physicaloptix.elements`) — grid-stamped `SampledOptic` for
   ingested masks and the `MultiScaleVortex` ladder (hcipy port; reaches the
   cds EAC-1 on-axis null).
-- **The train** (`physicaloptix.train`) — `OpticalTrain`, named plane-checked
+- **The optical path** (`physicaloptix.path`) — `OpticalPath`, named plane-checked
   stages folded once, with static taps for free instrumented propagation.
 - **The speckle layer** — `SpeckleProcess` / `AnalyticSpeckleField`, the
-  Tier-G (E_nom, G) product behind optixstuff's `AbstractSpeckleField`.
+  linear speckle generator (E_nom, G) behind optixstuff's `AbstractSpeckleField`.
 - **The legacy dLux path** — `to_dlux_aperture`, `DLuxCoronagraph`, and the
-  `psf(primary, ...)` facade, kept until the train-backed adapter lands.
+  `psf(primary, ...)` facade, kept until the path-backed adapter lands.
 
 ### Ecosystem position
 
 ```mermaid
 flowchart TB
     optix["<b>optixstuff</b><br/>Telescope · Coronagraph · Detector · OpticalPath"]
-    physopt["<b>physicaloptix</b><br/>dLux-backed PSFs / diffraction<br/>DLuxCoronagraph"]
+    physopt["<b>physicaloptix</b><br/>Owned propagation core / diffraction<br/>OpticalPath · DLuxCoronagraph (legacy)"]
     yippy["<b>yippy</b><br/>Sampled-YIP PSF interpolation"]
     corono["<b>coronagraphoto</b><br/>2D image simulation"]
     jaxedith["<b>jaxEDITH</b><br/>Exposure-time / yield"]
@@ -92,5 +92,7 @@ pip install physicaloptix
 
 ## Status
 
-Early development (v0.0.1). No coronagraph mask (focal-plane / Lyot) is
-modelled yet, so `on_axis_psf` is currently the telescope PSF.
+Early development. The owned core propagates a full apodized vortex
+coronagraph chain (see `tests/validation/`); the legacy `DLuxCoronagraph`
+facade models no mask yet, so its `on_axis_psf` is the telescope PSF until
+the path-backed adapter replaces it.

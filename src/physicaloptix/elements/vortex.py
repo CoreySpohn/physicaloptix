@@ -1,22 +1,22 @@
-"""The multi-scale vortex coronagraph, ported from hcipy via eac1_dlux.
+"""The multi-scale vortex coronagraph, ported from hcipy.
 
 hcipy's ``MultiScaleCoronagraph`` resolves the charge-n focal singularity with
-a stack of progressively finer focal grids (Krist/Mawet); a single-MFT phase
-ramp undersamples the core and the on-axis null floors ~6e4x too shallow
-(validated 2026-06). This port runs on the continuous-FT MFT so every level's
-Lyot contribution adds coherently, and was validated against the cds_pipeline
-EAC-1 AAVC to an on-axis null of 3.048e-11 vs cds 3.043e-11.
+a stack of progressively finer focal grids (Krist/Mawet): a single-MFT phase
+ramp undersamples the core and the on-axis null floors orders of magnitude too
+shallow. This port runs on the continuous-FT MFT so every level's Lyot
+contribution adds coherently; the acceptance gates in ``tests/validation``
+check the on-axis null against the HWO Coronagraph Design Survey
+(cds_pipeline) reference at the few-1e-11 level.
 
 Grids are half-pixel offset (no sample at r = 0, so no ``atan2`` NaN and no
 center-pixel special case). Band subtraction removes what coarser levels
 already represent, computed on each level's OWN FFT-conjugate pupil grid
 (``dx_conj * du_j = 1/n_j``), NOT the system pupil -- matching hcipy; getting
-this wrong is the port's one known trap.
+this wrong is the classic pitfall.
 
-The ladder is built once in numpy at construction (tier-1 static geometry);
-the level coordinate/mask arrays are constant pytree leaves (tier 2), and
-``vortex_forward`` is the differentiable runtime: a fixed unrolled sum of
-matmuls.
+The ladder is built once in numpy at construction; the level coordinate and
+mask arrays are constant pytree leaves, and ``vortex_forward`` is the
+differentiable runtime: a fixed unrolled sum of matmuls.
 """
 
 import equinox as eqx

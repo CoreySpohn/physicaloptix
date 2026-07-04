@@ -1,6 +1,6 @@
-"""The optical train: named, plane-tagged stages folded once.
+"""The optical path: named, plane-tagged stages folded once.
 
-``OpticalTrain.propagate`` is one Python fold over a static tuple of stages, so
+``OpticalPath.propagate`` is one Python fold over a static tuple of stages, so
 plane validation, tapped intermediates, and (later) linearization are views
 of the same fold rather than separate code paths. The fold is unrolled at
 trace time by construction -- each stage retags the field's static plane and
@@ -9,13 +9,11 @@ stages is structurally impossible (and unnecessary at ~10 stages).
 
 The tap set is a static argument: taps off is the production hot path,
 bit-identical and cost-free; taps on returns the same result plus the named
-intermediate fields (which carry their plane tags and grids, so a train
+intermediate fields (which carry their plane tags and grids, so a path
 renderer consumes them directly).
 """
 
 import equinox as eqx
-
-from physicaloptix.core import PlaneKind  # noqa: F401  (re-exported context)
 
 
 class Stage(eqx.Module):
@@ -32,7 +30,7 @@ def _planes(op):
     return op.plane, op.plane
 
 
-class OpticalTrain(eqx.Module):
+class OpticalPath(eqx.Module):
     """A linear chain of named stages with construction-time plane checking."""
 
     stages: tuple
