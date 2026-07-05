@@ -5,10 +5,12 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from hwoutils import enable_x64
+from hwoutils import enable_x64, set_platform
 
-# The deep-contrast path is x64-mandatory (f32 floors the dark hole at ~3e-4);
-# set it once for the whole suite so gate tests and unit tests agree.
+# The deep-contrast path is x64-mandatory (f32 floors the dark hole at ~3e-4),
+# and the suite must be deterministic: pin tests to CPU x64. Builder runs opt
+# into GPU explicitly outside the test suite.
+set_platform("cpu")
 enable_x64()
 
 EAC1_CACHE_ENV = "PHYSICALOPTIX_EAC1_CACHE"

@@ -97,5 +97,5 @@ pip install physicaloptix
 Early development. The owned core propagates a full apodized vortex
 coronagraph chain (see `tests/validation/`), and `PathCoronagraph` serves it
 through the optixstuff interface with derived performance curves. The optical
-model is monochromatic and scalar; broadband propagation and the Stark yield
-data package are the next milestones.
+model is scalar; the chain propagates broadband on a fixed angular grid, and
+the yield-input-package emitter freezes it to tables.

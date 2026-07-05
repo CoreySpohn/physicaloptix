@@ -32,6 +32,7 @@ def point_source(
     *,
     spectrum=None,
     separation_lod=0.0,
+    position_lod=None,
     reference_wavelength_nm=None,
     opd_nm=None,
 ):
@@ -43,6 +44,8 @@ def point_source(
         separation_lod: Source angle along +x, in ``reference_wavelength_nm``
             lambda/D units (the fixed angle across the band). For a mono
             source this is the tilt in the field's own lambda/D units.
+        position_lod: Optional ``(x, y)`` source position in the same
+            angular units; overrides ``separation_lod``.
         reference_wavelength_nm: Reference wavelength defining the angular
             unit; required for a chromatic off-axis source.
         opd_nm: Optional OPD map in nanometres, bound per wavelength as
@@ -53,11 +56,19 @@ def point_source(
         The source ``Field`` (mono 2D, or chromatic ``(nlam, y, x)``).
     """
     x = jnp.asarray(field.grid.coords)
+    if position_lod is None:
+        position_lod = (separation_lod, 0.0)
+    px, py = position_lod
+    off_axis = px != 0.0 or py != 0.0
+
+    def tilt(scale):
+        phase = px * x[jnp.newaxis, :] + py * x[:, jnp.newaxis]
+        return jnp.exp(2j * jnp.pi * scale * phase)
 
     if spectrum is None:
         data = field.data
-        if separation_lod != 0.0:
-            data = data * jnp.exp(2j * jnp.pi * separation_lod * x)[None, :]
+        if off_axis:
+            data = data * tilt(1.0)
         if opd_nm is not None:
             if reference_wavelength_nm is None:
                 raise ValueError(
@@ -67,7 +78,7 @@ def point_source(
             data = data * jnp.exp(2j * jnp.pi * opd_nm / reference_wavelength_nm)
         return Field(data=data, grid=field.grid, plane=field.plane, spectrum=None)
 
-    if separation_lod != 0.0 and reference_wavelength_nm is None:
+    if off_axis and reference_wavelength_nm is None:
         raise ValueError(
             "a chromatic off-axis source needs reference_wavelength_nm to "
             "define the fixed angle"
@@ -77,9 +88,8 @@ def point_source(
 
     def slice_for(wavelength_nm):
         data = field.data
-        if separation_lod != 0.0:
-            scaled = separation_lod * reference_wavelength_nm / wavelength_nm
-            data = data * jnp.exp(2j * jnp.pi * scaled * x)[None, :]
+        if off_axis:
+            data = data * tilt(reference_wavelength_nm / wavelength_nm)
         if opd_nm is not None:
             data = data * jnp.exp(2j * jnp.pi * opd_nm / wavelength_nm)
         return data
