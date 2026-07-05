@@ -35,6 +35,24 @@ class Spectrum(eqx.Module):
     wavelengths_nm: Array
     weights: Array
 
+    @classmethod
+    def tophat(cls, center_nm, fractional_bandwidth, n_samples):
+        """An equal-weight band: ``n_samples`` wavelengths across the band.
+
+        Args:
+            center_nm: Band center in nanometres.
+            fractional_bandwidth: Full fractional width (0.2 spans
+                ``0.9 * center`` to ``1.1 * center``).
+            n_samples: Number of wavelength samples (endpoints included).
+
+        Returns:
+            The ``Spectrum`` with weights summing to one.
+        """
+        half = fractional_bandwidth / 2.0
+        wavelengths = center_nm * jnp.linspace(1.0 - half, 1.0 + half, n_samples)
+        weights = jnp.full(n_samples, 1.0 / n_samples)
+        return cls(wavelengths_nm=wavelengths, weights=weights)
+
     def __check_init__(self):
         """Validate matching 1D wavelength and weight vectors."""
         if self.wavelengths_nm.ndim != 1:
