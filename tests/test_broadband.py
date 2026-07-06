@@ -27,6 +27,14 @@ def band():
 
 
 class TestSpectrum:
+    def test_midpoint_band_matches_the_survey_rule(self):
+        band = Spectrum.midpoint_band(1000.0, 0.1, 5)
+        x = (np.arange(5) + 0.5) / 5 - 0.5
+        np.testing.assert_allclose(
+            np.asarray(band.wavelengths_nm), 1000.0 * (1 + x * 0.1)
+        )
+        np.testing.assert_allclose(np.asarray(band.weights).sum(), 1.0)
+
     def test_tophat_samples_and_weights(self, band):
         assert len(band) == 5
         wl = np.asarray(band.wavelengths_nm)
@@ -137,8 +145,8 @@ class TestFixedAngularPropagation:
 
     def test_speckles_march_with_wavelength(self, pupil_field, band, angular_prop):
         """A fixed pupil ripple's speckle sits at k lambda/D: it marches
-        outward with wavelength on the fixed angular grid and dims as
-        (lambda_ref / lambda)^2."""
+        outward with wavelength on the fixed angular grid, and its lobe
+        energy scales as (lambda_ref / lambda)^2 (the OPD sideband energy)."""
         k = 8.0
         x = np.asarray(pupil_field.grid.coords)
         ripple = np.broadcast_to(np.cos(2 * np.pi * k * x), (NPUP, NPUP))
@@ -163,9 +171,9 @@ class TestFixedAngularPropagation:
             peak_values.append(half.max())
         expected = k * wavelengths / REF_NM
         np.testing.assert_allclose(peak_positions, expected, atol=0.5)
-        # Peak DENSITY scales as (lambda_ref/lambda)^2 but grid sampling of
-        # the breathing lobe wobbles it; the lobe ENERGY (density x lobe
-        # area, the two lambda^2 factors cancelling) is the robust invariant.
+        # Peak values wobble with grid sampling of the breathing lobe; the
+        # lobe ENERGY is robust. On the energy-conserving fixed grid it is
+        # the pupil-side OPD sideband energy: proportional to 1/lambda^2.
         du = float(out.grid.dx)
         energies = []
         for i in range(len(band)):
@@ -173,7 +181,7 @@ class TestFixedAngularPropagation:
                 np.abs(coords[:, None]) < 1.5
             )
             energies.append(float((intensity[i] * window).sum()) * du**2)
-        energies = np.asarray(energies)
+        energies = np.asarray(energies) * (wavelengths / REF_NM) ** 2
         np.testing.assert_allclose(energies / energies[len(band) // 2], 1.0, rtol=0.05)
         # And the blue end is brighter than the red end at the peak.
         assert peak_values[0] > 1.2 * peak_values[-1]

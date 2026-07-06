@@ -3,10 +3,13 @@
 With a ``reference_wavelength_nm``, a chromatic field is projected onto ONE
 fixed angular grid (coordinates in reference-wavelength lambda/D): each
 wavelength slice propagates with its native coordinates scaled by
-``lambda_ref / lambda``, so the PSF breathes within the fixed grid while
-sources at a fixed angle stay put. Without a reference (the default), the
-transform is the achromatic dimensionless-core MFT: mono fields and
-chromatic stacks share identical kernels.
+``lambda_ref / lambda`` and its amplitude scaled by the same factor, so the
+PSF breathes within the fixed grid while sources at a fixed angle stay put,
+and each slice conserves energy on the fixed grid's own cell measure (fixed
+pupil energy spreads over a solid angle proportional to wavelength squared,
+so surface brightness carries the inverse-square factor). Without a
+reference (the default), the transform is the achromatic dimensionless-core
+MFT: mono fields and chromatic stacks share identical kernels.
 """
 
 import warnings
@@ -112,7 +115,7 @@ class Fraunhofer(eqx.Module):
         if scaling is None:
             data = cmft_fwd(field.data, x, u)
         else:
-            data = jax.vmap(lambda d, s: cmft_fwd(d, x, u * s))(field.data, scaling)
+            data = jax.vmap(lambda d, s: cmft_fwd(d, x, u * s) * s)(field.data, scaling)
         return Field(
             data=data,
             grid=self.grid_out,
@@ -135,7 +138,7 @@ class Fraunhofer(eqx.Module):
         if scaling is None:
             data = cmft_bwd(field.data, x, u)
         else:
-            data = jax.vmap(lambda d, s: cmft_bwd(d, x, u * s))(field.data, scaling)
+            data = jax.vmap(lambda d, s: cmft_bwd(d, x, u * s) * s)(field.data, scaling)
         return Field(
             data=data,
             grid=self.grid_in,

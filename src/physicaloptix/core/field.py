@@ -53,6 +53,27 @@ class Spectrum(eqx.Module):
         weights = jnp.full(n_samples, 1.0 / n_samples)
         return cls(wavelengths_nm=wavelengths, weights=weights)
 
+    @classmethod
+    def midpoint_band(cls, center_nm, fractional_bandwidth, n_samples):
+        """The survey band-sampling rule: bin midpoints, endpoints excluded.
+
+        Wavelengths sit at ``center * (1 + x * B)`` with
+        ``x = (k + 1/2) / n - 1/2`` -- the convention the yield-input-package
+        reference pipeline evaluates bands with.
+
+        Args:
+            center_nm: Band center in nanometres.
+            fractional_bandwidth: Full fractional width.
+            n_samples: Number of wavelength samples.
+
+        Returns:
+            The ``Spectrum`` with equal weights summing to one.
+        """
+        x = (jnp.arange(n_samples) + 0.5) / n_samples - 0.5
+        wavelengths = center_nm * (1.0 + x * fractional_bandwidth)
+        weights = jnp.full(n_samples, 1.0 / n_samples)
+        return cls(wavelengths_nm=wavelengths, weights=weights)
+
     def __check_init__(self):
         """Validate matching 1D wavelength and weight vectors."""
         if self.wavelengths_nm.ndim != 1:

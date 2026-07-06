@@ -136,6 +136,7 @@ def emit_yip(
     stellar_diams_lod=None,
     n_pointings=50,
     n_sky_screens=1000,
+    sky_band_nm=None,
     seed=0,
     inscribed_diameter_m=None,
     obscured=0.0,
@@ -161,6 +162,10 @@ def emit_yip(
             list ``[0] + logspace(-3, 0, 11)``.
         n_pointings: Point sources per resolved stellar diameter.
         n_sky_screens: Stochastic screens for the sky transmission map.
+        sky_band_nm: ``(min, max)`` wavelength range the sky screens draw
+            from. The survey convention draws over the FULL band
+            (``center * (1 +- bandwidth / 2)``), which is wider than the
+            midpoint-sampled spectrum; defaults to the spectrum's range.
         seed: Seed for the (deterministic) pointing and screen draws.
         inscribed_diameter_m: Inscribed diameter (header; defaults to
             ``diameter_m``).
@@ -244,8 +249,11 @@ def emit_yip(
 
     # -- stochastic sky transmission ----------------------------------------
     rng = np.random.default_rng(seed)
-    wavelengths = np.asarray(spectrum.wavelengths_nm, dtype=float)
-    min_wl, max_wl = wavelengths.min(), wavelengths.max()
+    if sky_band_nm is None:
+        wavelengths = np.asarray(spectrum.wavelengths_nm, dtype=float)
+        min_wl, max_wl = wavelengths.min(), wavelengths.max()
+    else:
+        min_wl, max_wl = float(sky_band_nm[0]), float(sky_band_nm[1])
     npix = base.grid.npix
     sky = 0.0
     for _ in range(n_sky_screens):
