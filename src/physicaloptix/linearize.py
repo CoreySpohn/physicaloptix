@@ -42,6 +42,9 @@ class Linearization(eqx.Module):
         method: The method that actually ran (``auto`` resolves before this
             is recorded).
         kind: The basis kind the columns were built from (``"opd"``).
+        pixel_scale_lod: The output plane's pixel scale (lambda/D per pixel for
+            a focal output) -- the grid ``e_nom`` / ``G`` are sampled on, so a
+            speckle field built from this product carries its true plate scale.
     """
 
     e_nom: Array
@@ -49,6 +52,7 @@ class Linearization(eqx.Module):
     wavelength_nm: float = eqx.field(static=True)
     method: str = eqx.field(static=True)
     kind: str = eqx.field(static=True)
+    pixel_scale_lod: float = eqx.field(static=True)
 
     @property
     def n_modes(self):
@@ -84,6 +88,7 @@ class Linearization(eqx.Module):
             The parameter object whose ``draw(key)`` yields
             ``AnalyticSpeckleField`` realizations.
         """
+        kwargs.setdefault("pixel_scale_lod", self.pixel_scale_lod)
         if decorr_hours is not None:
             return SpeckleProcess.from_decorrelation(
                 self.e_nom,
@@ -215,6 +220,7 @@ def linearize(
         wavelength_nm=float(wavelength_nm),
         method=resolved,
         kind=basis.kind,
+        pixel_scale_lod=float(e_nom_field.grid.dx),
     )
 
 

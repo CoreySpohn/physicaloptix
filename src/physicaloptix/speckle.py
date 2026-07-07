@@ -106,7 +106,10 @@ class AnalyticSpeckleField(AbstractSpeckleField):
         eps = self._eps(time_s)
         g_eps = jnp.tensordot(eps, self.G, axes=1)
         if self.coherent:
-            delta = jnp.abs(self.e_nom + g_eps) ** 2 - jnp.abs(self.e_nom) ** 2
+            # The stable form of |E_nom + g_eps|^2 - |E_nom|^2: computing the
+            # cross term directly avoids subtracting two floor-magnitude numbers
+            # (catastrophic cancellation in the bright regime).
+            delta = 2.0 * jnp.real(jnp.conj(self.e_nom) * g_eps) + jnp.abs(g_eps) ** 2
         else:
             delta = jnp.abs(g_eps) ** 2
         return delta / self.normalization

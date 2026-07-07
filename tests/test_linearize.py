@@ -94,6 +94,16 @@ class TestLinearizationProduct:
         assert lin.wavelength_nm == WL_NM
         assert lin.method in ("analytic", "jvp", "jacfwd")
 
+    def test_stamps_focal_pixel_scale_and_carries_it_to_speckle(self, setup):
+        """linearize records the output plane's real pixel scale, and
+        to_speckle_process carries it through instead of the 0.25 default -- so
+        the speckle/coronagraph plate-scale equality can be checked downstream."""
+        path, field, basis = setup
+        lin = path.linearize(field, basis, wavelength_nm=WL_NM)
+        assert lin.pixel_scale_lod == 0.5  # the focal grid's dx
+        proc = lin.to_speckle_process(normalization=1.0, per_mode_rms=1.0, knee_hz=1e-3)
+        assert proc.pixel_scale_lod == 0.5
+
     def test_auto_resolves_by_memory_budget(self, setup):
         path, field, basis = setup
         lin = path.linearize(field, basis, wavelength_nm=WL_NM, memory_budget_bytes=1)

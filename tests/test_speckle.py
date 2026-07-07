@@ -89,6 +89,32 @@ class TestRealize:
         full = jnp.abs(sp.e_nom + g_eps) ** 2 / sp.normalization
         assert jnp.allclose(delta + floor, full)
 
+    def test_coherent_cross_term_is_cancellation_stable(self):
+        """In the bright regime (|E_nom| >> |G eps|) the pinning cross term is
+        the tiny difference of two order-one numbers; realize must compute it
+        without catastrophic cancellation."""
+        dims, m, f = 6, 2, 1
+        k1, k2, k3, k4 = jax.random.split(jax.random.PRNGKey(3), 4)
+        e_nom = jax.random.normal(k1, (dims, dims)) + 1j * jax.random.normal(
+            k2, (dims, dims)
+        )
+        g = jax.random.normal(k3, (m, dims, dims)) + 1j * jax.random.normal(
+            k4, (m, dims, dims)
+        )
+        field = AnalyticSpeckleField(
+            e_nom,
+            g,
+            1e-9 * jnp.ones((m, f)),  # eps ~ 1e-9, so g_eps ~ 1e-9 << |E_nom|
+            jnp.array([1e-3]),
+            jnp.zeros((m, f)),
+            normalization=1.0,
+            coherent=True,
+        )
+        delta = field.realize(wavelength_nm=1000.0, time_s=0.0)
+        g_eps = jnp.tensordot(field._eps(0.0), g, axes=1)
+        reference = 2.0 * jnp.real(jnp.conj(e_nom) * g_eps) + jnp.abs(g_eps) ** 2
+        assert jnp.allclose(delta, reference, rtol=1e-12, atol=0.0)
+
     def test_time_varying(self):
         sp = _field()
         a = sp.realize(wavelength_nm=1000.0, time_s=0.0)
