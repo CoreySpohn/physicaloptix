@@ -9,6 +9,7 @@ from physicaloptix.apertures import (
     load_primary_yaml,
     normalize_unit_energy,
     rasterize_primary,
+    rasterize_segments,
 )
 
 
@@ -107,6 +108,55 @@ class TestRasterizer:
         )
         with pytest.raises(ValueError, match="segment_point_to_point_m"):
             rasterize_primary(primary, 64)
+
+
+class TestSegmentRasterizer:
+    def test_stack_sums_to_the_full_pupil(self):
+        primary = eac1_primary()
+        npix = 96
+        stack = rasterize_segments(primary, npix, supersample=4)
+        full = rasterize_primary(primary, npix, supersample=4)
+        assert stack.shape == (primary.n_segments, npix, npix)
+        np.testing.assert_allclose(stack.sum(axis=0), full, rtol=1e-12)
+
+    def test_no_pixel_is_over_illuminated(self):
+        """The masks partition the pupil at the subpixel level (the hexagons
+        are gap-separated), so summed coverage never exceeds a full pixel."""
+        primary = eac1_primary()
+        stack = rasterize_segments(primary, 96, supersample=4)
+        assert stack.sum(axis=0).max() <= 1.0 + 1e-12
+
+    def test_centre_segment_is_localized(self):
+        """A segment mask is confined to its own hexagon, so a segment-local
+        mode built on it cannot leak into the rest of the pupil."""
+        primary = eac1_primary()
+        npix = 96
+        stack = rasterize_segments(primary, npix, supersample=4)
+        delta = 7.2 / npix
+        coords = (np.arange(npix) - npix / 2 + 0.5) * delta
+        xx, yy = np.meshgrid(coords, coords)
+        radius = np.sqrt(xx**2 + yy**2)
+        bound = primary.segment_point_to_point_m / 2 + delta
+        assert np.all(stack[0][radius > bound] == 0.0)
+
+    def test_each_segment_is_a_gray_mask(self):
+        primary = eac1_primary()
+        stack = rasterize_segments(primary, 96, supersample=4)
+        assert stack.min() >= 0.0
+        assert stack.max() <= 1.0
+        # Every segment covers some pixels.
+        assert np.all(stack.sum(axis=(1, 2)) > 0.0)
+
+    def test_requires_exact_segment_size(self):
+        primary = SegmentedPrimary(
+            diameter_m=7.2,
+            area_m2=33.0,
+            n_rings=2,
+            n_segments=19,
+            segment_gap_m=0.004,
+        )
+        with pytest.raises(ValueError, match="segment_point_to_point_m"):
+            rasterize_segments(primary, 64)
 
 
 class TestNormalization:

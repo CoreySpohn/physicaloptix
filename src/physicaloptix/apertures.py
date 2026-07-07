@@ -78,6 +78,51 @@ def eac1_primary():
     return load_primary_yaml(_EAC1_YAML)
 
 
+def _segment_setup(primary, npix, extent_m, supersample):
+    """Shared grid, subpixel offsets, and hexagon geometry for rasterizing."""
+    if primary.segment_point_to_point_m is None:
+        raise ValueError(
+            "rasterizing segments needs an exact segment size: set "
+            "segment_point_to_point_m on the primary"
+        )
+    extent = float(extent_m) if extent_m is not None else float(primary.diameter_m)
+    delta = extent / npix
+    coords = (np.arange(npix) - npix / 2 + 0.5) * delta
+    offsets = ((np.arange(supersample) + 0.5) / supersample - 0.5) * delta
+    circum = float(primary.segment_point_to_point_m)
+    apothem = np.cos(np.pi / 6) * circum / 2
+    thetas = np.pi / 2 + np.arange(3) * np.pi / 3
+    centres = np.asarray(primary.segment_centres_m, dtype=float)
+    half_box = circum / 2 + delta
+    return coords, offsets, apothem, thetas, centres, half_box
+
+
+def _segment_block(cx, cy, coords, offsets, apothem, thetas, half_box):
+    """The gray coverage of one flat-top hexagon over its bounding window.
+
+    Returns ``(iy, ix, block)`` (the window row/col indices and the mean
+    subpixel coverage on that window), or ``None`` if the segment falls off
+    the grid.
+    """
+    ix = np.flatnonzero(np.abs(coords - cx) <= half_box)
+    iy = np.flatnonzero(np.abs(coords - cy) <= half_box)
+    if not ix.size or not iy.size:
+        return None
+    block = np.zeros((iy.size, ix.size))
+    for dy in offsets:
+        y = coords[iy] + dy - cy
+        for dx in offsets:
+            x = coords[ix] + dx - cx
+            inside = np.ones((iy.size, ix.size), dtype=bool)
+            for theta in thetas:
+                projection = (np.cos(theta) * x)[np.newaxis, :] + (np.sin(theta) * y)[
+                    :, np.newaxis
+                ]
+                inside &= projection**2 <= apothem**2
+            block += inside
+    return iy, ix, block / offsets.size**2
+
+
 def rasterize_primary(primary, npix, *, extent_m=None, supersample=16):
     """Render a segmented primary to a gray-pixel pupil array.
 
@@ -92,42 +137,49 @@ def rasterize_primary(primary, npix, *, extent_m=None, supersample=16):
     Returns:
         The pupil as an ``(npix, npix)`` float array in [0, 1].
     """
-    if primary.segment_point_to_point_m is None:
-        raise ValueError(
-            "rasterize_primary needs an exact segment size: set "
-            "segment_point_to_point_m on the primary"
-        )
-    extent = float(extent_m) if extent_m is not None else float(primary.diameter_m)
-    delta = extent / npix
-    coords = (np.arange(npix) - npix / 2 + 0.5) * delta
-    offsets = ((np.arange(supersample) + 0.5) / supersample - 0.5) * delta
-
-    circum = float(primary.segment_point_to_point_m)
-    apothem = np.cos(np.pi / 6) * circum / 2
-    thetas = np.pi / 2 + np.arange(3) * np.pi / 3
-    centres = np.asarray(primary.segment_centres_m, dtype=float)
-
+    coords, offsets, apothem, thetas, centres, half_box = _segment_setup(
+        primary, npix, extent_m, supersample
+    )
     pupil = np.zeros((npix, npix))
-    half_box = circum / 2 + delta
     for cx, cy in centres:
-        ix = np.flatnonzero(np.abs(coords - cx) <= half_box)
-        iy = np.flatnonzero(np.abs(coords - cy) <= half_box)
-        if not ix.size or not iy.size:
+        rendered = _segment_block(cx, cy, coords, offsets, apothem, thetas, half_box)
+        if rendered is None:
             continue
-        block = np.zeros((iy.size, ix.size))
-        for dy in offsets:
-            y = coords[iy] + dy - cy
-            for dx in offsets:
-                x = coords[ix] + dx - cx
-                inside = np.ones((iy.size, ix.size), dtype=bool)
-                for theta in thetas:
-                    projection = (np.cos(theta) * x)[np.newaxis, :] + (
-                        np.sin(theta) * y
-                    )[:, np.newaxis]
-                    inside &= projection**2 <= apothem**2
-                block += inside
-        pupil[np.ix_(iy, ix)] += block / supersample**2
+        iy, ix, block = rendered
+        pupil[np.ix_(iy, ix)] += block
     return pupil
+
+
+def rasterize_segments(primary, npix, *, extent_m=None, supersample=16):
+    """Render each segment to its own gray-pixel mask.
+
+    Like ``rasterize_primary`` but returns the per-segment stack rather than
+    the summed pupil, so a segment-local basis (piston, tip, tilt) can key
+    each mode to a single segment's pixels. The stack sums exactly to
+    ``rasterize_primary``, and for a nonzero gap the masks are disjoint.
+
+    Args:
+        primary: A ``SegmentedPrimary`` with an exact segment size.
+        npix: Output side length in pixels.
+        extent_m: Spatial extent in metres; defaults to the circumscribed
+            diameter.
+        supersample: Subpixel samples per axis.
+
+    Returns:
+        An ``(n_segments, npix, npix)`` float array in [0, 1], ordered as
+        ``primary.segment_centres_m`` (centre segment first).
+    """
+    coords, offsets, apothem, thetas, centres, half_box = _segment_setup(
+        primary, npix, extent_m, supersample
+    )
+    masks = np.zeros((len(centres), npix, npix))
+    for seg, (cx, cy) in enumerate(centres):
+        rendered = _segment_block(cx, cy, coords, offsets, apothem, thetas, half_box)
+        if rendered is None:
+            continue
+        iy, ix, block = rendered
+        masks[seg][np.ix_(iy, ix)] = block
+    return masks
 
 
 def normalize_unit_energy(pupil, dx_m):

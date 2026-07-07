@@ -25,11 +25,18 @@ from physicaloptix.apertures import (
     load_primary_yaml,
     normalize_unit_energy,
     rasterize_primary,
+    rasterize_segments,
 )
 from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
 from physicaloptix.diagnostics import mft_sampling_parameter
 from physicaloptix.diff import diff_spec
-from physicaloptix.elements import ModeBasis, MultiScaleVortex, SampledOptic
+from physicaloptix.elements import (
+    ModeBasis,
+    MultiScaleVortex,
+    SampledOptic,
+    segment_ptt_basis,
+    zernike_basis,
+)
 from physicaloptix.interop import PathCoronagraph
 from physicaloptix.linearize import Linearization, linearity_residual, linearize
 from physicaloptix.path import OpticalPath, Stage
@@ -66,5 +73,8 @@ __all__ = [
     "normalize_unit_energy",
     "point_source",
     "rasterize_primary",
+    "rasterize_segments",
     "render_path",
+    "segment_ptt_basis",
+    "zernike_basis",
 ]
