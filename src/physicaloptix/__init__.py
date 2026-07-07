@@ -33,6 +33,7 @@ from physicaloptix.diff import diff_spec
 from physicaloptix.elements import (
     ModeBasis,
     MultiScaleVortex,
+    PhaseScreen,
     SampledOptic,
     segment_ptt_basis,
     zernike_basis,
@@ -55,6 +56,7 @@ __all__ = [
     "MultiScaleVortex",
     "OpticalPath",
     "PathCoronagraph",
+    "PhaseScreen",
     "PlaneKind",
     "SampledOptic",
     "SpeckleProcess",
