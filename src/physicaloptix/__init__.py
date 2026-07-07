@@ -43,13 +43,14 @@ from physicaloptix.linearize import Linearization, linearity_residual, linearize
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.sources import broadcast_to_spectrum, point_source
 from physicaloptix.speckle import AnalyticSpeckleField, SpeckleProcess
-from physicaloptix.transforms import Fraunhofer, cmft_bwd, cmft_fwd
+from physicaloptix.transforms import Fraunhofer, Fresnel, cmft_bwd, cmft_fwd
 from physicaloptix.viz import render_path
 
 __all__ = [
     "AnalyticSpeckleField",
     "Field",
     "Fraunhofer",
+    "Fresnel",
     "Grid",
     "Linearization",
     "ModeBasis",

@@ -2,5 +2,6 @@
 
 from physicaloptix.transforms.cmft import cmft_bwd, cmft_fwd
 from physicaloptix.transforms.fraunhofer import Fraunhofer
+from physicaloptix.transforms.fresnel import Fresnel
 
-__all__ = ["Fraunhofer", "cmft_bwd", "cmft_fwd"]
+__all__ = ["Fraunhofer", "Fresnel", "cmft_bwd", "cmft_fwd"]

@@ -34,3 +34,53 @@ def mft_sampling_parameter(x_in, x_out):
     p_in = 1.0 / (2.0 * np.max(np.abs(x_out)) * dx_in)
     p_out = 1.0 / (2.0 * np.max(np.abs(x_in)) * dx_out)
     return float(min(p_in, p_out))
+
+
+def fresnel_sampling_parameter(grid, alpha):
+    """Nyquist ratio of the paraxial angular-spectrum chirp ``exp(-i pi alpha nu^2)``.
+
+    The transfer function's fastest fringe sits at the grid's Nyquist frequency;
+    sampling it without aliasing on the ``npix``-point frequency grid gives
+
+        p = (npix * dx) / sqrt(npix * alpha)     [ == D / sqrt(N lambda z) ]
+
+    the dimensionless form of abcdLux's ``asm_sampling_parameter`` (Desdoigts;
+    the same advisory-metric lineage as :func:`mft_sampling_parameter`). ``p``
+    scales as the square root of the grid-point count, so real-domain padding
+    improves it (see :func:`fresnel_pad_factor`).
+
+    - ``p >= 1``: the transfer function is Nyquist-sampled.
+    - ``p < 1``: aliasing is expected (a worst-case OPERATOR bound, so it is
+      conservative for band-limited fields).
+
+    Args:
+        grid: The (same in/out) propagation grid.
+        alpha: The dimensionless Fresnel parameter ``lambda * z / D^2``.
+
+    Returns:
+        The scalar Nyquist ratio (``inf`` when ``alpha <= 0``).
+    """
+    if alpha <= 0.0:
+        return float("inf")
+    extent = grid.npix * grid.dx
+    return float(extent / np.sqrt(grid.npix * alpha))
+
+
+def fresnel_pad_factor(grid, alpha):
+    """Real-domain zero-pad factor that brings the Fresnel gate to ``p >= 1``.
+
+    ``p`` grows as ``sqrt`` of the point count, so padding by ``npad`` scales it
+    by ``sqrt(npad)``; the smallest integer factor reaching Nyquist is
+    ``ceil(1 / p^2)``.
+
+    Args:
+        grid: The propagation grid.
+        alpha: The dimensionless Fresnel parameter.
+
+    Returns:
+        The recommended integer pad factor (``1`` when already well sampled).
+    """
+    p = fresnel_sampling_parameter(grid, alpha)
+    if not np.isfinite(p):
+        return 1
+    return max(1, int(np.ceil(1.0 / p**2)))
