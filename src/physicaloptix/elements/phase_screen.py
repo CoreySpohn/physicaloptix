@@ -53,9 +53,20 @@ class PhaseScreen(Element):
             )
 
     def __call__(self, field):
-        """Apply the OPD phasor to the field (same plane and grid)."""
+        """Apply the OPD phasor to the field (same plane and grid).
+
+        A monochromatic field converts the OPD at ``wavelength_nm``; a chromatic
+        field converts it per wavelength (``opd * 2 pi / lambda_k``), so the DM
+        or aberration phase carries its true wavelength dependence -- what a
+        broadband dark hole needs.
+        """
         validate_field(field, plane=self.plane, grid=self.grid, context="PhaseScreen")
-        phasor = jnp.exp(1j * 2.0 * jnp.pi * self.basis.opd() / self.wavelength_nm)
+        opd = self.basis.opd()
+        if field.spectrum is None:
+            phasor = jnp.exp(1j * 2.0 * jnp.pi * opd / self.wavelength_nm)
+        else:
+            wavelengths = field.spectrum.wavelengths_nm[:, jnp.newaxis, jnp.newaxis]
+            phasor = jnp.exp(1j * 2.0 * jnp.pi * opd[jnp.newaxis] / wavelengths)
         return Field(
             data=field.data * phasor,
             grid=field.grid,

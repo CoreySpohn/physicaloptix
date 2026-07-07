@@ -6,9 +6,10 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from physicaloptix.core import Field, Grid, PlaneKind
+from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
 from physicaloptix.elements import ModeBasis, PhaseScreen
 from physicaloptix.path import OpticalPath, Stage
+from physicaloptix.sources import broadcast_to_spectrum
 from physicaloptix.transforms import Fraunhofer
 
 WL = 500.0
@@ -35,6 +36,20 @@ class TestPhaseScreen:
         out = PhaseScreen(basis, grid, wavelength_nm=WL)(_pupil_field(npix))
         expected = np.exp(1j * 2 * np.pi * np.asarray(basis.opd()) / WL)
         np.testing.assert_allclose(np.asarray(out.data), expected, rtol=1e-12)
+
+    def test_chromatic_applies_per_wavelength_phase(self):
+        npix = 8
+        grid = Grid.pupil(npix)
+        basis = eqx.tree_at(lambda b: b.coeffs, _basis(npix), jnp.array([1.0, -0.5]))
+        spectrum = Spectrum.tophat(500.0, 0.2, 3)  # 450, 500, 550 nm
+        ones = jnp.ones((npix, npix), complex)
+        mono = Field(data=ones, grid=grid, plane=PlaneKind.PUPIL)
+        chrom = broadcast_to_spectrum(mono, spectrum)
+        out = PhaseScreen(basis, grid, wavelength_nm=WL)(chrom)
+        opd = np.asarray(basis.opd())
+        for k, wl in enumerate(np.asarray(spectrum.wavelengths_nm)):
+            expected = np.exp(1j * 2 * np.pi * opd / wl)
+            np.testing.assert_allclose(np.asarray(out.data[k]), expected, rtol=1e-12)
 
     def test_zero_command_is_identity(self):
         npix = 8
