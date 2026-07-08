@@ -28,6 +28,7 @@ from physicaloptix.apertures import (
     rasterize_segments,
 )
 from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
+from physicaloptix.detector import read_detector
 from physicaloptix.diagnostics import mft_sampling_parameter
 from physicaloptix.diff import diff_spec
 from physicaloptix.elements import (
@@ -77,6 +78,7 @@ __all__ = [
     "point_source",
     "rasterize_primary",
     "rasterize_segments",
+    "read_detector",
     "render_path",
     "segment_ptt_basis",
     "zernike_basis",
