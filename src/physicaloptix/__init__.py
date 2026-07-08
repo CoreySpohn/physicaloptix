@@ -36,6 +36,7 @@ from physicaloptix.elements import (
     MultiScaleVortex,
     PhaseScreen,
     SampledOptic,
+    fourier_dm_basis,
     segment_ptt_basis,
     zernike_basis,
 )
@@ -70,6 +71,7 @@ __all__ = [
     "cmft_fwd",
     "diff_spec",
     "eac1_primary",
+    "fourier_dm_basis",
     "linearity_residual",
     "linearize",
     "load_primary_yaml",

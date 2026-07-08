@@ -97,6 +97,60 @@ def segment_ptt_basis(primary, grid, *, ptt_nm=1.0, supersample=16):
     return ModeBasis(B=stack, coeffs=jnp.zeros(stack.shape[0]))
 
 
+def fourier_dm_basis(grid, *, n_actuators, k_min=1.0, k_max=None, rms_nm=1.0):
+    """Band-limited cosine/sine modes of a Fourier deformable mirror.
+
+    A deformable mirror with ``n_actuators`` across the pupil controls spatial
+    frequencies up to its Nyquist ``n_actuators / 2`` cycles per aperture, and a
+    pupil-phase frequency of ``k`` cycles per aperture places a focal-plane
+    speckle at radius ``k`` lambda/D. The mode set spanning
+    ``k_min <= |k| <= k_max`` is therefore exactly the control basis that carves
+    a dark hole over that annulus. Each half-plane integer frequency
+    ``(kx, ky)`` contributes a cosine and a sine mode (the two focal
+    quadratures a two-sided or broadband hole needs), each normalized so a unit
+    coefficient gives ``rms_nm`` of RMS wavefront error over the aperture.
+
+    Args:
+        grid: The pupil ``Grid`` the field is sampled on.
+        n_actuators: Actuators across the pupil; sets the Nyquist frequency cap
+            ``n_actuators / 2`` on the controllable region.
+        k_min: Smallest controlled frequency (inner working angle in lambda/D).
+        k_max: Largest controlled frequency; clamped to the Nyquist cap and
+            defaulting to it when ``None`` (outer working angle in lambda/D).
+        rms_nm: Per-mode RMS amplitude in nanometres for a unit coefficient.
+
+    Returns:
+        A ``ModeBasis`` with ``B`` of shape ``(n_modes, npix, npix)`` in
+        nanometres and zero coefficients, ``n_modes`` even (cosine/sine pairs).
+
+    Raises:
+        ValueError: If the band selects no frequencies.
+    """
+    nyquist = n_actuators / 2.0
+    upper = nyquist if k_max is None else min(k_max, nyquist)
+    coords = np.asarray(grid.coords)
+    x_grid, y_grid = np.meshgrid(coords, coords)
+    aperture = (x_grid**2 + y_grid**2) <= 0.25
+
+    modes = []
+    kcap = int(np.floor(upper))
+    for kx in range(0, kcap + 1):
+        for ky in range(-kcap, kcap + 1):
+            if kx == 0 and ky <= 0:  # keep one of each +/- pair (half-plane)
+                continue
+            if not (k_min <= math.hypot(kx, ky) <= upper):
+                continue
+            arg = 2.0 * np.pi * (kx * x_grid + ky * y_grid)
+            for shape in (np.cos(arg), np.sin(arg)):
+                rms = np.sqrt((shape[aperture] ** 2).mean())
+                modes.append(rms_nm * shape / rms)
+
+    if not modes:
+        raise ValueError(f"no modes in band [{k_min}, {upper}] cycles per aperture")
+    stack = jnp.asarray(np.stack(modes))
+    return ModeBasis(B=stack, coeffs=jnp.zeros(stack.shape[0]))
+
+
 def zernike_basis(grid, n_modes, *, rms_nm=1.0, diameter=1.0):
     """Noll-ordered Zernike modes over a circular pupil as an OPD ``ModeBasis``.
 
