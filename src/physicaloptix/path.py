@@ -44,6 +44,12 @@ class OpticalPath(eqx.Module):
             raise ValueError(f"duplicate stage names in {names}")
         current = None
         for stage in self.stages:
+            if getattr(stage.op, "multi_output", False):
+                raise ValueError(
+                    f"stage '{stage.name}' is a multi-output op and cannot "
+                    "be a Stage of the linear fold; use OpticalSystem to "
+                    "fork a path"
+                )
             plane_in, plane_out = _planes(stage.op)
             if current is not None and plane_in is not current:
                 raise ValueError(

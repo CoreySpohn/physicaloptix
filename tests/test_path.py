@@ -98,6 +98,16 @@ class TestOpticalPath:
         with pytest.raises(ValueError, match="plane"):
             OpticalPath(stages=(train.stages[0], Stage("bad", focal_optic)))
 
+    def test_multi_output_op_rejected_at_construction(self):
+        """A multi-output op (a beamsplitter) cannot be a Stage of the fold."""
+
+        class _TwoPort(eqx.Module):
+            plane: PlaneKind = eqx.field(static=True)
+            multi_output: bool = eqx.field(static=True, default=True)
+
+        with pytest.raises(ValueError, match="multi-output"):
+            OpticalPath(stages=(Stage("split", _TwoPort(plane=PlaneKind.PUPIL)),))
+
     def test_propagate_is_jit_clean(self, simple_chain):
         train, field, _ = simple_chain
 
