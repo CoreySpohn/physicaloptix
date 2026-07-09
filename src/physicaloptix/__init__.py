@@ -43,6 +43,12 @@ from physicaloptix.elements import (
 )
 from physicaloptix.interop import PathCoronagraph
 from physicaloptix.linearize import Linearization, linearity_residual, linearize
+from physicaloptix.multichannel import (
+    ChannelLinearization,
+    MultiChannelLinearization,
+    linearize_shared,
+    ncpa_differential_opd,
+)
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.sources import broadcast_to_spectrum, point_source
 from physicaloptix.speckle import AnalyticSpeckleField, SpeckleProcess
@@ -54,12 +60,14 @@ __all__ = [
     "AnalyticSpeckleField",
     "BeamSplitter",
     "Branch",
+    "ChannelLinearization",
     "Field",
     "Fraunhofer",
     "Fresnel",
     "Grid",
     "Linearization",
     "ModeBasis",
+    "MultiChannelLinearization",
     "MultiScaleVortex",
     "OpticalPath",
     "OpticalSystem",
@@ -81,8 +89,10 @@ __all__ = [
     "fourier_dm_basis",
     "linearity_residual",
     "linearize",
+    "linearize_shared",
     "load_primary_yaml",
     "mft_sampling_parameter",
+    "ncpa_differential_opd",
     "normalize_unit_energy",
     "point_source",
     "rasterize_primary",
