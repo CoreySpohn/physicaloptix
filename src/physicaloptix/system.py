@@ -26,8 +26,10 @@ import numpy as np
 from jaxtyping import Array
 
 from physicaloptix.core import Field, Grid, PlaneKind, validate_field
+from physicaloptix.path import OpticalPath, Stage, _planes
 
 _ENERGY_TOL = 1e-10
+PORTS = ("transmit", "reflect")
 
 
 class BeamSplitter(eqx.Module):
@@ -291,3 +293,177 @@ class BeamSplitter(eqx.Module):
                 spectrum=field.spectrum,
             ),
         }
+
+
+class Branch(eqx.Module):
+    """One arm of a forked system: a port binding plus its own downstream path.
+
+    Attributes:
+        name: The arm's name (tap namespace and output key).
+        port: Which splitter port feeds it (``"transmit"`` or ``"reflect"``).
+        path: The arm's own ``OpticalPath`` (its DMs, masks, and non-common
+            aberrations). An empty path is a bare detector arm at the split
+            plane.
+    """
+
+    name: str = eqx.field(static=True)
+    port: str = eqx.field(static=True)
+    path: OpticalPath
+
+
+class SplitterPort(eqx.Module):
+    """A single-output view of one splitter port (the flattening shim).
+
+    Wraps ``(split, port)`` as a plain ``Field -> Field`` operator so a
+    trunk + one branch can be composed into an ordinary ``OpticalPath``
+    (``OpticalSystem.as_channel_path``). The sibling port's field is simply
+    not computed.
+    """
+
+    split: BeamSplitter
+    port: str = eqx.field(static=True)
+
+    @property
+    def plane_in(self):
+        """The splitter's plane (a port selection does not re-propagate)."""
+        return self.split.plane
+
+    @property
+    def plane_out(self):
+        """Same plane out: energy routing only."""
+        return self.split.plane
+
+    def __call__(self, field):
+        """Apply the splitter and keep this port."""
+        return self.split(field)[self.port]
+
+
+class OpticalSystem(eqx.Module):
+    """A forked optical layout: one shared trunk feeding named branches.
+
+    The trunk is propagated ONCE per call; the splitter divides its output
+    among the branches (each bound to one port), and every branch propagates
+    its own downstream path. Because the whole system is one pytree, a shared
+    deformable mirror lives in the TRUNK as a single leaf -- one command, one
+    gradient, seen by every branch. (Do not place one mirror object into two
+    branch paths: pytrees are trees, not DAGs, and the copies silently
+    decouple under jit.)
+
+    Attributes:
+        trunk: The shared upstream ``OpticalPath`` (may be empty for a pure
+            entrance split).
+        split: The ``BeamSplitter`` at the fork.
+        branches: The arms, each a ``Branch`` bound to a splitter port.
+    """
+
+    trunk: OpticalPath
+    split: BeamSplitter
+    branches: tuple
+
+    def __check_init__(self):
+        """Reject bad names/ports and plane discontinuities at build."""
+        names = [branch.name for branch in self.branches]
+        if len(set(names)) != len(names):
+            raise ValueError(f"duplicate branch names in {names}")
+        if "trunk" in names:
+            raise ValueError("'trunk' is reserved; rename the branch")
+        for branch in self.branches:
+            if branch.port not in PORTS:
+                raise ValueError(
+                    f"branch '{branch.name}' binds unknown port "
+                    f"{branch.port!r}; ports are {PORTS}"
+                )
+        if self.trunk.stages:
+            _, trunk_out = _planes(self.trunk.stages[-1].op)
+            if trunk_out is not self.split.plane:
+                raise ValueError(
+                    f"trunk ends in the {trunk_out.value} plane but the "
+                    f"splitter sits in the {self.split.plane.value} plane"
+                )
+        for branch in self.branches:
+            if branch.path.stages:
+                first_in, _ = _planes(branch.path.stages[0].op)
+                if first_in is not self.split.plane:
+                    raise ValueError(
+                        f"branch '{branch.name}' starts in the "
+                        f"{first_in.value} plane but the splitter feeds the "
+                        f"{self.split.plane.value} plane"
+                    )
+
+    def _parse_taps(self, taps):
+        """Split namespaced tap names into per-scope tuples."""
+        trunk_names = {stage.name for stage in self.trunk.stages}
+        branch_names = {
+            branch.name: {stage.name for stage in branch.path.stages}
+            for branch in self.branches
+        }
+        trunk_taps, branch_taps = [], {name: [] for name in branch_names}
+        for tap in taps:
+            scope, _, stage = tap.partition("/")
+            if scope == "trunk" and stage in trunk_names:
+                trunk_taps.append(stage)
+            elif scope in branch_names and stage in branch_names[scope]:
+                branch_taps[scope].append(stage)
+            else:
+                known = sorted(
+                    [f"trunk/{s}" for s in trunk_names]
+                    + [f"{b}/{s}" for b, stages in branch_names.items() for s in stages]
+                )
+                raise ValueError(f"unknown tap {tap!r}; taps are {known}")
+        return tuple(trunk_taps), {k: tuple(v) for k, v in branch_taps.items()}
+
+    def as_channel_path(self, name):
+        """Flatten the trunk plus one branch into a plain ``OpticalPath``.
+
+        The returned path is ``trunk stages + a single-output SplitterPort
+        shim + the branch's stages``, so every existing single-path tool
+        (``linearize``, a control loop, ``PathCoronagraph``) runs on a channel
+        verbatim. NOTE: flattening DUPLICATES the trunk pytree per channel, so
+        use a flattened path for per-channel work only; joint control of a
+        shared trunk mirror across channels must go through this container
+        (one trunk leaf), never through several flattened copies.
+
+        Args:
+            name: The branch to flatten.
+
+        Returns:
+            ``(path, index_map)``: the flattened ``OpticalPath`` and a dict
+            mapping every stage name to its index in it (the port shim is
+            ``"<name>_port"``).
+        """
+        by_name = {branch.name: branch for branch in self.branches}
+        if name not in by_name:
+            raise ValueError(f"unknown branch {name!r}; branches are {sorted(by_name)}")
+        branch = by_name[name]
+        port_stage = Stage(
+            f"{name}_port", SplitterPort(split=self.split, port=branch.port)
+        )
+        stages = (*self.trunk.stages, port_stage, *branch.path.stages)
+        path = OpticalPath(stages=stages)
+        index_map = {stage.name: i for i, stage in enumerate(stages)}
+        return path, index_map
+
+    def propagate(self, field, *, taps=()):
+        """Propagate the trunk once, split, and run every branch.
+
+        Args:
+            field: The entrance field (must match the trunk's first plane).
+            taps: Static tuple of namespaced stage names to record --
+                ``"trunk/<stage>"`` or ``"<branch>/<stage>"``.
+
+        Returns:
+            ``(outputs, tapped)``: a dict mapping each branch name to its
+            output field, and the namespaced tapped fields.
+        """
+        trunk_taps, branch_taps = self._parse_taps(taps)
+        trunk_out, trunk_tapped = self.trunk.propagate(field, taps=trunk_taps)
+        ports = self.split(trunk_out)
+        tapped = {f"trunk/{k}": v for k, v in trunk_tapped.items()}
+        outputs = {}
+        for branch in self.branches:
+            out, branch_tapped = branch.path.propagate(
+                ports[branch.port], taps=branch_taps[branch.name]
+            )
+            outputs[branch.name] = out
+            tapped.update({f"{branch.name}/{k}": v for k, v in branch_tapped.items()})
+        return outputs, tapped

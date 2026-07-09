@@ -1,5 +1,6 @@
-"""Tests for the BeamSplitter two-port element (energy split + Babinet reject)."""
+"""Tests for the beamsplitter and the forked optical system."""
 
+import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -8,7 +9,8 @@ from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
 from physicaloptix.elements import SampledOptic
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.sources import broadcast_to_spectrum
-from physicaloptix.system import BeamSplitter
+from physicaloptix.system import BeamSplitter, Branch, OpticalSystem
+from physicaloptix.transforms import Fraunhofer
 
 NPIX = 16
 
@@ -163,6 +165,166 @@ class TestDichroic:
         )
         with pytest.raises(ValueError, match="spectrum"):
             split(mono)
+
+
+class _Counting(eqx.Module):
+    """A pupil optic that counts its applications (eager-mode test helper)."""
+
+    inner: SampledOptic
+    calls: list = eqx.field(static=True)
+
+    @property
+    def plane(self):
+        return self.inner.plane
+
+    def __call__(self, field):
+        self.calls.append(1)
+        return self.inner(field)
+
+
+def _two_arm_system(npix=NPIX, counting=False):
+    field, grid = _pupil_field(npix)
+    focal = Grid.focal(2 * npix, 0.5)
+    disk = _binary_mask(npix, radius=0.45)
+    stop = SampledOptic(
+        transmission=jnp.asarray(disk), grid=grid, plane=PlaneKind.PUPIL
+    )
+    calls = []
+    op = _Counting(inner=stop, calls=calls) if counting else stop
+    trunk = OpticalPath(stages=(Stage("stop", op),))
+    split = BeamSplitter.energy(0.2, grid=grid, plane=PlaneKind.PUPIL)
+    sci = OpticalPath(
+        stages=(Stage("science", Fraunhofer(grid_in=grid, grid_out=focal)),)
+    )
+    wfs = OpticalPath(stages=())  # a bare pupil (re-imaging) detector arm
+    system = OpticalSystem(
+        trunk=trunk,
+        split=split,
+        branches=(Branch("sci", "transmit", sci), Branch("wfs", "reflect", wfs)),
+    )
+    return system, field, calls
+
+
+class TestOpticalSystem:
+    def test_propagates_every_branch(self):
+        system, field, _ = _two_arm_system()
+        outs, taps = system.propagate(field)
+        assert set(outs) == {"sci", "wfs"}
+        assert outs["sci"].plane is PlaneKind.FOCAL
+        assert outs["wfs"].plane is PlaneKind.PUPIL
+        assert taps == {}
+
+    def test_trunk_runs_exactly_once(self):
+        system, field, calls = _two_arm_system(counting=True)
+        system.propagate(field)
+        assert len(calls) == 1  # one trunk pass feeds both branches
+
+    def test_matches_manual_composition(self):
+        system, field, _ = _two_arm_system()
+        outs, _ = system.propagate(field)
+        trunk_out, _ = system.trunk.propagate(field)
+        ports = system.split(trunk_out)
+        sci_manual, _ = system.branches[0].path.propagate(ports["transmit"])
+        np.testing.assert_array_equal(
+            np.asarray(outs["sci"].data), np.asarray(sci_manual.data)
+        )
+        np.testing.assert_array_equal(
+            np.asarray(outs["wfs"].data), np.asarray(ports["reflect"].data)
+        )
+
+    def test_namespaced_taps(self):
+        system, field, _ = _two_arm_system()
+        _, taps = system.propagate(field, taps=("trunk/stop", "sci/science"))
+        assert set(taps) == {"trunk/stop", "sci/science"}
+        assert taps["trunk/stop"].plane is PlaneKind.PUPIL
+        assert taps["sci/science"].plane is PlaneKind.FOCAL
+
+    def test_unknown_tap_raises(self):
+        system, field, _ = _two_arm_system()
+        with pytest.raises(ValueError, match="tap"):
+            system.propagate(field, taps=("sci/nonexistent",))
+        with pytest.raises(ValueError, match="tap"):
+            system.propagate(field, taps=("nobranch/stop",))
+
+    def test_chromatic_threads_through(self):
+        system, mono, _ = _two_arm_system()
+        spectrum = Spectrum.tophat(500.0, 0.1, 3)
+        field = broadcast_to_spectrum(mono, spectrum)
+        outs, _ = system.propagate(field)
+        assert outs["sci"].data.shape[0] == 3
+        assert outs["wfs"].spectrum is spectrum
+
+    def test_rejects_plane_discontinuity_at_construction(self):
+        system, _, _ = _two_arm_system()
+        focal = Grid.focal(2 * NPIX, 0.5)
+        bad_first = SampledOptic(
+            transmission=jnp.ones((2 * NPIX, 2 * NPIX)),
+            grid=focal,
+            plane=PlaneKind.FOCAL,
+        )
+        with pytest.raises(ValueError, match="plane"):
+            OpticalSystem(
+                trunk=system.trunk,
+                split=system.split,
+                branches=(
+                    Branch(
+                        "bad", "transmit", OpticalPath(stages=(Stage("m", bad_first),))
+                    ),
+                ),
+            )
+
+    def test_rejects_duplicate_branch_names(self):
+        system, _, _ = _two_arm_system()
+        with pytest.raises(ValueError, match="duplicate"):
+            OpticalSystem(
+                trunk=system.trunk,
+                split=system.split,
+                branches=(system.branches[0], system.branches[0]),
+            )
+
+    def test_rejects_unknown_port(self):
+        system, _, _ = _two_arm_system()
+        with pytest.raises(ValueError, match="port"):
+            OpticalSystem(
+                trunk=system.trunk,
+                split=system.split,
+                branches=(Branch("sci", "backdoor", system.branches[0].path),),
+            )
+
+
+class TestAsChannelPath:
+    def test_flattened_channel_matches_container(self):
+        system, field, _ = _two_arm_system()
+        outs, _ = system.propagate(field)
+        for name in ("sci", "wfs"):
+            flat, _ = system.as_channel_path(name)
+            out_flat, _ = flat.propagate(field)
+            np.testing.assert_allclose(
+                np.asarray(out_flat.data), np.asarray(outs[name].data), atol=1e-15
+            )
+
+    def test_flattened_chromatic_matches(self):
+        system, mono, _ = _two_arm_system()
+        field = broadcast_to_spectrum(mono, Spectrum.tophat(500.0, 0.1, 3))
+        outs, _ = system.propagate(field)
+        flat, _ = system.as_channel_path("sci")
+        out_flat, _ = flat.propagate(field)
+        np.testing.assert_allclose(
+            np.asarray(out_flat.data), np.asarray(outs["sci"].data), atol=1e-15
+        )
+
+    def test_index_map_locates_every_stage(self):
+        system, _, _ = _two_arm_system()
+        flat, index_map = system.as_channel_path("sci")
+        assert index_map["stop"] == 0  # trunk stage first
+        assert index_map["sci_port"] == 1  # the port shim
+        assert index_map["science"] == 2  # branch stage after
+        assert flat.stages[index_map["science"]].name == "science"
+
+    def test_unknown_branch_raises(self):
+        system, _, _ = _two_arm_system()
+        with pytest.raises(ValueError, match="branch"):
+            system.as_channel_path("nope")
 
 
 class TestFoldIntegration:

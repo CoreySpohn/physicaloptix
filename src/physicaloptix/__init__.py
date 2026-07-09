@@ -46,13 +46,14 @@ from physicaloptix.linearize import Linearization, linearity_residual, linearize
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.sources import broadcast_to_spectrum, point_source
 from physicaloptix.speckle import AnalyticSpeckleField, SpeckleProcess
-from physicaloptix.system import BeamSplitter
+from physicaloptix.system import BeamSplitter, Branch, OpticalSystem, SplitterPort
 from physicaloptix.transforms import Fraunhofer, Fresnel, cmft_bwd, cmft_fwd
 from physicaloptix.viz import render_path
 
 __all__ = [
     "AnalyticSpeckleField",
     "BeamSplitter",
+    "Branch",
     "Field",
     "Fraunhofer",
     "Fresnel",
@@ -61,12 +62,14 @@ __all__ = [
     "ModeBasis",
     "MultiScaleVortex",
     "OpticalPath",
+    "OpticalSystem",
     "PathCoronagraph",
     "PhaseScreen",
     "PlaneKind",
     "SampledOptic",
     "SpeckleProcess",
     "Spectrum",
+    "SplitterPort",
     "Stage",
     "ZernikeWavefrontSensor",
     "__version__",
