@@ -340,3 +340,69 @@ class TestFoldIntegration:
         bad_plane = Field(data=field.data, grid=grid, plane=PlaneKind.FOCAL)
         with pytest.raises(ValueError, match="plane"):
             split(bad_plane)
+
+
+class TestOptixstuffSeam:
+    """A flattened science branch serves the optixstuff coronagraph seam."""
+
+    def test_science_branch_wraps_into_a_path_coronagraph(self):
+        from optixstuff.coronagraph import AbstractCoronagraph
+
+        from physicaloptix.elements import MultiScaleVortex
+        from physicaloptix.interop import PathCoronagraph
+
+        npup = 32
+        grid = Grid.pupil(npup)
+        x = np.asarray(grid.coords)
+        xx, yy = np.meshgrid(x, x)
+        disk = ((xx**2 + yy**2) <= 0.25).astype(float)
+        lyot = ((xx**2 + yy**2) <= 0.45**2).astype(float)
+        trunk = OpticalPath(
+            stages=(
+                Stage(
+                    "stop",
+                    SampledOptic(
+                        transmission=jnp.asarray(disk),
+                        grid=grid,
+                        plane=PlaneKind.PUPIL,
+                    ),
+                ),
+            )
+        )
+        split = BeamSplitter.energy(0.1, grid=grid, plane=PlaneKind.PUPIL)
+        sci = OpticalPath(
+            stages=(
+                Stage(
+                    "vortex",
+                    MultiScaleVortex.build(
+                        charge=2, npup=npup, q=32, scaling_factor=4, window_size=8
+                    ),
+                ),
+                Stage(
+                    "lyot",
+                    SampledOptic(
+                        transmission=jnp.asarray(lyot),
+                        grid=grid,
+                        plane=PlaneKind.PUPIL,
+                    ),
+                ),
+            )
+        )
+        system = OpticalSystem(
+            trunk=trunk,
+            split=split,
+            branches=(
+                Branch("sci", "transmit", sci),
+                Branch("lowfs", "reflect", OpticalPath(stages=())),
+            ),
+        )
+        field = Field(
+            data=jnp.asarray(disk).astype(complex), grid=grid, plane=PlaneKind.PUPIL
+        )
+        flat, _ = system.as_channel_path("sci")
+        coronagraph = PathCoronagraph.from_path(
+            flat, field, diameter_m=6.0, owa_lod=6.0, pixel_scale_lod=0.5
+        )
+        assert isinstance(coronagraph, AbstractCoronagraph)
+        assert np.isfinite(float(coronagraph.IWA)) and float(coronagraph.IWA) > 0
+        assert np.all(np.isfinite(np.asarray(coronagraph.curve_throughput)))
