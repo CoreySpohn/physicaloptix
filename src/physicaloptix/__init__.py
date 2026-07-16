@@ -41,6 +41,7 @@ from physicaloptix.elements import (
     segment_ptt_basis,
     zernike_basis,
 )
+from physicaloptix.ifs import LensletChain, psflet_pack, save_psflet_pack
 from physicaloptix.interop import PathCoronagraph
 from physicaloptix.linearize import Linearization, linearity_residual, linearize
 from physicaloptix.multichannel import (
@@ -65,6 +66,7 @@ __all__ = [
     "Fraunhofer",
     "Fresnel",
     "Grid",
+    "LensletChain",
     "Linearization",
     "ModeBasis",
     "MultiChannelLinearization",
@@ -95,10 +97,12 @@ __all__ = [
     "ncpa_differential_opd",
     "normalize_unit_energy",
     "point_source",
+    "psflet_pack",
     "rasterize_primary",
     "rasterize_segments",
     "read_detector",
     "render_path",
+    "save_psflet_pack",
     "segment_ptt_basis",
     "zernike_basis",
 ]
