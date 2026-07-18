@@ -11,8 +11,10 @@ from physicaloptix.core import Grid
 from physicaloptix.ifs import (
     PACK_FORMAT_VERSION,
     LensletChain,
+    detector_scene,
     pixel_integrate,
     psflet_pack,
+    psflet_template,
     save_psflet_pack,
 )
 from physicaloptix.transforms.cmft import cmft_fwd
@@ -328,3 +330,96 @@ class TestPack:
         far = np.ix_(wings, wings)
         blue, red = pack["templates"][0, 0], pack["templates"][0, 1]
         assert red[far].sum() / red.sum() > blue[far].sum() / blue.sum()
+
+
+class TestArrayScene:
+    def test_single_lenslet_scene_matches_template_path(self):
+        """One on-axis lenslet through the array machinery reproduces the
+        single-lenslet template pipeline exactly on interior pixels."""
+        chain = make_chain()
+        xc, yc = np.array([[12.0]]), np.array([[12.0]])
+        scene = detector_scene(
+            chain,
+            np.zeros((1, 2)),
+            xc,
+            yc,
+            [LAM_REF],
+            det_shape=(24, 24),
+            oversample=5,
+            patch_half_px=6.0,
+        )
+        template, _ = psflet_template(
+            chain, LAM_REF, np.arange(-5.0, 5.5, 1.0), n_quad=5
+        )
+        np.testing.assert_allclose(
+            np.asarray(scene)[7:18, 7:18], np.asarray(template), rtol=1e-9
+        )
+
+    def test_distant_lenslets_add_exactly(self):
+        """Disjoint accumulation windows: the scene is the exact sum of the
+        single-lenslet scenes (no spurious cross terms)."""
+        chain = make_chain()
+        centers = np.array([[0.0, 0.0], [3.0, 0.0]])
+        xc = np.array([[10.0], [40.0]])
+        yc = np.array([[25.0], [25.0]])
+        kwargs = dict(det_shape=(50, 50), oversample=4, patch_half_px=6.0)
+        both = detector_scene(chain, centers, xc, yc, [LAM_REF], **kwargs)
+        one = detector_scene(chain, centers[:1], xc[:1], yc[:1], [LAM_REF], **kwargs)
+        two = detector_scene(chain, centers[1:], xc[1:], yc[1:], [LAM_REF], **kwargs)
+        np.testing.assert_allclose(
+            np.asarray(both), np.asarray(one + two), rtol=1e-10, atol=1e-30
+        )
+
+    def test_adjacent_lenslets_interfere(self):
+        """Overlapping windows: the coherent scene differs from the
+        incoherent sum -- the crosstalk term H cannot represent."""
+        chain = make_chain()
+        centers = np.array([[0.0, 0.0], [1.0, 0.0]])
+        xc = np.array([[23.0], [27.0]])
+        yc = np.array([[25.0], [25.0]])
+        kwargs = dict(det_shape=(50, 50), oversample=4, patch_half_px=6.0)
+        both = detector_scene(chain, centers, xc, yc, [LAM_REF], **kwargs)
+        one = detector_scene(chain, centers[:1], xc[:1], yc[:1], [LAM_REF], **kwargs)
+        two = detector_scene(chain, centers[1:], xc[1:], yc[1:], [LAM_REF], **kwargs)
+        delta = np.abs(np.asarray(both - one - two))
+        assert delta.max() > 1e-4 * float(jnp.max(both))
+
+    def test_offaxis_tilt_selects_lenslet(self):
+        """A tilted pupil (an off-axis source) illuminates the lenslet at
+        the source's sky position."""
+        pupil, grid = disk_pupil()
+        c = grid.coords
+        tilt = np.exp(2j * np.pi * (c[None, :] * 1.0 + c[:, None] * -0.5))
+        chain = LensletChain(
+            jnp.asarray(np.asarray(pupil) * tilt),
+            grid,
+            pitch_lod_ref=0.5,
+            lam_ref_nm=LAM_REF,
+            micropupil_px=1.5,
+            n_tile=48,
+        )
+        span = np.arange(-3, 4, dtype=float)
+        centers = np.array([[i, j] for j in span for i in span])
+        tiles = chain.tile_fields(LAM_REF, centers)
+        energies = np.asarray(jnp.sum(jnp.abs(tiles) ** 2, axis=(1, 2)))
+        # (1.0, -0.5) lambda/D at 0.5 lambda/D pitch = lenslet (2, -1)
+        expected = np.argmin((centers[:, 0] - 2.0) ** 2 + (centers[:, 1] + 1.0) ** 2)
+        assert int(np.argmax(energies)) == int(expected)
+
+    def test_window_exit_raises(self):
+        chain = make_chain()
+        with pytest.raises(ValueError, match="leaves the detector"):
+            detector_scene(
+                chain,
+                np.zeros((1, 2)),
+                np.array([[2.0]]),
+                np.array([[12.0]]),
+                [LAM_REF],
+                det_shape=(24, 24),
+                patch_half_px=6.0,
+            )
+
+    def test_flat_illumination_rejected_for_arrays(self):
+        chain = make_chain(illumination="flat")
+        with pytest.raises(ValueError, match="psf"):
+            chain.tile_fields(LAM_REF, np.zeros((1, 2)))

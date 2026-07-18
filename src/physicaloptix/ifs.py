@@ -42,6 +42,7 @@ consumed by downstream spectral-extraction codes via their template mode.
 import json
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import lax
@@ -51,6 +52,18 @@ from physicaloptix.core import Grid
 from physicaloptix.transforms.cmft import cmft_fwd
 
 PACK_FORMAT_VERSION = 1
+
+
+def _cmft2(f, x, uy, ux):
+    """Two-axis continuous-FT MFT: separate row (uy) and column (ux) outputs.
+
+    The library ``cmft_fwd`` special case has ``uy == ux``; per-lenslet tiles
+    need independent axis offsets (a lenslet center displaces both axes).
+    """
+    ky = jnp.exp(-2j * jnp.pi * jnp.outer(uy, x))
+    kx = jnp.exp(-2j * jnp.pi * jnp.outer(ux, x))
+    dx = x[1] - x[0]
+    return dx**2 * (ky @ f @ kx.T)
 
 
 class LensletChain(eqx.Module):
@@ -249,17 +262,15 @@ class LensletChain(eqx.Module):
             field = field * (rr2 <= self.pinhole_radius**2)
         return field
 
-    def stop_field(self, wavelength_nm, pupil=None, shift_diffraction=(0.0, 0.0)):
-        """Complex field just after the spectrograph stop.
-
-        ``shift_diffraction`` is the dispersion hook: a ``(dx, dy)`` tilt
-        phase in diffraction units that translates the detector image by the
-        shift theorem (a disperser is exactly this, with a
-        wavelength-dependent shift).
-        """
-        mp = self.micropupil_field(wavelength_nm, pupil)
+    def _relay_to_stop(self, tile_field, wavelength_nm, shift_diffraction=(0.0, 0.0)):
+        """Windowed tile field -> field just after the spectrograph stop."""
+        u_mp = jnp.asarray(self.mp_grid.coords)
+        field = cmft_fwd(tile_field, jnp.asarray(self.tile_grid.coords), u_mp)
+        if self.pinhole_radius is not None:
+            rr2 = u_mp[:, None] ** 2 + u_mp[None, :] ** 2
+            field = field * (rr2 <= self.pinhole_radius**2)
         x_s = jnp.asarray(self.stop_grid.coords)
-        field = cmft_fwd(mp, jnp.asarray(self.mp_grid.coords), x_s)
+        field = cmft_fwd(field, u_mp, x_s)
         if self.stop_kind == "square":
             inside = (jnp.abs(x_s[:, None]) <= self.stop_halfwidth) & (
                 jnp.abs(x_s[None, :]) <= self.stop_halfwidth
@@ -276,6 +287,71 @@ class LensletChain(eqx.Module):
             phase = x_s[None, :] * dx + x_s[:, None] * dy
             field = field * jnp.exp(2j * jnp.pi * phase)
         return field
+
+    def stop_field(self, wavelength_nm, pupil=None, shift_diffraction=(0.0, 0.0)):
+        """Complex field just after the spectrograph stop.
+
+        ``shift_diffraction`` is the dispersion hook: a ``(dx, dy)`` tilt
+        phase in diffraction units that translates the detector image by the
+        shift theorem (a disperser is exactly this, with a
+        wavelength-dependent shift).
+        """
+        windowed = self.local_field(wavelength_nm, pupil)
+        return self._relay_to_stop(windowed, wavelength_nm, shift_diffraction)
+
+    def tile_fields(self, wavelength_nm, centers_pitch, pupil=None):
+        """Windowed local fields at every lenslet, one two-axis MFT each.
+
+        The full-array move: the upstream train ends at a pupil and the MFT
+        has free output sampling, so each lenslet's local field is one MFT
+        from the pupil onto that lenslet's tile -- no global fine focal grid
+        is ever materialized, and mutual coherence between tiles is carried
+        exactly (all tiles view one complex pupil field).
+
+        Args:
+            wavelength_nm: Wavelength [nm].
+            centers_pitch: ``(n_lenslets, 2)`` lenslet centers ``(x, y)`` in
+                units of the lenslet pitch on sky (wavelength-independent;
+                rotation already applied).
+            pupil: Optional exit-pupil slice (chromatic ``pupil_field``).
+
+        Returns:
+            Complex tile fields, ``(n_lenslets, n_tile, n_tile)``, aperture
+            window applied.
+        """
+        if self.illumination != "psf":
+            raise ValueError("array tile fields need illumination='psf'")
+        if pupil is None:
+            if self.pupil_field.ndim != 2:
+                raise ValueError(
+                    "per-wavelength pupil_field needs an explicit pupil slice"
+                )
+            pupil = self.pupil_field
+        tile = jnp.asarray(self.tile_grid.coords)
+        p_lod = self.pitch_lod(wavelength_nm)
+        window = self._window()
+        xp = jnp.asarray(self.pupil_grid.coords)
+
+        def one(center):
+            uy = (tile + center[1]) * p_lod
+            ux = (tile + center[0]) * p_lod
+            return _cmft2(pupil, xp, uy, ux) * window
+
+        return jax.vmap(one)(jnp.asarray(centers_pitch))
+
+    def detector_patch(
+        self, tile_field, wavelength_nm, off_y, off_x, shift_diffraction=(0.0, 0.0)
+    ):
+        """Complex detector field of one lenslet at the given pixel offsets.
+
+        ``off_y`` / ``off_x`` are 1D offsets [px] from the lenslet's PSFlet
+        centroid; fractional offsets are evaluated exactly by the MFT (no
+        interpolation).
+        """
+        stop = self._relay_to_stop(tile_field, wavelength_nm, shift_diffraction)
+        ppd = self.px_per_diffraction(wavelength_nm)
+        x_s = jnp.asarray(self.stop_grid.coords)
+        return _cmft2(stop, x_s, jnp.asarray(off_y) / ppd, jnp.asarray(off_x) / ppd)
 
     def detector_field(
         self, wavelength_nm, px_coords, pupil=None, shift_diffraction=(0.0, 0.0)
@@ -470,3 +546,114 @@ def save_psflet_pack(path, pack):
         centroids=pack["centroids"],
         meta_json=np.asarray(pack["meta_json"]),
     )
+
+
+def detector_scene(
+    chain,
+    centers_pitch,
+    xc_px,
+    yc_px,
+    wavelengths_nm,
+    *,
+    det_shape,
+    weights=None,
+    oversample=4,
+    patch_half_px=6.0,
+):
+    """Full-array COHERENT detector scene, pixel-integrated.
+
+    The wave view of the array that the sparse-H model approximates: every
+    lenslet's complex detector patch is accumulated on one fine detector
+    lattice per wavelength -- adjacent lenslets sample mutually coherent
+    field, so their overlapping PSFlet wings interfere, the term an
+    incoherent template add cannot represent (Antichi et al. 2009's
+    coherent-vs-incoherent crosstalk distinction). The accumulated field is
+    squared, midpoint pixel-integrated (the pack convention), and summed
+    incoherently over wavelength.
+
+    Geometry comes in as data so the wave view and a sparse-template view
+    can share it exactly: ``centers_pitch`` are the lenslet centers on sky
+    and ``xc_px`` / ``yc_px`` the per-(lenslet, wavelength) detector
+    centroids of the caller's dispersion model.
+
+    Args:
+        chain: The ``LensletChain`` (``illumination="psf"``).
+        centers_pitch: ``(n_lenslets, 2)`` lenslet centers ``(x, y)`` in
+            lenslet pitches on sky.
+        xc_px: ``(n_lenslets, n_lam)`` detector centroid columns [px].
+        yc_px: ``(n_lenslets, n_lam)`` detector centroid rows [px].
+        wavelengths_nm: 1D wavelength samples [nm]. A chromatic
+            ``chain.pupil_field`` must carry one slice per sample.
+        det_shape: Detector ``(ny, nx)`` [px]; pixel centers at integer
+            coordinates.
+        weights: Per-wavelength incoherent weights (default uniform mean).
+        oversample: Fine samples per pixel per axis (the midpoint rule).
+        patch_half_px: Half-width of each lenslet's accumulation window
+            [px]; the window must stay inside the detector.
+
+    Returns:
+        The ``(ny, nx)`` pixel-integrated detector intensity.
+    """
+    lams = np.atleast_1d(np.asarray(wavelengths_nm, dtype=float))
+    xc = np.asarray(xc_px, dtype=float)
+    yc = np.asarray(yc_px, dtype=float)
+    n_lenslets = np.asarray(centers_pitch).shape[0]
+    if xc.shape != (n_lenslets, len(lams)) or yc.shape != (n_lenslets, len(lams)):
+        raise ValueError(
+            f"centroid tables must be (n_lenslets, n_lam) = "
+            f"({n_lenslets}, {len(lams)}), got {xc.shape} and {yc.shape}"
+        )
+    ny, nx = det_shape
+    ovs = int(oversample)
+    n_win = 2 * round(patch_half_px * ovs)
+    w = (
+        np.full(len(lams), 1.0 / len(lams))
+        if weights is None
+        else np.asarray(weights, dtype=float)
+    )
+
+    # fine index f covers pixel i = f // ovs at coordinate (f + 0.5)/ovs - 0.5;
+    # a patch starts at the fine index putting its window center on the centroid.
+    fy0 = np.round((yc + 0.5) * ovs - 0.5).astype(int) - n_win // 2
+    fx0 = np.round((xc + 0.5) * ovs - 0.5).astype(int) - n_win // 2
+    if (
+        fy0.min() < 0
+        or fx0.min() < 0
+        or fy0.max() > ny * ovs - n_win
+        or fx0.max() > nx * ovs - n_win
+    ):
+        raise ValueError(
+            "a lenslet accumulation window leaves the detector; grow det_shape "
+            "or shrink patch_half_px"
+        )
+
+    total = jnp.zeros((ny, nx))
+    win = jnp.arange(n_win)
+    for i, lam in enumerate(lams):
+        pupil = chain.pupil_field[i] if chain.pupil_field.ndim == 3 else None
+        tiles = chain.tile_fields(lam, centers_pitch, pupil)
+
+        def add_patch(canvas, per_lenslet, lam=lam):
+            tile, y0, x0, cy, cx = per_lenslet
+            off_y = (y0 + win + 0.5) / ovs - 0.5 - cy
+            off_x = (x0 + win + 0.5) / ovs - 0.5 - cx
+            patch = chain.detector_patch(tile, lam, off_y, off_x)
+            block = lax.dynamic_slice(canvas, (y0, x0), (n_win, n_win))
+            return lax.dynamic_update_slice(canvas, block + patch, (y0, x0)), None
+
+        canvas = jnp.zeros((ny * ovs, nx * ovs), dtype=tiles.dtype)
+        canvas, _ = lax.scan(
+            add_patch,
+            canvas,
+            (
+                tiles,
+                jnp.asarray(fy0[:, i]),
+                jnp.asarray(fx0[:, i]),
+                jnp.asarray(yc[:, i]),
+                jnp.asarray(xc[:, i]),
+            ),
+        )
+        fine = jnp.abs(canvas) ** 2
+        pixels = fine.reshape(ny, ovs, nx, ovs).mean(axis=(1, 3))
+        total = total + w[i] * pixels
+    return total

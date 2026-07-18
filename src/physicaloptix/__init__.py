@@ -41,7 +41,12 @@ from physicaloptix.elements import (
     segment_ptt_basis,
     zernike_basis,
 )
-from physicaloptix.ifs import LensletChain, psflet_pack, save_psflet_pack
+from physicaloptix.ifs import (
+    LensletChain,
+    detector_scene,
+    psflet_pack,
+    save_psflet_pack,
+)
 from physicaloptix.interop import PathCoronagraph
 from physicaloptix.linearize import Linearization, linearity_residual, linearize
 from physicaloptix.multichannel import (
@@ -86,6 +91,7 @@ __all__ = [
     "broadcast_to_spectrum",
     "cmft_bwd",
     "cmft_fwd",
+    "detector_scene",
     "diff_spec",
     "eac1_primary",
     "fourier_dm_basis",
