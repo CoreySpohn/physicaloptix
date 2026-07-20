@@ -57,7 +57,11 @@ from physicaloptix.multichannel import (
 )
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.sources import broadcast_to_spectrum, point_source
-from physicaloptix.speckle import AnalyticSpeckleField, SpeckleProcess
+from physicaloptix.speckle import (
+    AnalyticSpeckleField,
+    SpeckleProcess,
+    lambda_scaled_channels,
+)
 from physicaloptix.system import BeamSplitter, Branch, OpticalSystem, SplitterPort
 from physicaloptix.transforms import Fraunhofer, Fresnel, cmft_bwd, cmft_fwd
 from physicaloptix.viz import render_path
@@ -95,6 +99,7 @@ __all__ = [
     "diff_spec",
     "eac1_primary",
     "fourier_dm_basis",
+    "lambda_scaled_channels",
     "linearity_residual",
     "linearize",
     "linearize_shared",

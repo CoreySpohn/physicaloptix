@@ -252,3 +252,61 @@ class TestInterface:
         assert op.speckle is sp
         assert op.speckle.pixel_scale_lod == 0.25
         assert op.speckle.epoch_jd == _EPOCH_JD
+
+
+class TestChromaticField:
+    """The optional wavelength-channel axis and the lambda-scaling broaden."""
+
+    def test_broadened_halo_scales_inverse_square(self):
+        mono = _field()
+        chrom = mono.broadened(
+            reference_wavelength_nm=1000.0, wavelengths_nm=[500.0, 1000.0]
+        )
+        blue = chrom.realize(wavelength_nm=500.0, time_s=100.0)
+        ref = chrom.realize(wavelength_nm=1000.0, time_s=100.0)
+        assert jnp.allclose(blue, 4.0 * ref, rtol=1e-12)
+
+    def test_reference_channel_matches_mono(self):
+        mono = _field()
+        chrom = mono.broadened(
+            reference_wavelength_nm=1000.0, wavelengths_nm=[500.0, 1000.0]
+        )
+        a = mono.realize(wavelength_nm=1000.0, time_s=50.0)
+        b = chrom.realize(wavelength_nm=1000.0, time_s=50.0)
+        assert jnp.allclose(a, b, rtol=1e-12)
+
+    def test_nearest_channel_selection(self):
+        chrom = _field().broadened(
+            reference_wavelength_nm=1000.0, wavelengths_nm=[500.0, 1000.0]
+        )
+        near_blue = chrom.realize(wavelength_nm=600.0, time_s=100.0)
+        blue = chrom.realize(wavelength_nm=500.0, time_s=100.0)
+        assert jnp.allclose(near_blue, blue, rtol=1e-12)
+
+    def test_broadening_twice_raises(self):
+        chrom = _field().broadened(
+            reference_wavelength_nm=1000.0, wavelengths_nm=[500.0]
+        )
+        try:
+            chrom.broadened(reference_wavelength_nm=1000.0, wavelengths_nm=[600.0])
+        except ValueError as err:
+            assert "already chromatic" in str(err)
+        else:
+            raise AssertionError("expected ValueError")
+
+    def test_layout_validation(self):
+        mono = _field()
+        try:
+            AnalyticSpeckleField(
+                mono.e_nom,
+                mono.G,
+                mono.amplitudes,
+                mono.frequencies_hz,
+                mono.phases,
+                normalization=1.0,
+                wavelengths_nm=[500.0, 600.0],
+            )
+        except ValueError as err:
+            assert "chromatic ingredients" in str(err)
+        else:
+            raise AssertionError("expected ValueError")

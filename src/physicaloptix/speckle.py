@@ -29,6 +29,74 @@ from optixstuff.speckle import AbstractSpeckleField
 J2000_JD = 2451545.0
 
 
+def lambda_scaled_channels(e_nom, G, reference_wavelength_nm, wavelengths_nm):
+    """Per-wavelength ``(e_nom, G)`` stacks under the lambda-scaling approximation.
+
+    The standard chromatic model for a speckle field generated at one
+    reference wavelength: the lambda/D morphology is wavelength-independent
+    (set by the WFE spatial frequencies; the radial dilation on a fixed
+    angular detector falls out of the consumer's wavelength-aware lambda/D
+    conversion), while the OPD sensitivity carries the phase factor
+    ``i 2 pi / lambda``, so ``G(lambda) = G(lambda0) * (lambda0/lambda)``
+    -- the incoherent halo then scales as ``(lambda0/lambda)^2``. The
+    nominal field ``e_nom`` is held fixed (the design leakage's own
+    chromaticity is NOT modeled; propagate per sub-band for that).
+
+    Args:
+        e_nom: Complex nominal focal field, shape ``(y, x)``.
+        G: Complex sensitivity ``d(E_focal)/d(mode)``, shape ``(m, y, x)``.
+        reference_wavelength_nm: The wavelength ``G`` was generated at.
+        wavelengths_nm: Channel wavelengths, shape ``(w,)``.
+
+    Returns:
+        ``(e_stack, g_stack)`` of shapes ``(w, y, x)`` and ``(w, m, y, x)``.
+    """
+    wavelengths = jnp.asarray(wavelengths_nm, dtype=float)
+    scale = reference_wavelength_nm / wavelengths
+    e_stack = jnp.broadcast_to(e_nom, (wavelengths.shape[0], *e_nom.shape))
+    g_stack = G[jnp.newaxis] * scale[:, jnp.newaxis, jnp.newaxis, jnp.newaxis]
+    return e_stack, g_stack
+
+
+def _check_chromatic_layout(e_nom, G, normalization, wavelengths_nm):
+    """Validate mono ``(y,x)/(m,y,x)`` or chromatic ``(w,...)`` ingredients."""
+    if wavelengths_nm is None:
+        if e_nom.ndim != 2 or G.ndim != 3:
+            raise ValueError(
+                "monochromatic ingredients must be e_nom (y, x) and G "
+                f"(m, y, x); got {e_nom.shape} and {G.shape} (set "
+                "wavelengths_nm for a chromatic field)"
+            )
+        if normalization.ndim != 0:
+            raise ValueError(
+                "monochromatic normalization must be a scalar, got shape "
+                f"{normalization.shape}"
+            )
+        return
+    w = wavelengths_nm.shape[0]
+    if e_nom.ndim != 3 or G.ndim != 4 or e_nom.shape[0] != w or G.shape[0] != w:
+        raise ValueError(
+            f"chromatic ingredients must be e_nom (w, y, x) and G "
+            f"(w, m, y, x) with w == {w}; got {e_nom.shape} and {G.shape}"
+        )
+    if normalization.ndim not in (0, 1) or (
+        normalization.ndim == 1 and normalization.shape[0] != w
+    ):
+        raise ValueError(
+            f"chromatic normalization must be a scalar or shape ({w},); "
+            f"got {normalization.shape}"
+        )
+
+
+def _select_channel(e_nom, G, normalization, wavelengths_nm, wavelength_nm):
+    """The ``(e_nom, G, normalization)`` of the channel nearest a wavelength."""
+    if wavelengths_nm is None:
+        return e_nom, G, normalization
+    index = jnp.argmin(jnp.abs(wavelengths_nm - jnp.asarray(wavelength_nm)))
+    norm = jnp.broadcast_to(normalization, wavelengths_nm.shape)[index]
+    return e_nom[index], G[index], norm
+
+
 class AnalyticSpeckleField(AbstractSpeckleField):
     """Time-driven speckle field from frozen ``E_nom`` / ``G`` / ``eps(t)``.
 
@@ -41,19 +109,27 @@ class AnalyticSpeckleField(AbstractSpeckleField):
     adds the cross term ``2 Re(E_nom* . G eps)``, which carries the bright-tail
     speckle pinning and needs the complex ``E_nom``.
 
-    The field is monochromatic in v1: ``G`` / ``E_nom`` are at the design
-    wavelength and ``realize`` ignores its ``wavelength_nm`` argument (kept for
-    interface conformance). The deep-contrast cross term needs float64 inputs.
+    Monochromatic by default: ``G`` / ``E_nom`` are at the design wavelength
+    and ``realize`` ignores its ``wavelength_nm`` argument. With
+    ``wavelengths_nm`` set, ``e_nom`` / ``G`` (and optionally
+    ``normalization``) carry a leading channel axis and ``realize`` selects
+    the channel nearest the requested wavelength while the mode trajectory
+    stays shared across channels (a wavefront error in nanometres is
+    achromatic). Build the stacks per sub-band for an exact model, or with
+    :func:`lambda_scaled_channels` / :meth:`broadened` for the standard
+    lambda-scaling approximation. The deep-contrast cross term needs
+    float64 inputs.
     """
 
-    e_nom: Array  # complex (y, x): nominal focal field
-    G: Array  # complex (m, y, x): d(E_focal)/d(mode)
+    e_nom: Array  # complex (y, x) or (w, y, x): nominal focal field
+    G: Array  # complex (m, y, x) or (w, m, y, x): d(E_focal)/d(mode)
     amplitudes: Array  # float (m, f): per-mode spectral amplitudes a_kj
     frequencies_hz: Array  # float (f,): temporal frequencies f_j
     phases: Array  # float (m, f): per-mode random phases phi_kj
-    normalization: float
+    normalization: Array
     pixel_scale_lod: float
     epoch_jd: float
+    wavelengths_nm: Array | None
     coherent: bool = eqx.field(static=True)
 
     def __init__(
@@ -68,32 +144,50 @@ class AnalyticSpeckleField(AbstractSpeckleField):
         pixel_scale_lod=0.25,
         epoch_jd=J2000_JD,
         coherent=False,
+        wavelengths_nm=None,
     ):
         """Build a speckle field from precomputed ingredients.
 
         Args:
-            e_nom: Complex nominal focal field, shape ``(y, x)``.
-            G: Complex sensitivity ``d(E_focal)/d(mode)``, shape ``(m, y, x)``.
+            e_nom: Complex nominal focal field, shape ``(y, x)`` -- or
+                ``(w, y, x)`` with ``wavelengths_nm`` set.
+            G: Complex sensitivity ``d(E_focal)/d(mode)``, shape
+                ``(m, y, x)`` -- or ``(w, m, y, x)`` with
+                ``wavelengths_nm`` set.
             amplitudes: Per-mode spectral amplitudes ``a_kj``, shape ``(m, f)``.
             frequencies_hz: Temporal frequencies ``f_j`` in Hz, shape ``(f,)``.
             phases: Per-mode random phases ``phi_kj``, shape ``(m, f)``.
             normalization: Intensity that maps to unit contrast (the telescope
-                PSF peak the focal field is referenced to).
-            pixel_scale_lod: Native pixel scale in lambda/D per pixel. Must
-                equal the coronagraph's plate scale for the speckle path.
+                PSF peak the focal field is referenced to); a scalar, or one
+                value per channel for a chromatic field.
+            pixel_scale_lod: Native pixel scale in lambda/D per pixel
+                (shared by every channel: the maps live in lambda/D units,
+                where the morphology is achromatic).
             epoch_jd: Julian Date mapping to ``time_s = 0``. Default J2000.
             coherent: Include the pinning cross term. Default ``False``
                 (incoherent halo).
+            wavelengths_nm: Channel wavelengths, shape ``(w,)``, enabling
+                the chromatic layout above. ``None`` (default) for a
+                monochromatic field.
         """
         self.e_nom = e_nom
         self.G = G
         self.amplitudes = amplitudes
         self.frequencies_hz = frequencies_hz
         self.phases = phases
-        self.normalization = normalization
+        self.normalization = jnp.asarray(normalization, dtype=float)
         self.pixel_scale_lod = pixel_scale_lod
         self.epoch_jd = epoch_jd
+        self.wavelengths_nm = (
+            None if wavelengths_nm is None else jnp.asarray(wavelengths_nm, dtype=float)
+        )
         self.coherent = coherent
+
+    def __check_init__(self):
+        """Validate the (chromatic) ingredient layout."""
+        _check_chromatic_layout(
+            self.e_nom, self.G, self.normalization, self.wavelengths_nm
+        )
 
     def _eps(self, time_s):
         """Mode coefficients ``eps(t)`` by spectral synthesis, shape ``(m,)``."""
@@ -103,16 +197,50 @@ class AnalyticSpeckleField(AbstractSpeckleField):
 
     def realize(self, *, wavelength_nm, time_s=0.0):
         """Speckle contrast delta at ``time_s`` (see class docstring)."""
-        eps = self._eps(time_s)
-        g_eps = jnp.tensordot(eps, self.G, axes=1)
+        e_nom, g, normalization = _select_channel(
+            self.e_nom, self.G, self.normalization, self.wavelengths_nm, wavelength_nm
+        )
+        g_eps = jnp.tensordot(self._eps(time_s), g, axes=1)
         if self.coherent:
             # The stable form of |E_nom + g_eps|^2 - |E_nom|^2: computing the
             # cross term directly avoids subtracting two floor-magnitude numbers
             # (catastrophic cancellation in the bright regime).
-            delta = 2.0 * jnp.real(jnp.conj(self.e_nom) * g_eps) + jnp.abs(g_eps) ** 2
+            delta = 2.0 * jnp.real(jnp.conj(e_nom) * g_eps) + jnp.abs(g_eps) ** 2
         else:
             delta = jnp.abs(g_eps) ** 2
-        return delta / self.normalization
+        return delta / normalization
+
+    def broadened(self, *, reference_wavelength_nm, wavelengths_nm):
+        """A chromatic copy under the lambda-scaling approximation.
+
+        See :func:`lambda_scaled_channels` for the physics and its limits.
+
+        Args:
+            reference_wavelength_nm: The wavelength this field's ``G`` was
+                generated at.
+            wavelengths_nm: Channel wavelengths for the broadened field.
+
+        Returns:
+            A chromatic ``AnalyticSpeckleField`` sharing this field's
+            temporal realization.
+        """
+        if self.wavelengths_nm is not None:
+            raise ValueError("field is already chromatic")
+        e_stack, g_stack = lambda_scaled_channels(
+            self.e_nom, self.G, reference_wavelength_nm, wavelengths_nm
+        )
+        return AnalyticSpeckleField(
+            e_stack,
+            g_stack,
+            self.amplitudes,
+            self.frequencies_hz,
+            self.phases,
+            self.normalization,
+            pixel_scale_lod=self.pixel_scale_lod,
+            epoch_jd=self.epoch_jd,
+            coherent=self.coherent,
+            wavelengths_nm=wavelengths_nm,
+        )
 
 
 class SpeckleProcess(eqx.Module):
