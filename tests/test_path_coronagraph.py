@@ -1,5 +1,6 @@
 """Tests for PathCoronagraph: the OpticalPath-backed AbstractCoronagraph."""
 
+import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -212,3 +213,172 @@ class TestConstruction:
                 diameter_m=DIAMETER_M,
                 owa_lod=OWA,
             )
+
+
+class TestSamplingExplicitContract:
+    """The target-sampling-first contract, served natively (no resample)."""
+
+    WL = 500.0
+
+    def test_stellar_map_matches_on_axis_psf_at_same_sampling(self, vortex_coronagraph):
+        c = vortex_coronagraph
+        via_contract = np.asarray(
+            c.stellar_map(self.WL, 0.0, pixel_scale_lod=0.25, shape=(96, 96))
+        )
+        rad = 0.25 * self.WL * 1e-9 / DIAMETER_M
+        via_psf = np.asarray(c.on_axis_psf(self.WL, rad, 96))
+        np.testing.assert_allclose(via_contract, via_psf, rtol=1e-10)
+
+    def test_stellar_map_total_is_sampling_invariant(self, vortex_coronagraph):
+        """Same leaked-energy total at two target samplings covering the FOV."""
+        c = vortex_coronagraph
+        fine = np.asarray(
+            c.stellar_map(self.WL, 0.0, pixel_scale_lod=0.2, shape=(140, 140))
+        )
+        coarse = np.asarray(
+            c.stellar_map(self.WL, 0.0, pixel_scale_lod=0.5, shape=(56, 56))
+        )
+        np.testing.assert_allclose(fine.sum(), coarse.sum(), rtol=0.02)
+
+    def test_source_psfs_peak_and_flux(self, vortex_coronagraph):
+        c = vortex_coronagraph
+        scale, npix = 0.25, 96
+        xs, ys = jnp.asarray([4.0, 0.0]), jnp.asarray([0.0, -6.0])
+        psfs = np.asarray(
+            c.source_psfs(self.WL, xs, ys, pixel_scale_lod=scale, shape=(npix, npix))
+        )
+        assert psfs.shape == (2, npix, npix)
+        coords = (np.arange(npix) - npix / 2 + 0.5) * scale
+        for k in range(2):
+            iy, ix = np.unravel_index(np.argmax(psfs[k]), psfs[k].shape)
+            assert abs(coords[ix] - float(xs[k])) < scale
+            assert abs(coords[iy] - float(ys[k])) < scale
+        total = float(psfs[0].sum())
+        expected = float(c.occulter_transmission(4.0, self.WL))
+        np.testing.assert_allclose(total, expected, rtol=0.05)
+
+    def test_background_transmission_matches_occulter_curve(self, vortex_coronagraph):
+        c = vortex_coronagraph
+        scale, npix = 0.5, 40
+        served = np.asarray(
+            c.background_transmission(
+                self.WL, pixel_scale_lod=scale, shape=(npix, npix)
+            )
+        )
+        assert np.all(served >= 0.0)
+        coords = (np.arange(npix) - npix / 2 + 0.5) * scale
+        ix = int(np.argmin(np.abs(coords - 7.0)))
+        iy = int(np.argmin(np.abs(coords)))
+        r = float(np.hypot(coords[ix], coords[iy]))
+        np.testing.assert_allclose(
+            served[iy, ix], float(c.occulter_transmission(r, self.WL)), rtol=1e-6
+        )
+
+    def test_non_square_shape_center_crops(self, vortex_coronagraph):
+        c = vortex_coronagraph
+        wide = np.asarray(
+            c.stellar_map(self.WL, 0.0, pixel_scale_lod=0.5, shape=(40, 56))
+        )
+        square = np.asarray(
+            c.stellar_map(self.WL, 0.0, pixel_scale_lod=0.5, shape=(56, 56))
+        )
+        assert wide.shape == (40, 56)
+        np.testing.assert_allclose(wide, square[8:48, :], rtol=1e-12)
+
+    def test_extended_scene_raises(self, vortex_coronagraph):
+        with pytest.raises(NotImplementedError, match="extended scenes"):
+            vortex_coronagraph.extended_scene(
+                jnp.ones((16, 16)),
+                0.5,
+                self.WL,
+                pixel_scale_lod=0.5,
+                shape=(32, 32),
+            )
+
+
+class TestChromaticBuild:
+    """from_path(wavelength_nm=...): the OPD conversion at the true wavelength."""
+
+    def _aberrated(
+        self, build_wavelength_nm, screen_wavelength_nm=600.0, amplitude_nm=3.0
+    ):
+        """A bare telescope with a fixed Zernike aberration screen."""
+        from physicaloptix.elements import PhaseScreen
+        from physicaloptix.elements.modes import zernike_basis
+
+        pupil_grid = Grid.pupil(NPUP)
+        disk = _disk(pupil_grid, 0.5)
+        basis = zernike_basis(pupil_grid, 6, rms_nm=1.0)
+        coeffs = jnp.zeros(6).at[4].set(amplitude_nm)
+        basis = eqx.tree_at(lambda b: b.coeffs, basis, coeffs)
+        core_path = OpticalPath(
+            stages=(
+                Stage(
+                    "stop",
+                    SampledOptic(
+                        transmission=jnp.asarray(disk),
+                        grid=pupil_grid,
+                        plane=PlaneKind.PUPIL,
+                    ),
+                ),
+                Stage(
+                    "wfe",
+                    PhaseScreen(basis, pupil_grid, wavelength_nm=screen_wavelength_nm),
+                ),
+            )
+        )
+        field = Field(
+            data=jnp.asarray(disk).astype(complex),
+            grid=pupil_grid,
+            plane=PlaneKind.PUPIL,
+        )
+        return PathCoronagraph.from_path(
+            core_path,
+            field,
+            diameter_m=DIAMETER_M,
+            owa_lod=OWA,
+            pixel_scale_lod=0.5,
+            wavelength_nm=build_wavelength_nm,
+        )
+
+    def _halo(self, coro):
+        """Off-core aberration-scattered energy, referenced to no aberration.
+
+        The raw off-core sum is dominated by the (achromatic) Airy wings
+        of the unocculted telescope; the chromatic signal is the small
+        scatter the OPD screen adds on top, so measure the difference.
+        """
+        nominal = self._aberrated(None, amplitude_nm=0.0)
+        psf = np.asarray(
+            coro.stellar_map(600.0, 0.0, pixel_scale_lod=0.5, shape=(56, 56))
+        )
+        ref = np.asarray(
+            nominal.stellar_map(600.0, 0.0, pixel_scale_lod=0.5, shape=(56, 56))
+        )
+        n = psf.shape[0]
+        yy, xx = np.mgrid[:n, :n]
+        r = np.hypot(yy - n / 2 + 0.5, xx - n / 2 + 0.5) * 0.5
+        return float((psf - ref)[r > 3.0].sum())
+
+    def test_build_at_screen_wavelength_matches_mono(self):
+        """Tagging the build wavelength equal to the screen's changes nothing."""
+        mono = self._aberrated(None)
+        tagged = self._aberrated(600.0)
+        a = np.asarray(
+            mono.stellar_map(600.0, 0.0, pixel_scale_lod=0.5, shape=(56, 56))
+        )
+        b = np.asarray(
+            tagged.stellar_map(600.0, 0.0, pixel_scale_lod=0.5, shape=(56, 56))
+        )
+        np.testing.assert_allclose(a, b, rtol=1e-10, atol=1e-18)
+
+    def test_halo_scales_inverse_square_with_wavelength(self):
+        """The small-phase aberration halo scales as (lambda0/lambda)^2."""
+        blue = self._aberrated(450.0)
+        red = self._aberrated(900.0)
+        ratio = self._halo(blue) / self._halo(red)
+        np.testing.assert_allclose(ratio, (900.0 / 450.0) ** 2, rtol=0.05)
+
+    def test_wavelength_metadata_recorded(self):
+        assert self._aberrated(700.0).wavelength_nm == 700.0
+        assert self._aberrated(None).wavelength_nm is None
