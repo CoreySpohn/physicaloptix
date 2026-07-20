@@ -217,3 +217,36 @@ class TestFixedAngularPropagation:
         np.testing.assert_allclose(
             np.asarray(out.data), np.asarray(native.data), atol=1e-15
         )
+
+
+class TestFixedGridEnergyConservation:
+    """The direct form of the 1/lambda^2 surface-brightness claim.
+
+    On the fixed angular grid each slice's energy under the PLAIN grid
+    measure du^2 equals the pupil energy: the s = lambda_ref/lambda
+    amplitude factor exactly compensates the coordinate dilation (fixed
+    pupil energy spreads over a solid angle proportional to lambda^2). On a
+    complete-at-reference grid the identity is exact at the reference slice
+    and holds to a few 1e-3 across a 20% band (band-edge slices see a
+    slightly truncated/aliased scaled grid; measured +2.9e-3 blue, -1.5e-3
+    red at npup 64, q 4)."""
+
+    def test_per_slice_energy_matches_the_pupil(self, pupil_field, band):
+        q = 4
+        focal = Grid.focal(NPUP * q, 1.0 / q)
+        prop = Fraunhofer(
+            grid_in=pupil_field.grid,
+            grid_out=focal,
+            reference_wavelength_nm=REF_NM,
+            min_wavelength_nm=REF_NM * 0.9,
+            on_undersampled="record",
+        )
+        out = prop.forward(broadcast_to_spectrum(pupil_field, band))
+        e_pupil = float(
+            (jnp.abs(pupil_field.data) ** 2).sum() * pupil_field.grid.weights
+        )
+        wavelengths = np.asarray(band.wavelengths_nm)
+        for k, wl in enumerate(wavelengths):
+            e_slice = float((jnp.abs(out.data[k]) ** 2).sum() * focal.weights)
+            tol = 1e-14 if wl == REF_NM else 5e-3
+            np.testing.assert_allclose(e_slice, e_pupil, rtol=tol)

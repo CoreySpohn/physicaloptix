@@ -2,9 +2,11 @@
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import optixstuff as ox
 
 from physicaloptix import AnalyticSpeckleField
+from physicaloptix.speckle import lambda_scaled_channels
 
 jax.config.update("jax_enable_x64", True)
 
@@ -310,3 +312,27 @@ class TestChromaticField:
             assert "chromatic ingredients" in str(err)
         else:
             raise AssertionError("expected ValueError")
+
+
+class TestLambdaScaledChannels:
+    """Direct contract test for the top-level lambda_scaled_channels export
+    (previously exercised only through AnalyticSpeckleField.broadened)."""
+
+    def test_columns_scale_as_lambda_ratio_and_e_nom_is_fixed(self):
+        rng = np.random.default_rng(0)
+        e_nom = jnp.asarray(rng.standard_normal((_DIMS, _DIMS)) + 0j)
+        g = jnp.asarray(
+            rng.standard_normal((_M, _DIMS, _DIMS))
+            + 1j * rng.standard_normal((_M, _DIMS, _DIMS))
+        )
+        wavelengths = jnp.asarray([250.0, 500.0, 1000.0])
+        e_stack, g_stack = lambda_scaled_channels(e_nom, g, 500.0, wavelengths)
+        assert e_stack.shape == (3, _DIMS, _DIMS)
+        assert g_stack.shape == (3, _M, _DIMS, _DIMS)
+        for k, wl in enumerate([250.0, 500.0, 1000.0]):
+            np.testing.assert_array_equal(np.asarray(e_stack[k]), np.asarray(e_nom))
+            np.testing.assert_allclose(
+                np.asarray(g_stack[k]),
+                np.asarray(g) * (500.0 / wl),
+                rtol=1e-15,
+            )

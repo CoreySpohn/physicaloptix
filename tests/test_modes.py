@@ -1,5 +1,7 @@
 """Tests for the mode-basis constructors (Zernike, segment piston/tip/tilt)."""
 
+import typing
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -98,6 +100,56 @@ class TestZernike:
             for j in range(i + 1, 6):
                 inner = (stack[i] * stack[j]).sum() / npupil
                 assert abs(inner) < 5e-2, f"modes {i},{j}: {inner:.3e}"
+
+
+class TestNollIdentity:
+    """Mode j must BE Noll mode j, not merely an orthonormal basis member.
+
+    The RMS/orthogonality/piston tests all survive an index permutation or a
+    sin/cos swap in the (n, m) mapping; a wrong Noll order silently corrupts
+    every downstream WFE budget labeled "Z4 defocus". Normalized correlation
+    against the explicit polynomials pins identity and sign; the swapped-
+    parity control pins Noll's odd-j-is-sine rule.
+    """
+
+    _FORMS: typing.ClassVar = {
+        2: lambda rho, th: 2.0 * rho * np.cos(th),
+        3: lambda rho, th: 2.0 * rho * np.sin(th),
+        4: lambda rho, th: np.sqrt(3.0) * (2.0 * rho**2 - 1.0),
+        5: lambda rho, th: np.sqrt(6.0) * rho**2 * np.sin(2.0 * th),
+        6: lambda rho, th: np.sqrt(6.0) * rho**2 * np.cos(2.0 * th),
+        11: lambda rho, th: np.sqrt(5.0) * (6.0 * rho**4 - 6.0 * rho**2 + 1.0),
+    }
+
+    @staticmethod
+    def _polar(grid):
+        coords = np.asarray(grid.coords)
+        x_grid, y_grid = np.meshgrid(coords, coords)
+        return 2.0 * np.hypot(x_grid, y_grid), np.arctan2(y_grid, x_grid)
+
+    def test_modes_match_the_explicit_noll_polynomials(self):
+        grid = Grid.pupil(128)
+        basis = zernike_basis(grid, 11, rms_nm=1.0)
+        rho, theta = self._polar(grid)
+        aperture = rho <= 1.0
+        for j, form in self._FORMS.items():
+            mode = np.asarray(basis.B[j - 1])[aperture]
+            ref = form(rho, theta)[aperture]
+            corr = (mode * ref).sum() / np.sqrt((mode**2).sum() * (ref**2).sum())
+            assert corr > 1.0 - 1e-9, f"Noll j={j}: correlation {corr:.12f}"
+
+    def test_parity_control_rejects_a_sin_cos_swap(self):
+        """Noll j=5 is the SINE astigmatism: its correlation with the cosine
+        form must vanish (a swapped mapping would score ~1 above and ~0
+        here)."""
+        grid = Grid.pupil(128)
+        basis = zernike_basis(grid, 6, rms_nm=1.0)
+        rho, theta = self._polar(grid)
+        aperture = rho <= 1.0
+        mode5 = np.asarray(basis.B[4])[aperture]
+        wrong = (np.sqrt(6.0) * rho**2 * np.cos(2.0 * theta))[aperture]
+        corr = (mode5 * wrong).sum() / np.sqrt((mode5**2).sum() * (wrong**2).sum())
+        assert abs(corr) < 0.05
 
 
 def _science_path(pupil, npix_focal=32):

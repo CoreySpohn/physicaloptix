@@ -289,6 +289,57 @@ class TestFresnelParaxial:
             _fresnel(Grid.pupil(64), 1e-3, on_undersampled="explode")
 
 
+class TestPlaneWaveEigenfunction:
+    """Plane waves are eigenfunctions of the angular-spectrum transfer.
+
+    A carrier exp(2 pi i (nx x + ny y)) with (nx, ny) on the frequency
+    lattice must emerge multiplied by exactly H(nx, ny) -- the
+    machine-precision pin of the fftfreq-vs-coordinate convention (the
+    Talbot and tilt tests bound the frequency metric only at the 1e-2/1e-3
+    level). Asymmetric (nx, ny) with a sign catches transposes and axis
+    flips; odd npix guards the no-fftshift bookkeeping."""
+
+    @pytest.mark.parametrize("npix", [128, 127])
+    @pytest.mark.parametrize("method", ["fresnel", "exact"])
+    def test_carrier_picks_up_exactly_the_transfer_phase(self, npix, method):
+        nx, ny = 3.0, -2.0
+        alpha = 2e-3
+        x = _coords(npix, 1.0 / npix)
+        xg, yg = np.meshgrid(x, x)
+        carrier = jnp.asarray(np.exp(2j * np.pi * (nx * xg + ny * yg)))
+        prop = _fresnel(Grid.pupil(npix), alpha, method=method)
+        out = prop.forward(_pupil(carrier, npix))
+        nu2 = nx**2 + ny**2
+        if method == "fresnel":
+            transfer = np.exp(-1j * np.pi * alpha * nu2)
+        else:
+            lam_m = WL * 1e-9
+            beta = lam_m / DIAM_M
+            gamma = _distance_for_alpha(alpha) / DIAM_M
+            transfer = np.exp(
+                2j * np.pi * (gamma / beta) * np.sqrt(1.0 - beta**2 * nu2)
+            )
+        np.testing.assert_allclose(
+            np.asarray(out.data), np.asarray(carrier) * transfer, atol=1e-12
+        )
+
+    def test_backward_applies_the_conjugate_phase(self):
+        npix = 128
+        nx, ny = 5.0, 1.0
+        alpha = 3e-3
+        x = _coords(npix, 1.0 / npix)
+        xg, yg = np.meshgrid(x, x)
+        carrier = jnp.asarray(np.exp(2j * np.pi * (nx * xg + ny * yg)))
+        prop = _fresnel(Grid.pupil(npix), alpha)
+        out = prop.backward(
+            Field(data=carrier, grid=Grid.pupil(npix), plane=PlaneKind.INTERMEDIATE)
+        )
+        transfer = np.exp(1j * np.pi * alpha * (nx**2 + ny**2))
+        np.testing.assert_allclose(
+            np.asarray(out.data), np.asarray(carrier) * transfer, atol=1e-12
+        )
+
+
 class TestFresnelChromatic:
     def test_matches_per_slice_mono(self):
         """Each chromatic slice propagates with its own lambda-scaled alpha."""

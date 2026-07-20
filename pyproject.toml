@@ -39,7 +39,7 @@ docs = [
     "ipython",
     "matplotlib",
 ]
-test = ["matplotlib", "nox", "pytest", "hypothesis", "pytest-cov"]
+test = ["matplotlib", "nox", "pytest", "hypothesis", "pytest-cov", "scipy"]
 
 [project.urls]
 Homepage = "https://github.com/CoreySpohn/physicaloptix"

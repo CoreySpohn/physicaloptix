@@ -1,5 +1,7 @@
 """Tests for the continuous-FT MFT pair and the Fraunhofer propagator."""
 
+import warnings
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -7,6 +9,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from physicaloptix.core import Field, Grid, PlaneKind
+from physicaloptix.diagnostics import mft_sampling_parameter
 from physicaloptix.transforms import Fraunhofer, cmft_bwd, cmft_fwd
 
 
@@ -148,3 +151,72 @@ class TestFraunhofer:
     def test_well_sampled_kernel_metric_is_healthy(self):
         prop = Fraunhofer(grid_in=Grid.pupil(64), grid_out=Grid.focal(128, 0.25))
         assert prop.sampling_parameter >= 1.0
+
+    def test_warn_policy_warns_and_record_policy_is_silent(self):
+        """The default warn policy emits; record stores the metric silently."""
+        pupil_grid = Grid.pupil(16)
+        focal_grid = Grid.focal(16, 8.0)
+        with pytest.warns(UserWarning, match="undersampled"):
+            Fraunhofer(grid_in=pupil_grid, grid_out=focal_grid, on_undersampled="warn")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            prop = Fraunhofer(
+                grid_in=pupil_grid, grid_out=focal_grid, on_undersampled="record"
+            )
+        assert prop.sampling_parameter < 1.0
+
+    def test_blue_end_gate_scales_exactly_with_wavelength_ratio(self):
+        """With a chromatic fixed grid the gate keys on the blue end: scaling
+        the gate coordinates by lambda_ref/lambda_min divides the sampling
+        parameter by exactly that ratio (both kernel directions scale
+        together)."""
+        pupil_grid = Grid.pupil(64)
+        focal_grid = Grid.focal(128, 0.25)
+        p_ref = Fraunhofer(
+            grid_in=pupil_grid,
+            grid_out=focal_grid,
+            reference_wavelength_nm=500.0,
+        ).sampling_parameter
+        p_blue = Fraunhofer(
+            grid_in=pupil_grid,
+            grid_out=focal_grid,
+            reference_wavelength_nm=500.0,
+            min_wavelength_nm=250.0,
+            on_undersampled="record",
+        ).sampling_parameter
+        np.testing.assert_allclose(p_blue, p_ref / 2.0, rtol=1e-12)
+
+
+class TestMftSamplingParameter:
+    """The gate formula itself (a top-level export the audit found untested)."""
+
+    def test_conjugate_grid_is_nyquist_critical(self):
+        """The FFT-conjugate focal grid (du = 1/(npix dx), full band) is by
+        construction exactly at the Nyquist boundary: p -> 1 as npix grows
+        (finite-npix offset comes from the half-pixel edge samples)."""
+        for npup in (32, 128):
+            q = 2
+            p = mft_sampling_parameter(
+                Grid.pupil(npup).coords,
+                Grid.focal(npup * q, 1.0 / q).coords,
+            )
+            np.testing.assert_allclose(p, 1.0, atol=2.0 / npup)
+
+    def test_doubling_the_focal_extent_halves_the_ratio(self):
+        x_in = Grid.pupil(64).coords
+        p1 = mft_sampling_parameter(x_in, Grid.focal(64, 0.25).coords)
+        p2 = mft_sampling_parameter(x_in, Grid.focal(128, 0.25).coords)
+        np.testing.assert_allclose(
+            p1 / p2, (128 / 2 - 0.5) / (64 / 2 - 0.5), rtol=1e-12
+        )
+
+    def test_symmetric_in_input_and_output(self):
+        """The kernel is symmetric in its two directions, so swapping the
+        grids leaves the min-of-both-directions ratio unchanged."""
+        a = Grid.pupil(48).coords
+        b = Grid.focal(96, 0.4).coords
+        np.testing.assert_allclose(
+            mft_sampling_parameter(a, b),
+            mft_sampling_parameter(b, a),
+            rtol=1e-12,
+        )
