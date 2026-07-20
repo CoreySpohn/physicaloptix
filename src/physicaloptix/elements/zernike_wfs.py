@@ -11,8 +11,8 @@ rejected at the focal-plane mask.
 Like the multi-scale vortex this is a composite operator (pupil to focal to
 pupil), so it carries ``plane_in``/``plane_out`` (both PUPIL). The forward runs
 on the continuous-FT MFT pair; the low-order reconstruction lives in
-``wavefronts`` (``zwfs_calibrate`` / ``zwfs_reconstruct``), which linearizes
-this forward and inverts it.
+``tiptilt.sensing`` (``zwfs_calibrate`` / ``zwfs_reconstruct``), which
+linearizes this forward and inverts it.
 """
 
 import equinox as eqx

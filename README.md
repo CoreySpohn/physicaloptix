@@ -1,16 +1,16 @@
 # physicaloptix
 
-Physical optics — PSFs and diffraction — for the HWO direct-imaging
+Physical optics -- PSFs and diffraction -- for the HWO direct-imaging
 simulation suite.
 
 ## What physicaloptix is
 
 `physicaloptix` turns an [optixstuff](https://github.com/CoreySpohn/optixstuff)
 hardware description into point-spread functions by wave-optics propagation.
-It is a downstream consumer of optixstuff — parallel to
+It is a downstream consumer of optixstuff -- parallel to
 [coronagraphoto](https://github.com/CoreySpohn/coronagraphoto) (2D image
 simulation) and [jaxEDITH](https://github.com/CoreySpohn/jaxedith)
-(exposure-time and yield calculations) — so optixstuff itself stays free of
+(exposure-time and yield calculations) -- so optixstuff itself stays free of
 diffraction code.
 
 The propagation core is owned: a
@@ -40,9 +40,9 @@ eta = coro.throughput(6.0, 600.0)                      # derived, not declared
 - **Not a hardware model.** The telescope / coronagraph / detector description
   lives in [optixstuff](https://github.com/CoreySpohn/optixstuff); physicaloptix
   consumes it.
-- **Not a PSF interpolator.** That's [yippy](https://github.com/CoreySpohn/yippy)'s
-  job (a sampled YIP table). physicaloptix is its functional sibling — live
-  propagation — and both back the same `AbstractCoronagraph` slot.
+- **Not a PSF interpolator.** That is [yippy](https://github.com/CoreySpohn/yippy)'s
+  job (a sampled YIP table). physicaloptix is its functional sibling -- live
+  propagation -- and both back the same `AbstractCoronagraph` slot.
 - **Not a scene model.** Stars, planets, disks, and zodi live in
   [skyscapes](https://github.com/CoreySpohn/skyscapes).
 
@@ -51,20 +51,20 @@ eta = coro.throughput(6.0, 600.0)                      # derived, not declared
 Built on [JAX](https://github.com/google/jax) and
 [Equinox](https://github.com/patrick-kidger/equinox), `physicaloptix` provides:
 
-- **The owned core** (`physicaloptix.core`) — `Grid` (all-static, half-pixel
+- **The owned core** (`physicaloptix.core`) -- `Grid` (all-static, half-pixel
   offset, continuous-FT weights), `PlaneKind`-tagged `Field` pytrees, and
   `Spectrum` for chromatic fields.
-- **Propagators** (`physicaloptix.transforms`) — the validated `cmft_fwd` /
+- **Propagators** (`physicaloptix.transforms`) -- the validated `cmft_fwd` /
   `cmft_bwd` continuous-FT MFT pair and the plane-aware `Fraunhofer` wrapper,
   with sampling diagnostics evaluated at construction time.
-- **Elements** (`physicaloptix.elements`) — grid-stamped `SampledOptic` for
+- **Elements** (`physicaloptix.elements`) -- grid-stamped `SampledOptic` for
   ingested masks and the `MultiScaleVortex` ladder (hcipy port; reaches the
   cds EAC-1 on-axis null).
-- **The optical path** (`physicaloptix.path`) — `OpticalPath`, named plane-checked
+- **The optical path** (`physicaloptix.path`) -- `OpticalPath`, named plane-checked
   stages folded once, with static taps for free instrumented propagation.
-- **The speckle layer** — `SpeckleProcess` / `AnalyticSpeckleField`, the
+- **The speckle layer** -- `SpeckleProcess` / `AnalyticSpeckleField`, the
   linear speckle generator (E_nom, G) behind optixstuff's `AbstractSpeckleField`.
-- **Interop** (`physicaloptix.interop`) — `PathCoronagraph`, the
+- **Interop** (`physicaloptix.interop`) -- `PathCoronagraph`, the
   optixstuff `AbstractCoronagraph` adapter: cached-Lyot image interface and
   scalar curves (throughput, core area/intensity, occulter transmission)
   derived from a build-time separation sweep.
@@ -99,3 +99,15 @@ coronagraph chain (see `tests/validation/`), and `PathCoronagraph` serves it
 through the optixstuff interface with derived performance curves. The optical
 model is scalar; the chain propagates broadband on a fixed angular grid, and
 the yield-input-package emitter freezes it to tables.
+
+## Verification and validation
+
+The propagation core is verified against closed-form physics in tests that
+run everywhere (the Airy pattern absolutely, the Mawet ideal-null theorem at
+the 1e-11 contrast regime, Talbot and Gaussian-beam laws, gradient
+correctness against finite differences) and validated against the HWO
+Coronagraph Design Survey EAC-1 reference to a 0.2 percent on-axis null
+agreement at 3e-11 contrast. The evidence, tolerances, and how to reproduce
+them are documented on the
+[validation page](https://physicaloptix.readthedocs.io/en/latest/validation.html).
+The deep-contrast path requires float64 (`jax_enable_x64`).

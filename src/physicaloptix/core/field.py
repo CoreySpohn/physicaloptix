@@ -126,14 +126,14 @@ class Field(eqx.Module):
             raise ValueError(f"data shape {shape} does not match grid ({npix}, {npix})")
 
     def intensity(self):
-        """Intensity: |data|^2, weight-summed over wavelength if chromatic."""
+        """Intensity: ``|data|^2``, weight-summed over wavelength if chromatic."""
         abs2 = self.data.real**2 + self.data.imag**2
         if self.spectrum is None:
             return abs2
         return jnp.tensordot(self.spectrum.weights, abs2, axes=1)
 
     def energy(self):
-        """Total power: sum(|data|^2) * weights, per wavelength if chromatic."""
+        """Total power: ``sum(|data|^2) * weights``, per wavelength if chromatic."""
         abs2 = self.data.real**2 + self.data.imag**2
         return jnp.sum(abs2, axis=(-2, -1)) * self.grid.weights
 

@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 type: software
 title: physicaloptix
-abstract: "physicaloptix is an open-source JAX library providing physical-optics PSF and diffraction modeling, built on dLux, for the Habitable Worlds Observatory direct imaging simulation suite."
+abstract: "physicaloptix is an open-source JAX library providing physical-optics PSF and diffraction modeling for the Habitable Worlds Observatory direct imaging simulation suite."
 authors:
   - family-names: Spohn
     given-names: Corey
