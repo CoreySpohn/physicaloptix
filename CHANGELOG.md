@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0](https://github.com/CoreySpohn/physicaloptix/compare/v0.1.0...v1.0.0) (2026-07-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* **interop:** PathCoronagraph builds at a true wavelength and serves the sampling-explicit contract natively -- native-grid table members removed
+
+### Features
+
+* **ifs:** full-array coherent detector scene -- per-lenslet two-axis MFTs, centroid-table accumulation ([76cf0aa](https://github.com/CoreySpohn/physicaloptix/commit/76cf0aae8f09aba5065eca23eb7583bc3e79608f))
+* **interop:** PathCoronagraph builds at a true wavelength and serves the sampling-explicit contract natively -- native-grid table members removed ([de2a025](https://github.com/CoreySpohn/physicaloptix/commit/de2a0257615da133d333d177a88b3c5aa9b89f0c))
+* **speckle:** chromatic wavelength channels -- stacked per-channel e_nom/G, nearest-channel realize, lambda-scaled broadened() ([ceff56a](https://github.com/CoreySpohn/physicaloptix/commit/ceff56a7f720297bb395e2a19f200f58058d0c8a))
+
 ## [0.1.0](https://github.com/CoreySpohn/physicaloptix/compare/v0.0.1...v0.1.0) (2026-07-16)
 
 
