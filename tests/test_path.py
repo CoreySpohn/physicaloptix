@@ -22,25 +22,25 @@ def simple_chain():
         transmission=jnp.asarray(disk), grid=pupil_grid, plane=PlaneKind.PUPIL
     )
     prop = Fraunhofer(grid_in=pupil_grid, grid_out=focal_grid)
-    train = OpticalPath(stages=(Stage("stop", stop), Stage("science", prop)))
+    path = OpticalPath(stages=(Stage("stop", stop), Stage("science", prop)))
     field = Field(
         data=jnp.ones((32, 32), dtype=complex),
         grid=pupil_grid,
         plane=PlaneKind.PUPIL,
     )
-    return train, field, disk
+    return path, field, disk
 
 
 class TestSampledOptic:
     def test_applies_transmission(self, simple_chain):
-        train, field, disk = simple_chain
-        optic = train.stages[0].op
+        path, field, disk = simple_chain
+        optic = path.stages[0].op
         out = optic(field)
         np.testing.assert_array_equal(np.asarray(out.data), disk.astype(complex))
 
     def test_rejects_wrong_plane(self, simple_chain):
-        train, field, _ = simple_chain
-        optic = train.stages[0].op
+        path, field, _ = simple_chain
+        optic = path.stages[0].op
         bad = Field(data=field.data, grid=field.grid, plane=PlaneKind.FOCAL)
         with pytest.raises(ValueError, match="plane"):
             optic(bad)
@@ -62,14 +62,14 @@ class TestSampledOptic:
 
 class TestOpticalPath:
     def test_propagate_returns_field_and_empty_taps(self, simple_chain):
-        train, field, _ = simple_chain
-        out, taps = train.propagate(field)
+        path, field, _ = simple_chain
+        out, taps = path.propagate(field)
         assert out.plane is PlaneKind.FOCAL
         assert taps == {}
 
     def test_taps_capture_named_stages(self, simple_chain):
-        train, field, disk = simple_chain
-        _, taps = train.propagate(field, taps=("stop",))
+        path, field, disk = simple_chain
+        _, taps = path.propagate(field, taps=("stop",))
         assert set(taps) == {"stop"}
         assert taps["stop"].plane is PlaneKind.PUPIL
         np.testing.assert_array_equal(
@@ -77,26 +77,26 @@ class TestOpticalPath:
         )
 
     def test_taps_do_not_change_the_result(self, simple_chain):
-        train, field, _ = simple_chain
-        plain, _ = train.propagate(field)
-        tapped, _ = train.propagate(field, taps=("stop", "science"))
+        path, field, _ = simple_chain
+        plain, _ = path.propagate(field)
+        tapped, _ = path.propagate(field, taps=("stop", "science"))
         np.testing.assert_array_equal(np.asarray(plain.data), np.asarray(tapped.data))
 
     def test_unknown_tap_name_raises(self, simple_chain):
-        train, field, _ = simple_chain
+        path, field, _ = simple_chain
         with pytest.raises(ValueError, match="tap"):
-            train.propagate(field, taps=("nonexistent",))
+            path.propagate(field, taps=("nonexistent",))
 
     def test_inconsistent_chain_rejected_at_construction(self, simple_chain):
         """A focal-plane element after a pupil stage fails at build time."""
-        train, _, _ = simple_chain
+        path, _, _ = simple_chain
         focal_optic = SampledOptic(
             transmission=jnp.ones((64, 64)),
             grid=Grid.focal(64, 0.5),
             plane=PlaneKind.FOCAL,
         )
         with pytest.raises(ValueError, match="plane"):
-            OpticalPath(stages=(train.stages[0], Stage("bad", focal_optic)))
+            OpticalPath(stages=(path.stages[0], Stage("bad", focal_optic)))
 
     def test_multi_output_op_rejected_at_construction(self):
         """A multi-output op (a beamsplitter) cannot be a Stage of the fold."""
@@ -109,15 +109,15 @@ class TestOpticalPath:
             OpticalPath(stages=(Stage("split", _TwoPort(plane=PlaneKind.PUPIL)),))
 
     def test_propagate_is_jit_clean(self, simple_chain):
-        train, field, _ = simple_chain
+        path, field, _ = simple_chain
 
         @eqx.filter_jit
         def run(tr, f):
             out, _ = tr.propagate(f)
             return out.data
 
-        jitted = run(train, field)
-        eager, _ = train.propagate(field)
+        jitted = run(path, field)
+        eager, _ = path.propagate(field)
         np.testing.assert_allclose(
             np.asarray(jitted), np.asarray(eager.data), atol=1e-15
         )

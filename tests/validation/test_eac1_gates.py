@@ -33,7 +33,7 @@ def scale_fit_residual(ours, reference):
 
 @pytest.fixture(scope="session")
 def aavc(eac1_cache):
-    """The full EAC-1 AAVC train and its propagated PSFs, computed once."""
+    """The full EAC-1 AAVC path and its propagated PSFs, computed once."""
     z = eac1_cache
     npup, _, _, _, charge, _, pixscale_lod, dims = z["meta"]
     npup, dims, charge = int(npup), int(dims), int(charge)
@@ -51,7 +51,7 @@ def aavc(eac1_cache):
     vortex = MultiScaleVortex.build(
         charge=charge, npup=npup, cap_num_airy0=npup // 2, band_subtract=True
     )
-    train = OpticalPath(
+    path = OpticalPath(
         stages=(
             Stage("pupil_stop", pupil_optic("pupil_stop")),
             Stage("apodizer", pupil_optic("apodizer")),
@@ -69,7 +69,7 @@ def aavc(eac1_cache):
         return Field(data=pupil * tilt, grid=pupil_grid, plane=PlaneKind.PUPIL)
 
     def image(separation_lod=0.0, taps=()):
-        out, tapped = train.propagate(source(separation_lod), taps=taps)
+        out, tapped = path.propagate(source(separation_lod), taps=taps)
         return np.asarray(out.intensity()), tapped
 
     tele = np.abs(np.asarray(cmft_fwd(pupil, x, jnp.asarray(science_grid.coords)))) ** 2
@@ -80,7 +80,7 @@ def aavc(eac1_cache):
 
     return {
         "z": z,
-        "train": train,
+        "path": path,
         "source": source,
         "tele": tele,
         "psf_on": psf_on,
@@ -115,11 +115,11 @@ class TestMultiScaleNull:
         assert rel < 0.05, f"floor {floor:.3e} vs cds {cds_floor:.3e} (rel {rel:.2%})"
 
 
-class TestTrainMechanics:
+class TestPathMechanics:
     def test_taps_do_not_perturb_the_gate_chain(self, aavc):
         """Taps-on returns bit-identical science data on the real chain."""
-        out_plain, _ = aavc["train"].propagate(aavc["source"]())
-        out_tapped, taps = aavc["train"].propagate(aavc["source"](), taps=("lyot",))
+        out_plain, _ = aavc["path"].propagate(aavc["source"]())
+        out_tapped, taps = aavc["path"].propagate(aavc["source"](), taps=("lyot",))
         np.testing.assert_array_equal(
             np.asarray(out_plain.data), np.asarray(out_tapped.data)
         )

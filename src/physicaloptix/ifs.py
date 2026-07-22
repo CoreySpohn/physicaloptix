@@ -302,7 +302,7 @@ class LensletChain(eqx.Module):
     def tile_fields(self, wavelength_nm, centers_pitch, pupil=None):
         """Windowed local fields at every lenslet, one two-axis MFT each.
 
-        The full-array move: the upstream train ends at a pupil and the MFT
+        The full-array move: the upstream path ends at a pupil and the MFT
         has free output sampling, so each lenslet's local field is one MFT
         from the pupil onto that lenslet's tile -- no global fine focal grid
         is ever materialized, and mutual coherence between tiles is carried
