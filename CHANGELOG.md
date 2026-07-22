@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/CoreySpohn/physicaloptix/compare/v1.0.0...v1.0.1) (2026-07-22)
+
+
+### Bug Fixes
+
+* **vortex:** palindromic Hann window keeps the level-handoff taper point-symmetric ([854201f](https://github.com/CoreySpohn/physicaloptix/commit/854201fb74dfa2691bc1a4ce46ec0699f122c23e))
+
 ## [1.0.0](https://github.com/CoreySpohn/physicaloptix/compare/v0.1.0...v1.0.0) (2026-07-20)
 
 
