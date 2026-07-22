@@ -11,6 +11,13 @@ Tolerances are cross-build roundoff, not physics: transcendental dispatch
 (cos/sqrt/atan2/exp) differs by ulps between library builds, so regenerated
 values match the export to ~1e-15 relative on the basis and ~1e-10
 relative-to-peak through the full chain (measured), not bitwise.
+
+2026-07-22: ``test_e_nom_matches_export`` and ``test_linearize_reproduces_g_columns``
+now fail at the ~1e-3 relative level: the stored export was built by the
+standalone script's OWN copy of the vortex ladder (mission-workspace
+``multiscale_vortex.py``), which still uses the periodic-Hann taper that
+``physicaloptix.elements.vortex`` fixed. Marked ``xfail`` pending that script's
+own fix and a re-export of ``speckle_dense_eac1.npz``.
 """
 
 import jax.numpy as jnp
@@ -21,6 +28,12 @@ from physicaloptix.core import Field, Grid, PlaneKind
 from physicaloptix.elements import ModeBasis, MultiScaleVortex, SampledOptic
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.transforms import Fraunhofer, cmft_fwd
+
+_STALE_EXPORT_XFAIL_REASON = (
+    "speckle_dense_eac1.npz was built with the pre-fix periodic-Hann taper "
+    "(mission-workspace multiscale_vortex.py); pending a re-export after that "
+    "script picks up physicaloptix's 2026-07-22 taper fix."
+)
 
 WL_NM = 1000.0
 KR_LO, KR_HI = 3.0, 25.0
@@ -35,7 +48,12 @@ def dense_export(dense_speckle_export):
 
 @pytest.fixture(scope="session")
 def aavc_speckle_path(eac1_cache):
-    """The EAC-1 AAVC path exactly as the speckle chain used it (cap 512)."""
+    """The EAC-1 AAVC path exactly as the speckle chain used it.
+
+    Matches the 2026-07-22 regeneration: full-band level 0 with the default
+    outer taper (the cap-512 hard truncation of the original export distorted
+    the coherent floor; see the vortex module docstring).
+    """
     z = eac1_cache
     npup = int(z["meta"][0])
     dims, pix_lod = 256, 0.25
@@ -56,7 +74,10 @@ def aavc_speckle_path(eac1_cache):
             Stage(
                 "vortex",
                 MultiScaleVortex.build(
-                    charge=6, npup=npup, cap_num_airy0=512, band_subtract=True
+                    charge=6,
+                    npup=npup,
+                    cap_num_airy0=npup // 2,
+                    band_subtract=True,
                 ),
             ),
             Stage("lyot", pupil_optic("lyot")),
@@ -95,6 +116,7 @@ class TestGExportReproduction:
         np.testing.assert_allclose(kx, dense_export["kx"], rtol=1e-12)
         np.testing.assert_allclose(ky, dense_export["ky"], rtol=1e-12)
 
+    @pytest.mark.xfail(reason=_STALE_EXPORT_XFAIL_REASON, strict=False)
     def test_e_nom_matches_export(self, dense_export, aavc_speckle_path):
         path, field, _, _ = aavc_speckle_path
         out, _ = path.propagate(field)
@@ -123,6 +145,7 @@ class TestGExportReproduction:
             float(tele.max()), float(dense_export["tele_peak"]), rtol=1e-12
         )
 
+    @pytest.mark.xfail(reason=_STALE_EXPORT_XFAIL_REASON, strict=False)
     def test_linearize_reproduces_g_columns(self, dense_export, aavc_speckle_path):
         path, field, pupil_grid, _ = aavc_speckle_path
         amp = jnp.abs(field.data)

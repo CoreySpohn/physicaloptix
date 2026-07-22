@@ -9,13 +9,16 @@ pin the deep-null machinery (level ladder, band subtraction, continuous-FT
 normalization) at the 1e-11..1e-12 contrast level in any environment, with no
 reference cache.
 
-Measured floors (2026-07-20; npup 256, 16x gray-edge supersampling, q=1024,
-0.80 Lyot stop, 3-10 lambda/D annulus, contrast vs the non-coronagraphic focal
-peak): annulus mean 1.2e-12 (charge 2), 2.1e-12 (4), 3.3e-12 (6); peak
-contrast 2.1-3.5e-11; residual Lyot power ~2e-6 of incident; charge-1 control
-4.8e-5 mean. The floor is set by the pupil-edge representation, not the ladder
-(flat in q from 8 to 1024; improves 86x from binary to 16x gray edges), so
-tolerances carry 4-5x margin over the measured values.
+Measured floors (2026-07-22, with the default level-0 outer taper; npup 256,
+16x gray-edge supersampling, q=1024, 0.80 Lyot stop, 3-10 lambda/D annulus,
+contrast vs the non-coronagraphic focal peak): annulus mean 1.7e-13 (charge
+2), 6.2e-13 (4), 2.3e-12 (6); peak contrast 4.5e-12..1.4e-11; residual Lyot
+power ~1e-9 of incident; charge-1 control 4.8e-5 mean. Before the taper
+(2026-07-20 baseline) the same build measured 1.2e-12 / 2.1e-12 / 3.3e-12,
+residual Lyot power ~2e-6: the level-0 Nyquist-rim artifact was most of the
+in-stop residual power. The floor is set by the pupil-edge representation,
+not the ladder (flat in q from 8 to 1024; improves ~600x from binary to 16x
+gray edges), so tolerances carry generous margin over the measured values.
 """
 
 import jax.numpy as jnp
@@ -99,9 +102,9 @@ class TestEvenChargeNull:
         assert mean > 1e-6
 
     def test_floor_is_set_by_the_aperture_edge(self):
-        """A binary-edge pupil floors ~100x shallower than 16x gray edges
-        (measured 1.0e-10 vs 1.2e-12): the null converges with aperture
-        representation, pinning WHERE the residual comes from."""
+        """A binary-edge pupil floors far shallower than 16x gray edges
+        (measured 1.0e-10 vs 1.7e-13, ~600x): the null converges with
+        aperture representation, pinning WHERE the residual comes from."""
         mean_binary, _, _, _ = _lyot_contrast(2, supersample=1)
         mean_gray, _, _, _ = _lyot_contrast(2, supersample=16)
         assert mean_binary / mean_gray > 10.0
@@ -121,7 +124,8 @@ class TestCharge2ClosedForm:
         """Outside the geometric pupil the charge-2 Lyot field is
         -(R/r)^2 e^{2 i theta} (Mawet 2005): the well-conditioned face of the
         theorem, checked away from the pixelized edge. Measured: global scale
-        -1.000038, shape residual 2.4e-3 (edge ringing dominated)."""
+        -0.999997, shape residual 1.75e-4 (was 2.4e-3 before the level-0
+        outer taper; the "edge ringing" was mostly the rim artifact)."""
         out, x = lyot_field
         xx, yy = np.meshgrid(x, x)
         rr = np.hypot(xx, yy)
@@ -137,8 +141,9 @@ class TestCharge2ClosedForm:
     def test_interior_is_dark_to_the_discretization_floor(self, lyot_field):
         """The literal theorem statement (interior field identically zero)
         holds to the aperture-representation floor: mean interior intensity
-        6.5e-6 of the unit incident field at an 8 px edge margin, falling with
-        margin (leakage is edge-concentrated)."""
+        5.5e-8 of the unit incident field at an 8 px edge margin (was 6.5e-6
+        before the level-0 outer taper), falling with margin (leakage is
+        edge-concentrated)."""
         out, x = lyot_field
         xx, yy = np.meshgrid(x, x)
         rr = np.hypot(xx, yy)
