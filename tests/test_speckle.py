@@ -816,3 +816,63 @@ class TestExposureNeff:
         proc = _small_process(knee_hz=self.KNEE)
         neff = proc.exposure_neff(jnp.array([1.0, 10.0, 100.0]))
         assert neff.shape == (_M, 3)
+
+
+class TestRealizedSpectrum:
+    """The realized time series carries the spectral power the spec asks for.
+
+    Every other temporal test reads the kernel through ``autocorrelation``,
+    which is computed from the same line weights the draw uses -- so it cannot
+    catch an error in how those weights become a time series. This is the
+    independent route: draw, evaluate ``eps(t)`` on a uniform grid, and compare
+    the cumulative spectral distribution of its periodogram against the
+    cumulative line weights. It exercises placement, weighting, the phase draw
+    and the evaluation end to end.
+    """
+
+    KNEE = 1e-3
+    N_T = 8192
+    DT = 2.0
+    N_DRAWS = 24
+
+    def _freqs(self):
+        return np.fft.rfftfreq(self.N_T, self.DT)
+
+    def _realized_csdf(self, proc):
+        times = jnp.arange(self.N_T) * self.DT
+        cumulative = []
+        for key in jax.random.split(jax.random.PRNGKey(0), self.N_DRAWS):
+            eps = jax.vmap(proc.draw(key, renormalize=False)._eps)(times)
+            series = np.array(eps)[:, 0]
+            power = np.abs(np.fft.rfft(series - series.mean())) ** 2
+            cumulative.append(np.cumsum(power) / power.sum())
+        return np.mean(cumulative, axis=0)
+
+    def _intended_csdf(self, proc):
+        lines = np.asarray(proc.frequencies_hz())
+        weights = np.asarray(proc.line_weights())[0]
+        order = np.argsort(lines)
+        return np.interp(
+            self._freqs(),
+            lines[order],
+            np.cumsum(weights[order]) / weights.sum(),
+            left=0.0,
+            right=1.0,
+        )
+
+    def test_periodogram_follows_the_specified_spectrum(self):
+        proc = _small_process(knee_hz=self.KNEE)
+        deviation = np.abs(self._realized_csdf(proc) - self._intended_csdf(proc)).max()
+        # Measured 0.048: the floor is the finite record (its resolution is
+        # coarser than the lowest lines) plus spectral leakage, not an error.
+        assert deviation < 0.10
+
+    def test_it_separates_the_density_weighting_from_its_absence(self):
+        """The tolerance above is only meaningful if it FAILS for a wrong
+        synthesis. Weighting lines by the bare PSD ordinate instead of the
+        quadrature element -- the log-grid error that synthesizes S(f)/f --
+        moves this statistic to 0.45, an order of magnitude outside."""
+        correct = _small_process(knee_hz=self.KNEE)
+        ordinate = _small_process(knee_hz=self.KNEE, df_weighted=False)
+        spec = self._intended_csdf(correct)
+        assert np.abs(self._realized_csdf(ordinate) - spec).max() > 0.30

@@ -101,6 +101,21 @@ data and always runs) anchor the angular-spectrum propagator to closed forms:
   spherical) by normalized correlation above $1-10^{-9}$, with a
   swapped-parity control proving a sine/cosine swap would fail. Unit-RMS
   normalization contracts hold at $10^{-12}$.
+- **Mutual orthogonality** (`test_modes.py`): distinct unit-RMS Zernikes
+  have a worst pairwise cross-correlation of $1.5\times10^{-3}$ over the
+  sampled aperture, bounded at $3\times10^{-3}$. The residual is not a
+  property of the basis, which is orthogonal on the continuous disk, but of
+  the aperture edge being pixelated: it falls from $5.9\times10^{-3}$ at 64
+  pixels across to $3.8\times10^{-5}$ at 512, non-monotonically, because
+  which edge pixels fall inside a hard mask jumps around with the grid. That
+  also sets what is achievable -- a quadrature-free binary aperture cannot
+  reach the $10^{-9}$ an analytic quadrature would, so this bound is a
+  sampling statement rather than a weaker claim about the basis. It is
+  calibrated against a mutation: contaminating one mode with a fraction of
+  another and renormalizing raises the statistic to about that fraction, so
+  the bound fails at one percent contamination. Ordering is not this test's
+  concern, since a permutation leaves an orthogonal set orthogonal; the Noll
+  identity above covers it.
 - **Zernike wavefront sensor** (`test_zernike_wfs.py`): the sensor response
   matches the full first-order interferometric model
   $\Delta I = 2P\,(b\,\varphi - K\!\ast\!(P\varphi))$, where $b$ is the
@@ -174,6 +189,35 @@ halo scaling.
   the integral and $\rho$ rings at the $10^{-2}$ level; raising `n_freq`
   reduces this only slowly, so long-baseline temporal work wants an explicit
   trajectory (`TabulatedSpeckleField`) rather than more lines.
+
+- **The realized spectrum** (`test_speckle.py`): the kernel anchor above is
+  computed from the same line weights the draw uses, so it cannot detect an
+  error in how those weights become a time series. The independent check
+  draws a realization, evaluates the coefficients on a uniform grid, and
+  compares the cumulative spectral distribution of the resulting periodogram
+  against the cumulative line weights, covering line placement, weighting,
+  the phase draw and the evaluation together. The realized distribution
+  tracks the specified one to $0.05$, a floor set by the finite record
+  length and spectral leakage. The tolerance is calibrated by mutation
+  rather than by taste: replacing the quadrature element with the bare PSD
+  ordinate moves the statistic to $0.45$, so the test demonstrably fails for
+  the error it exists to exclude.
+
+- **Exposure averaging** (`test_speckle.py`): a detector integrates, and the
+  contrast map is quadratic in the drifting coefficients, so the mean of the
+  realized maps is not the map of the mean coefficients.
+  `SpeckleProcess.exposure_neff` reports how many independent realizations a
+  mode averages over in an exposure, in closed form -- each spectral line's
+  window transform integrates exactly, giving
+  $1/N_\mathrm{eff} = \sum_j w_j \operatorname{sinc}^2(f_j T) / \sum_j w_j$.
+  It is checked against quadrature of the library's own autocorrelation and
+  against a drawn ensemble, and against the exact Lorentzian factor
+  $2(u-1+e^{-u})/u^2$ at $u = T/\tau$, which it matches to a percent out to
+  one decorrelation time and to ten percent at ten. By a hundred it is about
+  twice optimistic: the same finite-line limit as above, seen in the
+  integrated kernel rather than the pointwise one. That number is the exact
+  $N_\mathrm{eff}$ of the synthesis as built, so where the two disagree it is
+  the synthesis that departs from the process it names.
 
 ## Tier B: the design-survey benchmark
 

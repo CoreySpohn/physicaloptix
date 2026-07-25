@@ -90,16 +90,53 @@ class TestZernike:
             rms = np.sqrt((mode**2).sum() / npupil)
             np.testing.assert_allclose(rms, rms_nm, rtol=1e-12)
 
-    def test_modes_are_orthogonal_over_the_aperture(self):
-        """Distinct unit-RMS Zernikes have a small cross-correlation."""
-        grid = Grid.pupil(96)
-        basis = zernike_basis(grid, 6)
+    @staticmethod
+    def _worst_cross_correlation(npix, n_modes=6):
+        grid = Grid.pupil(npix)
+        stack = np.asarray(zernike_basis(grid, n_modes).B)
         npupil = _aperture(grid).sum()
-        stack = np.asarray(basis.B)
-        for i in range(6):
-            for j in range(i + 1, 6):
-                inner = (stack[i] * stack[j]).sum() / npupil
-                assert abs(inner) < 5e-2, f"modes {i},{j}: {inner:.3e}"
+        pairs = [
+            abs((stack[i] * stack[j]).sum() / npupil)
+            for i in range(n_modes)
+            for j in range(i + 1, n_modes)
+        ]
+        return max(pairs)
+
+    def test_modes_are_orthogonal_over_the_aperture(self):
+        """Distinct unit-RMS Zernikes have a small cross-correlation.
+
+        The failure this guards against is CONTAMINATION -- one mode
+        carrying a share of another, as a wrong (n, m) mapping produces.
+        (Reordering is a different failure and is caught by the Noll
+        identity below, since a permutation leaves an orthogonal set
+        orthogonal.)
+
+        The bound is what this grid measures (worst pair 1.5e-3 at npix 96)
+        rather than a round number, because the round number was not
+        catching anything: mutating one mode to carry a fraction of another
+        and renormalizing gives a cross-correlation of about that fraction,
+        so a 5e-2 bound tolerates 5 percent contamination while this one
+        fails at 1 percent.
+        """
+        assert self._worst_cross_correlation(96) < 3e-3
+
+    def test_orthogonality_is_limited_only_by_edge_quantization(self):
+        """Zernikes are orthogonal on the CONTINUOUS disk, so the residual
+        here is the hard aperture edge being pixelated -- a boundary term
+        that shrinks as the aperture is resolved (5.9e-3 at npix 64 to
+        3.8e-5 at 512).
+
+        It shrinks non-monotonically, because which edge pixels fall inside
+        the mask jumps around with the grid, so this pins the endpoints
+        rather than a per-step trend. That mechanism is also why a
+        quadrature-free binary aperture cannot reach the 1e-9 an analytic
+        quadrature would: the tolerance above is a sampling statement about
+        this grid, not a looser claim about the basis.
+        """
+        coarse = self._worst_cross_correlation(64)
+        fine = self._worst_cross_correlation(512)
+        assert fine < coarse / 20.0
+        assert fine < 1e-4
 
 
 class TestNollIdentity:
