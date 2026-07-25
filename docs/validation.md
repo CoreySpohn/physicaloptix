@@ -159,6 +159,22 @@ halo scaling.
   measured excess kurtosis, so the ensemble variance and the closed form are
   pinned against each other rather than one being asserted from the other.
 
+- **The temporal kernel** (`test_speckle.py`): equal-time moments do not
+  constrain how fast the field decorrelates, so the synthesized
+  autocorrelation is anchored separately against a closed form. A `slope=-2`
+  process has a Lorentzian PSD, whose transform is the Ornstein-Uhlenbeck
+  kernel $\exp(-2\pi f_\mathrm{knee}\tau)$; the synthesis reproduces it to
+  about a percent out to one decorrelation time, and an ensemble two-time
+  correlation confirms the drawn fields realize that same kernel. The anchor
+  matters because the spectral lines sit on a log grid, where weighting them
+  by the PSD ordinate alone rather than by the quadrature element
+  $S(f_j)\,\mathrm{d}f_j$ synthesizes $S(f)/f$ and decorrelates two to three
+  times too slowly -- an error invisible to every equal-time gate above.
+  Beyond a few decorrelation times the finite line sum stops approximating
+  the integral and $\rho$ rings at the $10^{-2}$ level; raising `n_freq`
+  reduces this only slowly, so long-baseline temporal work wants an explicit
+  trajectory (`TabulatedSpeckleField`) rather than more lines.
+
 ## Tier B: the design-survey benchmark
 
 The primary external reference is the HWO Coronagraph Design Survey

@@ -414,6 +414,125 @@ class TestPerModePSD:
         assert jnp.allclose(jnp.sqrt(var), rms)
 
 
+class TestTemporalKernel:
+    """The synthesized temporal kernel is the PSD's transform (upgrades #7).
+
+    The spectral synthesis draws lines on a LOG grid, so the coefficient of
+    line j must carry the quadrature element ``S(f_j) df_j``. Weighting by the
+    bare ordinate ``S(f_j)`` instead synthesizes ``S(f) / f``, which
+    decorrelates far too slowly -- the bug these tests pin.
+    """
+
+    # slope=-2 is a Lorentzian PSD, whose transform is the OU kernel
+    # exp(-2 pi knee tau); knee = 1 / (2 pi tau_c) is exactly what
+    # from_decorrelation is asked for, so tau_c is the natural lag unit.
+    KNEE = 1e-3
+    TAU_C = 1.0 / (2.0 * np.pi * KNEE)
+
+    def _lorentzian(self, lags):
+        return np.exp(-2.0 * np.pi * self.KNEE * np.asarray(lags))
+
+    def test_autocorrelation_matches_the_lorentzian(self):
+        """df_weighted=True reproduces exp(-tau / tau_c) to about a percent
+        over the lags the grid is built to span (out to ~1 decorrelation
+        time), which is what makes `from_decorrelation(tau)` mean tau."""
+        proc = _small_process(knee_hz=self.KNEE)
+        lags = jnp.array([0.1, 0.25, 0.5, 1.0]) * self.TAU_C
+        rho = np.asarray(proc.autocorrelation(lags))[0]
+        assert np.allclose(rho, self._lorentzian(lags), atol=0.015)
+
+    def test_bare_psd_weighting_decorrelates_too_slowly(self):
+        """The pre-fix weighting is not a subtly different kernel but a
+        grossly slower one: at one decorrelation time it still reports most
+        of the correlation the Lorentzian has already lost."""
+        legacy = _small_process(knee_hz=self.KNEE, df_weighted=False, decades_below=0.7)
+        rho = float(legacy.autocorrelation(jnp.array([self.TAU_C]))[0, 0])
+        target = float(self._lorentzian([self.TAU_C])[0])
+        assert rho > 1.5 * target  # measured 0.69 vs 0.37
+        fixed = _small_process(knee_hz=self.KNEE)
+        assert (
+            abs(float(fixed.autocorrelation(jnp.array([self.TAU_C]))[0, 0]) - target)
+            < 0.015
+        )
+
+    def test_autocorrelation_predicts_the_drawn_ensemble(self):
+        """The closed-form rho is the kernel the DRAWS actually realize, not
+        an independent formula: an ensemble two-time correlation matches it."""
+        proc = _small_process(m=2, knee_hz=self.KNEE)
+        lags = jnp.array([0.25, 1.0]) * self.TAU_C
+        keys = jax.random.split(jax.random.PRNGKey(0), 4000)
+
+        def two_times(key):
+            field = proc.draw(key)
+            return jnp.stack([field._eps(float(t)) for t in [0.0, *lags.tolist()]])
+
+        eps = jax.vmap(two_times)(keys)  # (N, 1 + n_lags, m)
+        measured = jnp.mean(eps[:, :1] * eps[:, 1:], axis=0) / proc.per_mode_rms**2
+        predicted = proc.autocorrelation(lags)  # (m, n_lags)
+        assert jnp.allclose(measured.T, predicted, atol=0.03)
+
+    def test_equal_time_statistics_are_unchanged(self):
+        """The line weights are normalized to the per-mode rms, so changing
+        them retunes the temporal kernel WITHOUT moving any equal-time
+        quantity -- the moments self-oracle is untouched by this fix."""
+        fixed = _small_process(knee_hz=self.KNEE)
+        legacy = _small_process(knee_hz=self.KNEE, df_weighted=False, decades_below=0.7)
+        for proc in (fixed, legacy):
+            field = proc.draw(jax.random.PRNGKey(0))
+            var = 0.5 * jnp.sum(field.amplitudes**2, axis=1)
+            assert jnp.allclose(jnp.sqrt(var), proc.per_mode_rms)
+        a, b = fixed.moments(), legacy.moments()
+        assert jnp.allclose(a.mean_map, b.mean_map)
+        assert jnp.allclose(a.var_map, b.var_map)
+
+    def test_rho_is_one_at_zero_lag(self):
+        """A normalization check that holds for any weighting or grid."""
+        for proc in (
+            _small_process(knee_hz=self.KNEE),
+            _small_process(knee_hz=jnp.array([1e-2, 1e-4, 1e-3])),
+        ):
+            rho = proc.autocorrelation(0.0)
+            assert rho.shape == (_M,)
+            assert jnp.allclose(rho, 1.0)
+
+    def test_line_weights_carry_the_grid_spacing(self):
+        """df_weighted multiplies the ordinate by trapezoid widths, which on
+        a log grid grow with f -- so the two weightings differ by a factor
+        proportional to f, not by a constant."""
+        proc = _small_process(knee_hz=self.KNEE)
+        legacy = _small_process(knee_hz=self.KNEE, df_weighted=False)
+        f = np.asarray(proc.frequencies_hz())
+        ratio = np.asarray(proc.line_weights()[0]) / np.asarray(
+            legacy.line_weights()[0]
+        )
+        assert proc.line_weights().shape == (_M, proc.n_freq)
+        # The ratio IS df_j: the independently computed trapezoid widths.
+        half = 0.5 * np.diff(f)
+        df = np.concatenate([[half[0]], half[1:] + half[:-1], [half[-1]]])
+        assert np.allclose(ratio, df, rtol=1e-9)
+        # On a log grid those widths are proportional to f in the interior,
+        # so the two weightings differ by a factor that grows across the
+        # band rather than by a constant.
+        interior = slice(1, -1)
+        assert np.allclose(
+            ratio[interior] / f[interior],
+            ratio[len(f) // 2] / f[len(f) // 2],
+            rtol=1e-6,
+        )
+
+    def test_per_mode_grids_get_per_mode_kernels(self):
+        """Each mode's kernel follows its OWN knee on the per-mode grid path."""
+        knees = [1e-2, 1e-4]
+        proc = _small_process(m=2, knee_hz=jnp.array(knees))
+        for k, knee in enumerate(knees):
+            tau_c = 1.0 / (2.0 * np.pi * knee)
+            lags = jnp.array([0.25, 1.0]) * tau_c
+            rho = np.asarray(proc.autocorrelation(lags))[k]
+            assert np.allclose(
+                rho, np.exp(-2.0 * np.pi * knee * np.asarray(lags)), atol=0.02
+            )
+
+
 def _oracle_process(coherent, m=6, dims=8):
     """The Phase-2 self-oracle problem: mixed-rms G from rng(0), 8x8 grid."""
     from physicaloptix import SpeckleProcess
@@ -516,9 +635,15 @@ class TestMoments:
         assert abs(float(jnp.mean(kappa) / jnp.mean(kappa_pred)) - 1.0) < 0.2
 
     def test_renormalization_kurtosis_equal_weights_law(self):
-        """slope=0 makes the PSD flat, whose renormalization kurtosis is the
-        uniform-sphere value -9/(2 (F + 2)) exactly (the quadrature must hit
-        it to well under a percent)."""
+        """Equal line weights give the uniform-sphere renormalization
+        kurtosis -9/(2 (F + 2)) exactly (the quadrature must hit it to well
+        under a percent).
+
+        Equal weights need BOTH a flat PSD (slope=0) and the bare-ordinate
+        weighting: with the default ``df_weighted=True`` the trapezoid widths
+        of a log grid grow with f, so a flat PSD still yields unequal line
+        weights and a different (correct) kurtosis.
+        """
         from physicaloptix import SpeckleProcess
 
         rng = np.random.default_rng(0)
@@ -536,6 +661,7 @@ class TestMoments:
             normalization=1.0,
             slope=0.0,
             n_freq=32,
+            df_weighted=False,
         )
         kappa = flat.renormalization_kurtosis()
         assert kappa.shape == (3,)

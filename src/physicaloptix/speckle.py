@@ -287,6 +287,19 @@ class SpeckleProcess(eqx.Module):
     ``(m,)`` for per-mode timescales (one grid per mode, so the modes drift on
     different timescales); ``per_mode_rms`` is in the same mode units as
     ``G``'s mode coordinate.
+
+    Spectral lines carry the quadrature weight ``S(f_j) df_j`` (trapezoid
+    widths, ``df_weighted=True``), which is what makes the synthesized process
+    approximate the continuous PSD it names: the realized autocorrelation
+    :meth:`autocorrelation` then converges to the PSD's transform, so a
+    ``slope=-2`` (Lorentzian) process decorrelates as
+    ``exp(-2 pi knee tau)`` -- exactly the ``tau`` that
+    :meth:`from_decorrelation` was asked for. Weighting by ``S(f_j)`` alone
+    (``df_weighted=False``, the pre-2026-07-25 behavior, kept so existing
+    ensembles stay reproducible) instead synthesizes ``S(f) / f`` on a log
+    grid, which decorrelates 2-3x too slowly. Equal-time statistics are
+    identical either way: the weights are normalized to the per-mode rms, so
+    only the temporal kernel changes.
     """
 
     e_nom: Array  # complex (y, x): nominal focal field
@@ -302,6 +315,7 @@ class SpeckleProcess(eqx.Module):
     decades_below: float = eqx.field(static=True)
     decades_above: float = eqx.field(static=True)
     per_mode_freq: bool = eqx.field(static=True)
+    df_weighted: bool = eqx.field(static=True)
 
     def __init__(
         self,
@@ -316,8 +330,9 @@ class SpeckleProcess(eqx.Module):
         epoch_jd=J2000_JD,
         coherent=False,
         n_freq=64,
-        decades_below=0.7,
+        decades_below=1.7,
         decades_above=2.3,
+        df_weighted=True,
     ):
         """Build the process parameter object.
 
@@ -338,7 +353,15 @@ class SpeckleProcess(eqx.Module):
             coherent: Drawn fields include the pinning cross term.
             n_freq: Number of spectral-synthesis frequencies.
             decades_below: Frequency-grid extent below the knee (decades).
+                Default 1.7, which puts the lowest line about 50x below the
+                knee so lags out to several decorrelation times do not ring
+                off the end of the grid.
             decades_above: Frequency-grid extent above the knee (decades).
+            df_weighted: Weight each spectral line by ``S(f_j) df_j``
+                (trapezoid quadrature) rather than ``S(f_j)`` alone, so the
+                synthesized temporal kernel is the PSD's transform. Default
+                ``True``; pass ``False`` (with ``decades_below=0.7``) to
+                reproduce ensembles drawn before 2026-07-25.
         """
         self.e_nom = e_nom
         self.G = G
@@ -363,6 +386,7 @@ class SpeckleProcess(eqx.Module):
         self.n_freq = n_freq
         self.decades_below = decades_below
         self.decades_above = decades_above
+        self.df_weighted = df_weighted
 
     def __check_init__(self):
         """Validate that the per-mode parameters match G's mode axis."""
@@ -444,6 +468,68 @@ class SpeckleProcess(eqx.Module):
             slope = self.slope[0]
         return (1.0 + (f / knee) ** 2) ** (slope / 2.0)
 
+    def line_weights(self) -> Array:
+        """Per-line spectral power weights, shape ``(m, f)``.
+
+        The spectral-synthesis coefficient of line ``j`` carries mean power
+        proportional to this weight, so it -- not :meth:`psd` -- is the
+        quantity the draw and the realized autocorrelation are built from.
+        With ``df_weighted=True`` the weight is the trapezoid quadrature
+        element ``S(f_j) df_j`` of ``int S(f) df``; with ``df_weighted=False``
+        it is the bare ``S(f_j)``, which on a log grid is instead a
+        quadrature of ``int S(f) / f df``.
+
+        Returned unnormalized (callers divide by the sum), and always
+        broadcast to the full ``(m, f)`` mode axis.
+        """
+        f = self.frequencies_hz()
+        weights = self.psd(f)
+        if self.df_weighted:
+            half = 0.5 * jnp.diff(f, axis=-1)
+            zero = jnp.zeros_like(half[..., :1])
+            df = jnp.concatenate([half, zero], axis=-1) + jnp.concatenate(
+                [zero, half], axis=-1
+            )
+            weights = weights * df
+        if weights.ndim == 1:
+            weights = jnp.broadcast_to(weights, (self.G.shape[0], self.n_freq))
+        return weights
+
+    def autocorrelation(self, lag_s) -> Array:
+        """Realized modal autocorrelation ``rho(tau)`` of the synthesis.
+
+        The spectral synthesis makes each mode's realized autocorrelation
+        ``rho_k(tau) = sum_j w_kj cos(2 pi f_kj tau) / sum_j w_kj`` for the
+        line weights ``w`` of :meth:`line_weights`. This is the generator's
+        temporal kernel AS BUILT -- the quantity that sets decorrelation
+        times, ADI floors, and any two-time statistic -- so it is worth
+        checking against the continuous transform of the PSD it names rather
+        than assuming they agree.
+
+        For ``slope=-2`` (a Lorentzian PSD) the continuous target is the
+        Ornstein-Uhlenbeck kernel ``exp(-2 pi knee tau)``, which the
+        ``df_weighted=True`` synthesis reproduces over the lags its grid
+        spans.
+
+        Args:
+            lag_s: Lag ``tau`` in seconds; scalar or array, broadcast against
+                the mode axis.
+
+        Returns:
+            ``rho`` with shape ``(m,) + jnp.shape(lag_s)``.
+        """
+        tau = jnp.asarray(lag_s, dtype=float)
+        f = self.frequencies_hz()
+        if f.ndim == 1:
+            f = jnp.broadcast_to(f, (self.G.shape[0], self.n_freq))
+        w = self.line_weights()
+        flat = tau.reshape(-1)  # (t,)
+        phase = 2.0 * jnp.pi * f[:, :, None] * flat[None, None, :]  # (m, f, t)
+        rho = jnp.sum(w[:, :, None] * jnp.cos(phase), axis=1) / jnp.sum(
+            w, axis=1, keepdims=True
+        )
+        return rho.reshape((f.shape[0], *tau.shape))
+
     def draw(self, key, *, renormalize=True) -> AnalyticSpeckleField:
         """Sample one frozen realization of the process.
 
@@ -464,13 +550,13 @@ class SpeckleProcess(eqx.Module):
         """
         m = self.G.shape[0]
         f = self.frequencies_hz()
-        psd = self.psd(f)
-        if psd.ndim == 1:
-            psd = jnp.broadcast_to(psd, (m, self.n_freq))
+        # The line weight S(f_j) df_j, not the bare PSD ordinate, is what the
+        # synthesis coefficients carry; see line_weights.
+        power = self.line_weights()
         rms = self.per_mode_rms[:, None]
         if renormalize:
             k_amp, k_phase = jax.random.split(key)
-            amp = jnp.sqrt(psd) * jax.random.normal(k_amp, (m, self.n_freq))
+            amp = jnp.sqrt(power) * jax.random.normal(k_amp, (m, self.n_freq))
             amp = amp * (rms / jnp.sqrt(0.5 * jnp.sum(amp**2, axis=1, keepdims=True)))
             phases = jax.random.uniform(
                 k_phase, (m, self.n_freq), minval=0.0, maxval=2.0 * jnp.pi
@@ -479,7 +565,7 @@ class SpeckleProcess(eqx.Module):
             # weights sum to 2 over frequency, the amplitude-squared convention
             # that gives ensemble Var[eps_k] = rms_k^2 (matches the correlated
             # spectral draw in the tiptilt family, here for diagonal covariance).
-            weights = 2.0 * psd / jnp.sum(psd, axis=1, keepdims=True)
+            weights = 2.0 * power / jnp.sum(power, axis=1, keepdims=True)
             k_real, k_imag = jax.random.split(key)
             z = (
                 jax.random.normal(k_real, (m, self.n_freq))
@@ -505,15 +591,15 @@ class SpeckleProcess(eqx.Module):
 
         The renormalized draw of mode ``k`` is
         ``eps_k = rms_k sqrt(2) sum_j omega_kj cos(theta_kj)`` with ``omega``
-        the unit-normalized vector of PSD-shaped Gaussian amplitudes, so the
-        per-draw rms constraint makes the marginal sub-Gaussian with excess
-        kurtosis ``kappa_k = -(3/2) E[sum_j omega_kj^4]`` where, for PSD
-        values ``s_j`` (any overall scale),
+        the unit-normalized vector of weight-shaped Gaussian amplitudes, so
+        the per-draw rms constraint makes the marginal sub-Gaussian with
+        excess kurtosis ``kappa_k = -(3/2) E[sum_j omega_kj^4]`` where, for
+        line weights ``s_j`` (:meth:`line_weights`, any overall scale),
 
             E[sum_j omega^4] = 3 int_0^inf t prod_l (1 + 2 s_l t)^{-1/2}
                                  sum_j s_j^2 (1 + 2 s_j t)^{-2} dt,
 
-        evaluated here as a 1D log-grid quadrature. Equal PSD weights recover
+        evaluated here as a 1D log-grid quadrature. Equal weights recover
         the uniform-sphere value ``-9 / (2 (F + 2))`` for ``F`` frequencies.
         The draw's odd moments vanish (the phases are symmetric), so this is
         the only non-Gaussian correction :meth:`moments` needs for a
@@ -524,9 +610,9 @@ class SpeckleProcess(eqx.Module):
 
         Returns:
             Excess kurtosis per mode, shape ``(m,)`` (identical entries when
-            every mode shares one PSD grid).
+            every mode shares one frequency grid).
         """
-        psd = self.psd(self.frequencies_hz())
+        weights = self.line_weights()
 
         def kappa_of(s):
             s = s / jnp.max(s)
@@ -538,9 +624,10 @@ class SpeckleProcess(eqx.Module):
             return -1.5 * 3.0 * jnp.trapezoid(integrand, jnp.log(t))
 
         m = self.G.shape[0]
-        if psd.ndim == 1:
-            return jnp.broadcast_to(kappa_of(psd), (m,))
-        return jax.lax.map(kappa_of, psd)
+        if not self.per_mode_freq:
+            # Every mode shares one grid, so one quadrature serves them all.
+            return jnp.broadcast_to(kappa_of(weights[0]), (m,))
+        return jax.lax.map(kappa_of, weights)
 
     def moments(self, *, mask=None, renormalized=False) -> "SpeckleMoments":
         """Closed-form ensemble moments of the contrast ``realize`` returns.
