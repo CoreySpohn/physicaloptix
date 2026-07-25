@@ -530,6 +530,61 @@ class SpeckleProcess(eqx.Module):
         )
         return rho.reshape((f.shape[0], *tau.shape))
 
+    def exposure_neff(self, exposure_s) -> Array:
+        """Independent realizations a mode averages over in one exposure.
+
+        A detector integrates, so the quantity a frame carries is the
+        exposure-averaged coefficient, not an instantaneous one. Averaging a
+        stationary process over a window of length ``T`` suppresses its
+        variance by the factor
+
+            1 / N_eff = (2 / T^2) int_0^T (T - tau) rho(tau) dtau,
+
+        which for this synthesis' line spectrum is exactly
+        ``sum_j w_kj sinc^2(f_kj T) / sum_j w_kj`` (``sinc(x) =
+        sin(pi x) / (pi x)``) -- no quadrature needed, since each line
+        integrates in closed form.
+
+        Read it as a regime test rather than a correction factor. ``N_eff``
+        near 1 means the exposure is short against the mode's decorrelation
+        time, the field is effectively frozen, and one instantaneous
+        ``realize`` IS the exposure. Large ``N_eff`` means the exposure
+        averages over many independent speckle realizations, so a snapshot
+        overstates the fluctuation by ``sqrt(N_eff)`` and
+        ``realize_average`` (with enough sub-steps to resolve the fastest
+        line) is the honest sampler.
+
+        This is the exact ``N_eff`` of the synthesis AS BUILT, and it inherits
+        the same limit :meth:`autocorrelation` documents: the finite line sum
+        stops decaying past a few decorrelation times, so against the
+        Lorentzian a ``slope=-2`` process names -- exact factor
+        ``2(u - 1 + e^-u) / u^2`` at ``u = T / tau`` -- it agrees to a percent
+        out to about one ``tau``, to ten percent at ten, and is about twice
+        optimistic by a hundred. For exposures that long, generate an explicit
+        trajectory whose kernel is exact at every lag rather than trusting
+        either number.
+
+        Args:
+            exposure_s: Exposure length in seconds; scalar or array,
+                broadcast against the mode axis.
+
+        Returns:
+            ``N_eff`` with shape ``(m,) + jnp.shape(exposure_s)``.
+        """
+        t_exp = jnp.asarray(exposure_s, dtype=float)
+        f = self.frequencies_hz()
+        if f.ndim == 1:
+            f = jnp.broadcast_to(f, (self.G.shape[0], self.n_freq))
+        w = self.line_weights()
+        flat = t_exp.reshape(-1)  # (t,)
+        # jnp.sinc is the normalized sin(pi x) / (pi x), which is exactly the
+        # window transform here, and is 1 at x = 0 without a special case.
+        window = jnp.sinc(f[:, :, None] * flat[None, None, :]) ** 2  # (m, f, t)
+        reduction = jnp.sum(w[:, :, None] * window, axis=1) / jnp.sum(
+            w, axis=1, keepdims=True
+        )
+        return (1.0 / reduction).reshape((f.shape[0], *t_exp.shape))
+
     def draw(self, key, *, renormalize=True) -> AnalyticSpeckleField:
         """Sample one frozen realization of the process.
 

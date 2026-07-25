@@ -715,3 +715,104 @@ class TestMoments:
         mom = proc.moments()
         assert mom.annulus_mean is None
         assert mom.annulus_var is None
+
+
+class TestExposureNeff:
+    """Closed-form exposure averaging: how many independent realizations a
+    frame integrates over (upgrades #6).
+
+    The window transform of each spectral line is exact, so this needs no
+    quadrature and no ensemble -- but it must agree with both, which is what
+    these pin.
+    """
+
+    KNEE = 1e-3
+    TAU_C = 1.0 / (2.0 * np.pi * KNEE)
+
+    def test_a_short_exposure_freezes_the_field(self):
+        """Far inside the decorrelation time an exposure averages over ONE
+        realization, so an instantaneous realize IS the exposure."""
+        proc = _small_process(knee_hz=self.KNEE)
+        neff = np.asarray(proc.exposure_neff(1e-3 * self.TAU_C))
+        np.testing.assert_allclose(neff, 1.0, rtol=1e-3)
+
+    def test_zero_exposure_is_exactly_one(self):
+        proc = _small_process(knee_hz=self.KNEE)
+        np.testing.assert_allclose(np.asarray(proc.exposure_neff(0.0)), 1.0, rtol=1e-12)
+
+    def test_grows_with_exposure(self):
+        proc = _small_process(knee_hz=self.KNEE)
+        exposures = jnp.array([1.0, 10.0, 100.0]) * self.TAU_C
+        neff = np.asarray(proc.exposure_neff(exposures))[0]
+        assert np.all(np.diff(neff) > 0.0)
+        assert neff[-1] > 5.0
+
+    def test_matches_quadrature_of_its_own_autocorrelation(self):
+        """The closed form is the exact integral of the SAME kernel
+        ``autocorrelation`` reports, so the two cannot drift apart."""
+        proc = _small_process(knee_hz=self.KNEE)
+        for exposure in (0.5 * self.TAU_C, 5.0 * self.TAU_C, 50.0 * self.TAU_C):
+            lags = np.linspace(0.0, exposure, 20001)
+            rho = np.asarray(proc.autocorrelation(jnp.asarray(lags)))[0]
+            reduction = 2.0 * np.trapezoid((exposure - lags) * rho, lags) / exposure**2
+            closed = 1.0 / float(np.asarray(proc.exposure_neff(exposure))[0])
+            assert closed == pytest.approx(reduction, rel=2e-4)
+
+    def test_matches_the_drawn_ensemble(self):
+        """The predicted variance suppression is what sub-stepped averaging
+        of actual draws delivers."""
+        proc = _small_process(knee_hz=self.KNEE)
+        exposure = 20.0 * self.TAU_C
+        times = jnp.asarray(np.linspace(0.0, exposure, 400))
+
+        keys = jax.random.split(jax.random.PRNGKey(3), 3000)
+        eps = jax.vmap(lambda k: jax.vmap(proc.draw(k, renormalize=False)._eps)(times))(
+            keys
+        )  # (n, t, m)
+        measured = np.asarray(eps.mean(axis=1).var(axis=0) / eps[:, 0, :].var(axis=0))
+        predicted = 1.0 / np.asarray(proc.exposure_neff(exposure))
+        np.testing.assert_allclose(measured, predicted, rtol=0.12)
+
+    def test_per_mode_timescales_give_per_mode_neff(self):
+        """A fast mode averages over many realizations in the same exposure a
+        slow mode barely moves during."""
+        proc = _small_process(knee_hz=jnp.array([1e-2, 1e-4, 1e-3]))
+        neff = np.asarray(proc.exposure_neff(500.0))
+        assert neff[0] > neff[2] > neff[1]
+        assert neff[0] > 10.0  # tau 16 s: the exposure spans ~31 of them
+        assert neff[1] < 1.2  # tau 1592 s: barely moves, still near-frozen
+
+    def test_agrees_with_the_exact_ou_form_where_the_kernel_is_faithful(self):
+        """slope=-2 names a Lorentzian PSD, whose exact averaging factor is
+        ``2(u - 1 + e^-u) / u^2`` at ``u = T / tau``. The synthesis reproduces
+        it over the lags its kernel is faithful over -- the same window the
+        autocorrelation tests pin."""
+        proc = _small_process(knee_hz=self.KNEE)
+        for fraction in (0.1, 0.31, 1.0):
+            u = fraction
+            exact = u**2 / (2.0 * (u - 1.0 + np.exp(-u)))
+            got = float(np.asarray(proc.exposure_neff(fraction * self.TAU_C))[0])
+            assert got == pytest.approx(exact, rel=0.01)
+
+    def test_long_exposures_inherit_the_finite_line_artifact(self):
+        """A KNOWN LIMIT, pinned rather than hidden. The line sum's kernel
+        stops decaying past a few decorrelation times, so its integrated
+        variance reduction drifts from the Lorentzian it names: still within
+        10 percent at 10 tau, but 2x optimistic by 100 tau. This number is the
+        exact N_eff OF THIS SYNTHESIS; where the two disagree it is the
+        synthesis, not the formula, that departs from the intended process, and
+        long-exposure work wants an exact trajectory instead."""
+        proc = _small_process(knee_hz=self.KNEE)
+
+        def exact(u):
+            return u**2 / (2.0 * (u - 1.0 + np.exp(-u)))
+
+        at_ten = float(np.asarray(proc.exposure_neff(10.0 * self.TAU_C))[0])
+        at_hundred = float(np.asarray(proc.exposure_neff(100.0 * self.TAU_C))[0])
+        assert at_ten == pytest.approx(exact(10.0), rel=0.10)
+        assert at_hundred > 2.0 * exact(100.0)
+
+    def test_broadcasts_over_an_exposure_array(self):
+        proc = _small_process(knee_hz=self.KNEE)
+        neff = proc.exposure_neff(jnp.array([1.0, 10.0, 100.0]))
+        assert neff.shape == (_M, 3)
