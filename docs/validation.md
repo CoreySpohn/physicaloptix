@@ -149,6 +149,16 @@ Monte-Carlo ensemble of speckle-generator draws; `test_speckle.py` pins the
 spectral-synthesis variance identity exactly and the $1/\lambda^2$ chromatic
 halo scaling.
 
+- **The generator self-oracle** (`test_speckle.py`): the speckle process
+  computes its own closed-form ensemble moments (the improper, non-circular
+  complex-Gaussian mean and variance of the contrast field, including the
+  speckle-pinning cross term). A $2\times10^4$-draw ensemble of the
+  Gaussian-spectrum draw matches those moments per pixel to within five times
+  the estimators' standard errors (worst-case measured $z\approx2.7$), and the
+  per-draw-renormalized draw is shown to be sub-Gaussian by exactly its
+  measured excess kurtosis, so the ensemble variance and the closed form are
+  pinned against each other rather than one being asserted from the other.
+
 ## Tier B: the design-survey benchmark
 
 The primary external reference is the HWO Coronagraph Design Survey
@@ -185,6 +195,12 @@ when it is absent**, so run them before trusting a propagation-core change.
   (`test_yip_cds_crosscheck.py`). This cross-check has caught real recipe
   bugs (a missing chromatic amplitude factor; a wavelength-sampling range),
   which is the point of keeping it.
+
+The same dense-basis EAC-1 sensitivity export also drives an analytic-oracle
+harness that attributes the closed-form residual-speckle variance model's error
+to its circularize, Gaussianize, and annulus-average collapses on the real
+Jacobian (anchored by the generator self-oracle above); it is an exploratory
+attribution recorded in the project analysis notes, not a pass/fail gate.
 
 ## Numerical requirements
 

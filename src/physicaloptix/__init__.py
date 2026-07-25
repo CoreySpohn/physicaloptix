@@ -59,6 +59,7 @@ from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.sources import broadcast_to_spectrum, point_source
 from physicaloptix.speckle import (
     AnalyticSpeckleField,
+    SpeckleMoments,
     SpeckleProcess,
     lambda_scaled_channels,
 )
@@ -86,6 +87,7 @@ __all__ = [
     "PhaseScreen",
     "PlaneKind",
     "SampledOptic",
+    "SpeckleMoments",
     "SpeckleProcess",
     "Spectrum",
     "SplitterPort",

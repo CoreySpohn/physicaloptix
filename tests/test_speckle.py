@@ -4,6 +4,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optixstuff as ox
+import pytest
 
 from physicaloptix import AnalyticSpeckleField
 from physicaloptix.speckle import lambda_scaled_channels
@@ -230,7 +231,9 @@ class TestSpeckleProcess:
             normalization=proc.normalization,
         )
         tau_s = 10.0 * 3600.0
-        assert jnp.isclose(proc2.knee_hz, 1.0 / (2.0 * jnp.pi * tau_s))
+        # knee_hz broadcasts to (m,) now (per-mode timescales are expressible).
+        assert proc2.knee_hz.shape == (_M,)
+        assert jnp.allclose(proc2.knee_hz, 1.0 / (2.0 * jnp.pi * tau_s))
         assert jnp.allclose(proc2.per_mode_rms, 0.3 / jnp.sqrt(_M))
 
     def test_mode_count_mismatch_raises(self):
@@ -336,3 +339,253 @@ class TestLambdaScaledChannels:
                 np.asarray(g) * (500.0 / wl),
                 rtol=1e-15,
             )
+
+
+def _small_process(m=_M, dims=_DIMS, **kwargs):
+    """A reproducible small SpeckleProcess; kwargs override the defaults."""
+    from physicaloptix import SpeckleProcess
+
+    k1, k2, k3, k4 = jax.random.split(jax.random.PRNGKey(0), 4)
+    e_nom = jax.random.normal(k1, (dims, dims)) + 1j * jax.random.normal(
+        k2, (dims, dims)
+    )
+    g = jax.random.normal(k3, (m, dims, dims)) + 1j * jax.random.normal(
+        k4, (m, dims, dims)
+    )
+    defaults = dict(per_mode_rms=0.1, knee_hz=1e-4, normalization=10.0)
+    defaults.update(kwargs)
+    return SpeckleProcess(e_nom, g, **defaults)
+
+
+class TestPerModePSD:
+    """Phase 1: per-mode temporal PSDs (knee_hz / slope broadcast to (m,))."""
+
+    def test_scalar_knee_equals_equal_array_knees(self):
+        """A scalar knee and an (m,) array of that same knee are the SAME
+        process: one shared 1D grid and a bit-identical draw for one key."""
+        scalar = _small_process(knee_hz=1e-4)
+        array = _small_process(knee_hz=jnp.full(_M, 1e-4))
+        assert scalar.per_mode_freq is False
+        assert array.per_mode_freq is False
+        assert scalar.frequencies_hz().shape == (scalar.n_freq,)
+        assert jnp.array_equal(scalar.frequencies_hz(), array.frequencies_hz())
+        a = scalar.draw(jax.random.PRNGKey(0))
+        b = array.draw(jax.random.PRNGKey(0))
+        assert jnp.array_equal(a.amplitudes, b.amplitudes)
+        assert jnp.array_equal(a.phases, b.phases)
+        assert jnp.array_equal(a.frequencies_hz, b.frequencies_hz)
+
+    def test_distinct_knees_give_per_mode_grids(self):
+        """Distinct per-mode knees -> an (m, f) grid, one straddling each knee."""
+        knees = [1e-2, 1e-4, 1e-3]
+        proc = _small_process(knee_hz=jnp.array(knees))
+        assert proc.per_mode_freq is True
+        f = proc.frequencies_hz()
+        assert f.shape == (_M, proc.n_freq)
+        for k, knee in enumerate(knees):
+            assert float(f[k].min()) < knee < float(f[k].max())
+
+    def test_fast_knee_decorrelates_before_slow_knee(self):
+        """The fast-knee mode loses correlation at a lag where the slow-knee
+        mode is still correlated -- each mode drifts on its own timescale."""
+        knee_fast, knee_slow = 1e-2, 1e-4
+        proc = _small_process(m=2, knee_hz=jnp.array([knee_fast, knee_slow]))
+        # 1/(2 pi knee_fast) = 16 s << lag << 1/(2 pi knee_slow) = 1592 s.
+        lag = 200.0
+        keys = jax.random.split(jax.random.PRNGKey(0), 4000)
+
+        def two_times(key):
+            field = proc.draw(key)
+            return field._eps(0.0), field._eps(lag)
+
+        e0, elag = jax.vmap(two_times)(keys)  # (N, 2)
+        autocorr = jnp.mean(e0 * elag, axis=0) / proc.per_mode_rms**2
+        assert abs(float(autocorr[0])) < 0.4  # fast: decorrelated (measured -0.18)
+        assert float(autocorr[1]) > 0.85  # slow: still correlated (measured 0.98)
+        assert float(autocorr[1]) > float(autocorr[0])
+
+    def test_per_mode_rms_exact_with_distinct_knees(self):
+        """renormalize=True keeps each mode's per-draw rms exact on the
+        per-mode grid path (Var[eps_k] = 0.5 sum_j a_kj^2 = rms_k^2)."""
+        rms = jnp.array([0.05, 0.1, 0.2])
+        proc = _small_process(knee_hz=jnp.array([1e-2, 1e-4, 1e-3]), per_mode_rms=rms)
+        field = proc.draw(jax.random.PRNGKey(0))
+        var = 0.5 * jnp.sum(field.amplitudes**2, axis=1)
+        assert jnp.allclose(jnp.sqrt(var), rms)
+
+
+def _oracle_process(coherent, m=6, dims=8):
+    """The Phase-2 self-oracle problem: mixed-rms G from rng(0), 8x8 grid."""
+    from physicaloptix import SpeckleProcess
+
+    rng = np.random.default_rng(0)
+    e_nom = jnp.asarray(
+        rng.standard_normal((dims, dims)) + 1j * rng.standard_normal((dims, dims))
+    )
+    g = jnp.asarray(
+        rng.standard_normal((m, dims, dims)) + 1j * rng.standard_normal((m, dims, dims))
+    )
+    rms = jnp.asarray(np.linspace(0.02, 0.08, m))
+    return SpeckleProcess(
+        e_nom, g, per_mode_rms=rms, knee_hz=1e-3, normalization=5.0, coherent=coherent
+    )
+
+
+class TestMoments:
+    """Phase 2: moments() self-oracle and renormalize=False Gaussian draws.
+
+    Statistical gate: for N iid draws the per-pixel mean estimator has standard
+    error sqrt(Var/N) and the variance estimator sqrt((m4 - (N-3)/(N-1) Var^2)/N)
+    (both measured from the ensemble, so the gate self-calibrates). We assert at
+    5x the standard error; at N = 20000 the measured worst-case z-scores are ~2.7.
+    """
+
+    @pytest.mark.parametrize("coherent", [False, True])
+    def test_moments_ensemble_self_oracle(self, coherent):
+        """renormalize=False ensemble mean/variance == the closed-form
+        improper-Gaussian moments (exact for Gaussian modal coefficients)."""
+        proc = _oracle_process(coherent)
+        mom = proc.moments()
+        n = 20000
+        keys = jax.random.split(jax.random.PRNGKey(0), n)
+
+        @jax.jit
+        def deltas_of(keys):
+            return jax.vmap(
+                lambda k: proc.draw(k, renormalize=False).realize(
+                    wavelength_nm=1000.0, time_s=0.0
+                )
+            )(keys)
+
+        deltas = deltas_of(keys)  # (n, 8, 8)
+        mean_meas = deltas.mean(0)
+        var_meas = deltas.var(0)
+        m4 = jnp.mean((deltas - mean_meas) ** 4, axis=0)
+        se_mean = jnp.sqrt(var_meas / n)
+        se_var = jnp.sqrt((m4 - (n - 3) / (n - 1) * var_meas**2) / n)
+        assert jnp.all(jnp.abs(mean_meas - mom.mean_map) < 5.0 * se_mean)
+        assert jnp.all(jnp.abs(var_meas - mom.var_map) < 5.0 * se_var)
+
+    def test_renormalize_true_kurtosis_deficit_closes(self):
+        """renormalize=True is sub-Gaussian: the ensemble speckle-speckle
+        variance falls short of the Gaussian moments() by the measured per-mode
+        excess kurtosis, and the kappa-corrected form closes the gap.
+
+        coherent=False isolates the speckle-speckle term (the heterodyne term
+        needs only second moments and takes no correction). The measured kappa
+        matches the participation-ratio scaling -3/(2 N_eff) with N_eff from the
+        realized amplitudes.
+        """
+        proc = _oracle_process(coherent=False)
+        mom = proc.moments()  # coherent=False -> (Gamma^2 + |P|^2) / norm^2
+        n = 20000
+        keys = jax.random.split(jax.random.PRNGKey(0), n)
+
+        @jax.jit
+        def ensemble(keys):
+            def one(key):
+                field = proc.draw(key, renormalize=True)
+                delta = field.realize(wavelength_nm=1000.0, time_s=0.0)
+                return delta, field._eps(0.0), field.amplitudes
+
+            return jax.vmap(one)(keys)
+
+        deltas, eps, amps = ensemble(keys)  # (n, 8, 8), (n, m), (n, m, f)
+        var_meas = deltas.var(0)
+
+        ek = eps - eps.mean(0)
+        kappa = jnp.mean(ek**4, axis=0) / jnp.mean(ek**2, axis=0) ** 2 - 3.0
+        assert jnp.all(kappa < 0)  # sub-Gaussian
+
+        rms2 = proc.per_mode_rms**2
+        correction = (
+            jnp.einsum("k,kyx->yx", kappa * rms2**2, jnp.abs(proc.G) ** 4)
+            / proc.normalization**2
+        )
+        corrected = mom.var_map + correction
+        # the deficit is real: the Gaussian form overpredicts on average
+        assert float(var_meas.mean()) < float(mom.var_map.mean())
+        m4 = jnp.mean((deltas - deltas.mean(0)) ** 4, axis=0)
+        se_var = jnp.sqrt((m4 - (n - 3) / (n - 1) * var_meas**2) / n)
+        assert jnp.all(jnp.abs(var_meas - corrected) < 6.0 * se_var)
+
+        # participation-ratio cross-check: N_eff from the realized amplitudes
+        a2 = amps**2
+        n_eff = jnp.mean(jnp.sum(a2, axis=2) ** 2 / jnp.sum(a2**2, axis=2), axis=0)
+        kappa_pred = -1.5 / n_eff
+        assert abs(float(jnp.mean(kappa) / jnp.mean(kappa_pred)) - 1.0) < 0.2
+
+    def test_renormalization_kurtosis_equal_weights_law(self):
+        """slope=0 makes the PSD flat, whose renormalization kurtosis is the
+        uniform-sphere value -9/(2 (F + 2)) exactly (the quadrature must hit
+        it to well under a percent)."""
+        from physicaloptix import SpeckleProcess
+
+        rng = np.random.default_rng(0)
+        e_nom = jnp.asarray(
+            rng.standard_normal((4, 4)) + 1j * rng.standard_normal((4, 4))
+        )
+        g = jnp.asarray(
+            rng.standard_normal((3, 4, 4)) + 1j * rng.standard_normal((3, 4, 4))
+        )
+        flat = SpeckleProcess(
+            e_nom,
+            g,
+            per_mode_rms=0.1,
+            knee_hz=1e-3,
+            normalization=1.0,
+            slope=0.0,
+            n_freq=32,
+        )
+        kappa = flat.renormalization_kurtosis()
+        assert kappa.shape == (3,)
+        assert jnp.allclose(kappa, -9.0 / (2.0 * (32 + 2)), rtol=1e-3)
+
+    def test_renormalization_kurtosis_matches_ensemble(self):
+        """The closed-form kappa matches the measured renormalize=True modal
+        kurtosis, and moments(renormalized=True) closes the variance gap the
+        Gaussian form leaves."""
+        proc = _oracle_process(coherent=False)
+        kappa_closed = proc.renormalization_kurtosis()
+        n = 20000
+        keys = jax.random.split(jax.random.PRNGKey(0), n)
+
+        @jax.jit
+        def ensemble(keys):
+            def one(key):
+                field = proc.draw(key, renormalize=True)
+                delta = field.realize(wavelength_nm=1000.0, time_s=0.0)
+                return delta, field._eps(0.0)
+
+            return jax.vmap(one)(keys)
+
+        deltas, eps = ensemble(keys)
+        ek = eps - eps.mean(0)
+        kappa_meas = jnp.mean(ek**4, axis=0) / jnp.mean(ek**2, axis=0) ** 2 - 3.0
+        se_mean = float(np.sqrt(24.0 / (n * eps.shape[1])))
+        assert abs(float(kappa_meas.mean() - kappa_closed.mean())) < 5.0 * se_mean
+
+        # the closed-form correction closes the per-pixel variance at the same
+        # self-calibrated 6 se gate the measured-kappa deficit test uses
+        var_meas = deltas.var(0)
+        m4 = jnp.mean((deltas - deltas.mean(0)) ** 4, axis=0)
+        se_var = jnp.sqrt((m4 - (n - 3) / (n - 1) * var_meas**2) / n)
+        corrected = proc.moments(renormalized=True).var_map
+        assert float(var_meas.mean()) < float(proc.moments().var_map.mean())
+        assert jnp.all(jnp.abs(var_meas - corrected) < 6.0 * se_var)
+
+    def test_moments_annulus_reductions(self):
+        """A mask yields the mask-averaged mean and variance."""
+        proc = _oracle_process(coherent=True)
+        mask = np.zeros((8, 8), dtype=bool)
+        mask[2:6, 2:6] = True
+        mom = proc.moments(mask=jnp.asarray(mask))
+        assert mom.annulus_mean is not None
+        assert jnp.isclose(mom.annulus_mean, mom.mean_map[mask].mean())
+        assert jnp.isclose(mom.annulus_var, mom.var_map[mask].mean())
+
+    def test_moments_none_mask_leaves_annulus_none(self):
+        proc = _oracle_process(coherent=False)
+        mom = proc.moments()
+        assert mom.annulus_mean is None
+        assert mom.annulus_var is None

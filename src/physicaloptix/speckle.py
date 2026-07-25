@@ -124,7 +124,7 @@ class AnalyticSpeckleField(AbstractSpeckleField):
     e_nom: Array  # complex (y, x) or (w, y, x): nominal focal field
     G: Array  # complex (m, y, x) or (w, m, y, x): d(E_focal)/d(mode)
     amplitudes: Array  # float (m, f): per-mode spectral amplitudes a_kj
-    frequencies_hz: Array  # float (f,): temporal frequencies f_j
+    frequencies_hz: Array  # float (f,) shared or (m, f) per-mode: frequencies f_j
     phases: Array  # float (m, f): per-mode random phases phi_kj
     normalization: Array
     pixel_scale_lod: float
@@ -155,7 +155,9 @@ class AnalyticSpeckleField(AbstractSpeckleField):
                 ``(m, y, x)`` -- or ``(w, m, y, x)`` with
                 ``wavelengths_nm`` set.
             amplitudes: Per-mode spectral amplitudes ``a_kj``, shape ``(m, f)``.
-            frequencies_hz: Temporal frequencies ``f_j`` in Hz, shape ``(f,)``.
+            frequencies_hz: Temporal frequencies ``f_j`` in Hz, shape ``(f,)``
+                (shared across modes) or ``(m, f)`` (per-mode grids, which
+                ``_eps`` broadcasts against the ``(m, f)`` phases unchanged).
             phases: Per-mode random phases ``phi_kj``, shape ``(m, f)``.
             normalization: Intensity that maps to unit contrast (the telescope
                 PSF peak the focal field is referenced to); a scalar, or one
@@ -243,6 +245,26 @@ class AnalyticSpeckleField(AbstractSpeckleField):
         )
 
 
+class SpeckleMoments(eqx.Module):
+    """Closed-form ensemble moments of a :class:`SpeckleProcess` contrast field.
+
+    The frozen output of :meth:`SpeckleProcess.moments`: the per-pixel mean and
+    variance maps of the contrast delta (in contrast units), the raw kernels
+    they are built from (``Gamma``, the complex pseudo-covariance ``P``, and
+    the pinning-quadrature variance ``Var(X)``, in the field's intensity
+    units), and -- when a dark-zone mask is supplied -- the mask-averaged mean
+    and variance.
+    """
+
+    mean_map: Array  # E[delta] per pixel (contrast units)
+    var_map: Array  # Var[delta] per pixel (contrast units^2)
+    gamma_map: Array  # Gamma = sum_k rms_k^2 |g_k|^2 (real, >= 0)
+    p_map: Array  # P = sum_k rms_k^2 g_k^2 (complex pseudo-covariance)
+    var_x_map: Array  # Var(X), the pinning-quadrature variance
+    annulus_mean: Array | None = None  # mask-averaged E[delta]
+    annulus_var: Array | None = None  # mask-averaged Var[delta]
+
+
 class SpeckleProcess(eqx.Module):
     """One parameter set for the linear speckle process; views derive from it.
 
@@ -260,15 +282,18 @@ class SpeckleProcess(eqx.Module):
     budget is honored draw by draw rather than only in expectation.
 
     The PSD is the SCoOB-style knee form ``(1 + (f / knee)^2)^(slope / 2)``,
-    evaluated on a fixed log-spaced frequency grid straddling the knee.
-    ``per_mode_rms`` is in the same mode units as ``G``'s mode coordinate.
+    evaluated on a log-spaced frequency grid straddling the knee. ``knee_hz``
+    and ``slope`` are scalars shared by every mode (one shared grid) or
+    ``(m,)`` for per-mode timescales (one grid per mode, so the modes drift on
+    different timescales); ``per_mode_rms`` is in the same mode units as
+    ``G``'s mode coordinate.
     """
 
     e_nom: Array  # complex (y, x): nominal focal field
     G: Array  # complex (m, y, x): d(E_focal)/d(mode)
     per_mode_rms: Array  # float (m,): rms drift per mode
-    knee_hz: float
-    slope: float
+    knee_hz: Array  # float (m,): per-mode temporal PSD knee
+    slope: Array  # float (m,): per-mode high-frequency PSD slope
     normalization: float
     pixel_scale_lod: float
     epoch_jd: float
@@ -276,6 +301,7 @@ class SpeckleProcess(eqx.Module):
     n_freq: int = eqx.field(static=True)
     decades_below: float = eqx.field(static=True)
     decades_above: float = eqx.field(static=True)
+    per_mode_freq: bool = eqx.field(static=True)
 
     def __init__(
         self,
@@ -301,9 +327,12 @@ class SpeckleProcess(eqx.Module):
             per_mode_rms: Per-mode rms drift, scalar (broadcast to every
                 mode) or shape ``(m,)``.
             knee_hz: Temporal PSD knee frequency in Hz
-                (``1 / (2 pi tau)`` for a decorrelation time ``tau``).
+                (``1 / (2 pi tau)`` for a decorrelation time ``tau``);
+                scalar (shared by every mode) or shape ``(m,)`` for
+                per-mode timescales.
             normalization: Intensity that maps to unit contrast.
-            slope: High-frequency PSD power-law slope. Default -2.
+            slope: High-frequency PSD power-law slope. Default -2; scalar
+                or shape ``(m,)`` for per-mode slopes.
             pixel_scale_lod: Native pixel scale in lambda/D per pixel.
             epoch_jd: Julian Date mapping to ``time_s = 0``. Default J2000.
             coherent: Drawn fields include the pinning cross term.
@@ -313,11 +342,20 @@ class SpeckleProcess(eqx.Module):
         """
         self.e_nom = e_nom
         self.G = G
+        m = G.shape[0]
         self.per_mode_rms = jnp.broadcast_to(
-            jnp.asarray(per_mode_rms, dtype=float), (G.shape[0],)
+            jnp.asarray(per_mode_rms, dtype=float), (m,)
         )
-        self.knee_hz = knee_hz
-        self.slope = slope
+        self.knee_hz = jnp.broadcast_to(jnp.asarray(knee_hz, dtype=float), (m,))
+        self.slope = jnp.broadcast_to(jnp.asarray(slope, dtype=float), (m,))
+        # Per-mode frequency grids/PSDs are only needed when the modes drift
+        # on different timescales or with different slopes; when they agree
+        # (the scalar case) keep the single shared 1D grid, so a scalar-knee
+        # process stays bit-identical to the pre-per-mode behavior.
+        self.per_mode_freq = not (
+            bool(jnp.all(self.knee_hz == self.knee_hz[0]))
+            and bool(jnp.all(self.slope == self.slope[0]))
+        )
         self.normalization = normalization
         self.pixel_scale_lod = pixel_scale_lod
         self.epoch_jd = epoch_jd
@@ -327,12 +365,18 @@ class SpeckleProcess(eqx.Module):
         self.decades_above = decades_above
 
     def __check_init__(self):
-        """Validate that per_mode_rms matches G's mode axis."""
-        if self.per_mode_rms.shape != (self.G.shape[0],):
-            raise ValueError(
-                f"per_mode_rms has shape {self.per_mode_rms.shape}; expected "
-                f"({self.G.shape[0]},) to match G's mode axis"
-            )
+        """Validate that the per-mode parameters match G's mode axis."""
+        m = (self.G.shape[0],)
+        for name, value in (
+            ("per_mode_rms", self.per_mode_rms),
+            ("knee_hz", self.knee_hz),
+            ("slope", self.slope),
+        ):
+            if value.shape != m:
+                raise ValueError(
+                    f"{name} has shape {value.shape}; expected {m} to match "
+                    "G's mode axis"
+                )
 
     @classmethod
     def from_decorrelation(
@@ -363,37 +407,87 @@ class SpeckleProcess(eqx.Module):
         )
 
     def frequencies_hz(self) -> Array:
-        """The fixed log-spaced spectral-synthesis frequency grid."""
-        log_knee = jnp.log10(self.knee_hz)
-        return jnp.logspace(
-            log_knee - self.decades_below, log_knee + self.decades_above, self.n_freq
-        )
+        """The log-spaced spectral-synthesis frequency grid.
+
+        Shape ``(f,)`` when every mode shares one knee and slope (one grid
+        straddling the common knee, the default), or ``(m, f)`` when the
+        modes carry per-mode timescales (one grid straddling each mode's own
+        knee).
+        """
+        if not self.per_mode_freq:
+            log_knee = jnp.log10(self.knee_hz[0])
+            return jnp.logspace(
+                log_knee - self.decades_below,
+                log_knee + self.decades_above,
+                self.n_freq,
+            )
+        log_knee = jnp.log10(self.knee_hz)  # (m,)
+        return jax.vmap(
+            lambda lk: jnp.logspace(
+                lk - self.decades_below, lk + self.decades_above, self.n_freq
+            )
+        )(log_knee)  # (m, f)
 
     def psd(self, frequencies_hz) -> Array:
-        """Temporal PSD (knee form) evaluated at ``frequencies_hz``."""
-        return (1.0 + (frequencies_hz / self.knee_hz) ** 2) ** (self.slope / 2.0)
+        """Temporal PSD (knee form) evaluated at ``frequencies_hz``.
 
-    def draw(self, key) -> AnalyticSpeckleField:
+        Follows the grid rank: a ``(f,)`` grid uses the shared knee/slope
+        and returns ``(f,)``; an ``(m, f)`` grid uses each mode's own
+        knee/slope and returns ``(m, f)``.
+        """
+        f = jnp.asarray(frequencies_hz)
+        if f.ndim >= 2:
+            knee = self.knee_hz[:, None]
+            slope = self.slope[:, None]
+        else:
+            knee = self.knee_hz[0]
+            slope = self.slope[0]
+        return (1.0 + (f / knee) ** 2) ** (slope / 2.0)
+
+    def draw(self, key, *, renormalize=True) -> AnalyticSpeckleField:
         """Sample one frozen realization of the process.
 
-        Amplitudes are PSD-shaped Gaussian draws renormalized so each mode's
-        synthesized ``eps_k(t)`` has exactly ``per_mode_rms[k]`` rms
-        (``Var[eps_k] = 0.5 sum_j a_kj^2``); phases are uniform on
-        ``[0, 2 pi)``. Independent realizations come from independent keys.
+        Phases are uniform on ``[0, 2 pi)`` and independent realizations come
+        from independent keys. ``renormalize`` selects the draw statistics:
+
+        - ``True`` (default): PSD-shaped Gaussian amplitudes renormalized so
+          each mode's synthesized ``eps_k(t)`` has EXACTLY ``per_mode_rms[k]``
+          rms per draw (``Var[eps_k] = 0.5 sum_j a_kj^2``). The WFE budget is
+          honored draw by draw, but the per-draw renormalization makes the
+          fourth moment sub-Gaussian by order ``1 / N_eff`` (see
+          :meth:`moments`).
+        - ``False``: a circularly-symmetric complex-normal spectrum (Rayleigh
+          amplitudes, PSD-weighted so the ENSEMBLE ``Var[eps_k] = rms_k^2``).
+          The equal-time modal coefficients are then exactly Gaussian, so the
+          ensemble is the exact improper-Gaussian process :meth:`moments`
+          describes -- the oracle-exact draw.
         """
-        k_amp, k_phase = jax.random.split(key)
         m = self.G.shape[0]
         f = self.frequencies_hz()
-        amp = jnp.sqrt(self.psd(f))[None, :] * jax.random.normal(
-            k_amp, (m, self.n_freq)
-        )
-        amp = amp * (
-            self.per_mode_rms[:, None]
-            / jnp.sqrt(0.5 * jnp.sum(amp**2, axis=1, keepdims=True))
-        )
-        phases = jax.random.uniform(
-            k_phase, (m, self.n_freq), minval=0.0, maxval=2.0 * jnp.pi
-        )
+        psd = self.psd(f)
+        if psd.ndim == 1:
+            psd = jnp.broadcast_to(psd, (m, self.n_freq))
+        rms = self.per_mode_rms[:, None]
+        if renormalize:
+            k_amp, k_phase = jax.random.split(key)
+            amp = jnp.sqrt(psd) * jax.random.normal(k_amp, (m, self.n_freq))
+            amp = amp * (rms / jnp.sqrt(0.5 * jnp.sum(amp**2, axis=1, keepdims=True)))
+            phases = jax.random.uniform(
+                k_phase, (m, self.n_freq), minval=0.0, maxval=2.0 * jnp.pi
+            )
+        else:
+            # weights sum to 2 over frequency, the amplitude-squared convention
+            # that gives ensemble Var[eps_k] = rms_k^2 (matches the correlated
+            # spectral draw in the tiptilt family, here for diagonal covariance).
+            weights = 2.0 * psd / jnp.sum(psd, axis=1, keepdims=True)
+            k_real, k_imag = jax.random.split(key)
+            z = (
+                jax.random.normal(k_real, (m, self.n_freq))
+                + 1j * jax.random.normal(k_imag, (m, self.n_freq))
+            ) / jnp.sqrt(2.0)
+            c = jnp.sqrt(weights) * rms * z
+            amp = jnp.abs(c)
+            phases = jnp.angle(c)
         return AnalyticSpeckleField(
             self.e_nom,
             self.G,
@@ -404,4 +498,110 @@ class SpeckleProcess(eqx.Module):
             pixel_scale_lod=self.pixel_scale_lod,
             epoch_jd=self.epoch_jd,
             coherent=self.coherent,
+        )
+
+    def renormalization_kurtosis(self, n_points=4000) -> Array:
+        """Closed-form excess kurtosis of the ``renormalize=True`` modal draw.
+
+        The renormalized draw of mode ``k`` is
+        ``eps_k = rms_k sqrt(2) sum_j omega_kj cos(theta_kj)`` with ``omega``
+        the unit-normalized vector of PSD-shaped Gaussian amplitudes, so the
+        per-draw rms constraint makes the marginal sub-Gaussian with excess
+        kurtosis ``kappa_k = -(3/2) E[sum_j omega_kj^4]`` where, for PSD
+        values ``s_j`` (any overall scale),
+
+            E[sum_j omega^4] = 3 int_0^inf t prod_l (1 + 2 s_l t)^{-1/2}
+                                 sum_j s_j^2 (1 + 2 s_j t)^{-2} dt,
+
+        evaluated here as a 1D log-grid quadrature. Equal PSD weights recover
+        the uniform-sphere value ``-9 / (2 (F + 2))`` for ``F`` frequencies.
+        The draw's odd moments vanish (the phases are symmetric), so this is
+        the only non-Gaussian correction :meth:`moments` needs for a
+        ``renormalize=True`` ensemble.
+
+        Args:
+            n_points: Quadrature points for the log-grid integral.
+
+        Returns:
+            Excess kurtosis per mode, shape ``(m,)`` (identical entries when
+            every mode shares one PSD grid).
+        """
+        psd = self.psd(self.frequencies_hz())
+
+        def kappa_of(s):
+            s = s / jnp.max(s)
+            t = jnp.logspace(-8.0, 10.0, n_points)
+            st = s[:, None] * t[None, :]
+            log_prod = -0.5 * jnp.sum(jnp.log1p(2.0 * st), axis=0)
+            inner = jnp.sum(s[:, None] ** 2 / (1.0 + 2.0 * st) ** 2, axis=0)
+            integrand = t**2 * jnp.exp(log_prod) * inner  # dt = t dlog(t)
+            return -1.5 * 3.0 * jnp.trapezoid(integrand, jnp.log(t))
+
+        m = self.G.shape[0]
+        if psd.ndim == 1:
+            return jnp.broadcast_to(kappa_of(psd), (m,))
+        return jax.lax.map(kappa_of, psd)
+
+    def moments(self, *, mask=None, renormalized=False) -> "SpeckleMoments":
+        """Closed-form ensemble moments of the contrast ``realize`` returns.
+
+        Implements the improper (non-circular) complex-Gaussian moment
+        theorem for the diagonal modal covariance ``C_a = diag(rms_k^2)``:
+        per focal-plane pixel, with ``Gamma = sum_k rms_k^2 |g_k|^2``,
+        ``P = sum_k rms_k^2 g_k^2``, ``I_C = |e_nom|^2``,
+        ``phi_C = angle(e_nom)`` and pinning-quadrature variance
+        ``Var(X) = (Gamma + Re[P e^{-2 i phi_C}]) / 2``,
+
+            E[delta]   = Gamma / norm
+            Var[delta] = (4 I_C Var(X) + Gamma^2 + |P|^2) / norm^2
+
+        with the heterodyne term ``4 I_C Var(X)`` dropped when
+        ``coherent=False``. These are EXACT for a ``renormalize=False``
+        ensemble (Gaussian modal coefficients). A ``renormalize=True``
+        ensemble is sub-Gaussian; ``renormalized=True`` adds its closed-form
+        correction ``sum_k kappa_k rms_k^4 |g_k|^4 / norm^2`` to the
+        speckle-speckle term, with ``kappa_k`` from
+        :meth:`renormalization_kurtosis` (no ensemble needed).
+
+        Args:
+            mask: Optional boolean dark-zone mask over the focal grid; when
+                given the result also carries the annulus-averaged mean and
+                variance (mask-weighted means of the maps).
+            renormalized: Predict a ``renormalize=True`` ensemble (per-draw
+                rms exact) instead of the exact-Gaussian ``renormalize=False``
+                ensemble. Default ``False``.
+
+        Returns:
+            A :class:`SpeckleMoments` with the per-pixel maps (and the annulus
+            reductions when ``mask`` is given).
+        """
+        rms2 = self.per_mode_rms**2
+        gamma = jnp.einsum("k,kyx->yx", rms2, jnp.abs(self.G) ** 2)
+        p = jnp.einsum("k,kyx->yx", rms2, self.G**2)
+        i_c = jnp.abs(self.e_nom) ** 2
+        phi_c = jnp.angle(self.e_nom)
+        var_x = 0.5 * (gamma + jnp.real(p * jnp.exp(-2j * phi_c)))
+        norm = self.normalization
+        mean_map = gamma / norm
+        heterodyne = 4.0 * i_c * var_x if self.coherent else 0.0
+        var_map = (heterodyne + gamma**2 + jnp.abs(p) ** 2) / norm**2
+        if renormalized:
+            kappa = self.renormalization_kurtosis()
+            var_map = var_map + (
+                jnp.einsum("k,kyx->yx", kappa * rms2**2, jnp.abs(self.G) ** 4) / norm**2
+            )
+        annulus_mean = annulus_var = None
+        if mask is not None:
+            w = jnp.asarray(mask, dtype=float)
+            denom = jnp.sum(w)
+            annulus_mean = jnp.sum(mean_map * w) / denom
+            annulus_var = jnp.sum(var_map * w) / denom
+        return SpeckleMoments(
+            mean_map=mean_map,
+            var_map=var_map,
+            gamma_map=gamma,
+            p_map=p,
+            var_x_map=var_x,
+            annulus_mean=annulus_mean,
+            annulus_var=annulus_var,
         )
