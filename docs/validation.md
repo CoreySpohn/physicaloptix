@@ -264,3 +264,20 @@ uv run pytest tests/validation/
 
 Each gate asserts the tolerances above, so a regression in the propagation
 core surfaces as a failed gate with the measured residual in its message.
+
+A few gates rebuild a full yield package or a full EAC-1 chain and dominate
+the wall clock; they are marked `slow`, and an inner development loop can
+opt out of them:
+
+```bash
+uv run pytest tests/ -m "not slow"
+```
+
+Nothing is deselected unless you ask, so a bare `pytest tests/` is still the
+complete suite and remains the thing to run before trusting a change. The
+cross-check against the design-survey package is the expensive one: it emits
+a whole yield package (pointings x sky screens x band) from scratch.
+
+Do not reach for `pytest -n auto` here. The gates hold large float64 EAC-1
+arrays and xdist gives every worker its own copy, so memory is exhausted
+long before the parallelism pays for itself.

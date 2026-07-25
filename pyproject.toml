@@ -74,6 +74,18 @@ dev = [
     "pytest-xdist>=3.8.0",
 ]
 
+[tool.pytest.ini_options]
+# The default run is COMPLETE: the external-reference gates are the point of
+# this suite, so nothing is deselected without the caller asking. A handful of
+# gates rebuild a full yield package or a full EAC-1 chain and dominate the
+# wall clock, so they carry `slow` and the inner development loop opts out
+# with `-m "not slow"`. Note that `-n auto` is deliberately NOT set: the
+# gates hold large x64 EAC-1 arrays and one worker per core exhausts memory
+# long before parallelism pays.
+markers = [
+    "slow: rebuilds a full yield package or EAC-1 chain (tens of seconds up)",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/physicaloptix"]
 

@@ -60,6 +60,11 @@ _REFERENCE_CANDIDATES = (
 )
 
 
+# The module's `emitted` fixture rebuilds a full yield package (pointings x
+# sky screens x band), which is the single largest cost in the suite.
+pytestmark = pytest.mark.slow
+
+
 @pytest.fixture(scope="module")
 def reference():
     from pathlib import Path
