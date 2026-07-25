@@ -56,6 +56,11 @@ from physicaloptix.multichannel import (
     ncpa_differential_opd,
 )
 from physicaloptix.path import OpticalPath, Stage
+from physicaloptix.robustness import (
+    SensitivityBudget,
+    SensitivityOperators,
+    pastis_matrix,
+)
 from physicaloptix.sources import broadcast_to_spectrum, point_source
 from physicaloptix.speckle import (
     AnalyticSpeckleField,
@@ -87,6 +92,8 @@ __all__ = [
     "PhaseScreen",
     "PlaneKind",
     "SampledOptic",
+    "SensitivityBudget",
+    "SensitivityOperators",
     "SpeckleMoments",
     "SpeckleProcess",
     "Spectrum",
@@ -109,6 +116,7 @@ __all__ = [
     "mft_sampling_parameter",
     "ncpa_differential_opd",
     "normalize_unit_energy",
+    "pastis_matrix",
     "point_source",
     "psflet_pack",
     "rasterize_primary",
