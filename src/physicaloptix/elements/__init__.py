@@ -2,6 +2,7 @@
 
 from physicaloptix.elements.base import Element, SampledOptic
 from physicaloptix.elements.basis import ModeBasis
+from physicaloptix.elements.dispersive import DispersiveScreen
 from physicaloptix.elements.modes import (
     fourier_dm_basis,
     segment_ptt_basis,
@@ -12,6 +13,7 @@ from physicaloptix.elements.vortex import MultiScaleVortex
 from physicaloptix.elements.zernike_wfs import ZernikeWavefrontSensor
 
 __all__ = [
+    "DispersiveScreen",
     "Element",
     "ModeBasis",
     "MultiScaleVortex",
