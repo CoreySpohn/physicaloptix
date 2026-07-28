@@ -26,6 +26,7 @@ export) and constructs the field.
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jaxtyping import Array
 from optixstuff.speckle import AbstractSpeckleField
 
@@ -370,6 +371,51 @@ class CrossBandMoments(eqx.Module):
     tau_s: float = eqx.field(static=True)
     annulus_mean: Array | None = None  # (w,): mask-averaged mean
     annulus_cov: Array | None = None  # (w, w): mask-averaged covariance
+
+    def _require_equal_time(self, name):
+        """Raise unless this is an equal-time (tau_s == 0) container."""
+        if self.tau_s != 0.0:
+            raise ValueError(
+                f"{name} is defined on the equal-time container; rebuild with tau_s=0.0"
+            )
+
+    def correlation(self) -> Array:
+        """Band-pair intensity correlation ``rho_ij`` per pixel, ``(w, w, y, x)``.
+
+        ``cov_map`` normalized by the per-band standard deviations; the
+        diagonal is exactly 1. Equal-time only (a lagged container's diagonal
+        is not the variance).
+        """
+        self._require_equal_time("correlation")
+        d = jnp.sqrt(jnp.einsum("iiyx->iyx", self.cov_map))
+        return self.cov_map / (d[:, None] * d[None, :])
+
+    def n_eff(self) -> Array:
+        """Effective independent spectral channels per pixel, ``(y, x)``.
+
+        The participation ratio ``(tr S)^2 / tr(S^2)`` of the band-band
+        intensity covariance at each pixel: 1 when the channels are perfectly
+        correlated (the achromatic limit), the channel count when they are
+        independent. Bounded by the covariance rank, which the shared mode
+        vector caps at ``m (m + 3) / 2`` regardless of how finely the band is
+        sampled. Equal-time only.
+        """
+        self._require_equal_time("n_eff")
+        trace = jnp.einsum("iiyx->yx", self.cov_map)
+        return trace**2 / jnp.einsum("ijyx,jiyx->yx", self.cov_map, self.cov_map)
+
+    def impropriety(self) -> Array:
+        """Cross-band degree of impropriety ``|P_ij| / sqrt(Gamma_ii Gamma_jj)``.
+
+        The band-pair generalization of the single-band ``|P| / Gamma``; it is
+        bounded by 1 (Cauchy-Schwarz) and vanishes for statistically
+        homogeneous (translation-invariant) residuals, whose quadrature pairing
+        cancels the pseudo-covariance at every pair of wavelengths. Shape
+        ``(w, w, y, x)``. Equal-time only.
+        """
+        self._require_equal_time("impropriety")
+        g = jnp.real(jnp.einsum("iiyx->iyx", self.gamma_map))
+        return jnp.abs(self.p_map) / jnp.sqrt(g[:, None] * g[None, :])
 
 
 class SpeckleProcess(eqx.Module):
@@ -981,3 +1027,54 @@ class SpeckleProcess(eqx.Module):
             annulus_mean=annulus_mean,
             annulus_cov=annulus_cov,
         )
+
+    def joint_covariance(self, mask, *, tau_s=0.0) -> Array:
+        """The full joint covariance over (band, pixel) pairs on a pixel set.
+
+        The per-pixel maps of :meth:`cross_band_moments` are the coincident
+        diagonal of the complete two-point object; spatio-spectral statistics
+        (band-weighted aperture sums, matched filters across channels) need
+        the cross-pixel terms too. This returns
+        ``Cov[delta(band i, pixel p, t), delta(band j, pixel q, t + tau_s)]``
+        with shape ``(w, p, w, p)`` over the ``mask`` pixels in raster order.
+        Memory scales as ``(w * p)^2``, so the selection is capped at
+        ``w * p <= 4096``.
+
+        Args:
+            mask: Boolean array over the focal grid selecting the pixels;
+                must be concrete (the selection happens host-side, so this
+                method is not jittable).
+            tau_s: Two-time lag in seconds, as in :meth:`cross_band_moments`.
+
+        Returns:
+            The real covariance array, shape ``(w, p, w, p)``.
+
+        Raises:
+            ValueError: On a monochromatic process, or when ``w * p`` exceeds
+                4096.
+        """
+        if self.wavelengths_nm is None:
+            raise ValueError(
+                "joint_covariance needs a chromatic process (wavelengths_nm "
+                "set); use moments for a monochromatic one"
+            )
+        rows, cols = np.nonzero(np.asarray(mask))
+        w = self.wavelengths_nm.shape[0]
+        if w * rows.size > 4096:
+            raise ValueError(
+                f"w * p = {w * rows.size} exceeds the 4096 cap; the "
+                "(w p) x (w p) covariance would be too large -- select fewer "
+                "pixels"
+            )
+        g = self.G[:, :, rows, cols]  # (w, m, p)
+        e = self.e_nom[:, rows, cols]  # (w, p)
+        damped = self.per_mode_rms**2 * self.autocorrelation(tau_s)
+        gamma = jnp.einsum("m,imp,jmq->ipjq", damped, g, jnp.conj(g))
+        p_kern = jnp.einsum("m,imp,jmq->ipjq", damped, g, g)
+        cov = jnp.abs(gamma) ** 2 + jnp.abs(p_kern) ** 2
+        if self.coherent:
+            a_i = jnp.conj(e)[:, :, None, None]
+            a_j = e[None, None, :, :]
+            cov = cov + 2.0 * jnp.real(a_i * a_j * gamma + a_i * jnp.conj(a_j) * p_kern)
+        norms = jnp.broadcast_to(self.normalization, (w,))
+        return cov / (norms[:, None, None, None] * norms[None, None, :, None])

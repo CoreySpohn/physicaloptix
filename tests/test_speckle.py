@@ -1397,3 +1397,111 @@ class TestCrossBandMoments:
         proc = _chromatic_process(coherent=False)
         with pytest.raises(NotImplementedError, match="equal-time"):
             proc.cross_band_moments(tau_s=10.0, renormalized=True)
+
+
+class TestCrossBandViews:
+    """Derived views and the (band, pixel) x (band, pixel) joint object."""
+
+    _WLS = (500.0, 550.0, 600.0)
+
+    def test_correlation_is_unit_diagonal_and_bounded(self):
+        cbm = _chromatic_process(coherent=True).cross_band_moments()
+        rho = np.asarray(cbm.correlation())
+        np.testing.assert_allclose(np.einsum("iiyx->iyx", rho), 1.0, rtol=0, atol=1e-12)
+        assert np.all(np.abs(rho) <= 1.0 + 1e-12)
+        assert not np.allclose(rho, 1.0)  # chromatic G genuinely decorrelates
+
+    def test_n_eff_is_one_in_the_achromatic_limit(self):
+        """Perfectly correlated channels carry exactly one independent look."""
+        _, m, ny, nx = 3, 4, 1, 12
+        key = jax.random.PRNGKey(3)
+        g0 = jax.random.normal(key, (m, ny, nx, 2)) @ jnp.array([1.0, 1j])
+        e_stack, g_stack = lambda_scaled_channels(
+            jnp.zeros((ny, nx), dtype=complex), g0, 550.0, jnp.array(self._WLS)
+        )
+        proc = SpeckleProcess(
+            e_stack,
+            g_stack,
+            1.0,
+            1e-3,
+            input_energy=_e_in(1.0),
+            coherent=False,
+            wavelengths_nm=jnp.array(self._WLS),
+        )
+        n_eff = np.asarray(proc.cross_band_moments().n_eff())
+        np.testing.assert_allclose(n_eff, 1.0, rtol=0, atol=1e-12)
+
+    def test_n_eff_between_one_and_w_for_chromatic(self):
+        n_eff = np.asarray(
+            _chromatic_process(coherent=False).cross_band_moments().n_eff()
+        )
+        assert np.all(n_eff >= 1.0 - 1e-12)
+        assert np.all(n_eff <= 3.0 + 1e-12)
+        assert n_eff.max() > 1.01  # genuinely more than one look somewhere
+
+    def test_impropriety_matches_kernels(self):
+        cbm = _chromatic_process(coherent=True).cross_band_moments()
+        eta = np.asarray(cbm.impropriety())
+        g = np.real(np.einsum("iiyx->iyx", np.asarray(cbm.gamma_map)))
+        expected = np.abs(np.asarray(cbm.p_map)) / np.sqrt(g[:, None] * g[None, :])
+        np.testing.assert_allclose(eta, expected, rtol=1e-12, atol=0)
+        assert np.all(eta <= 1.0 + 1e-12)  # cross-band Cauchy-Schwarz
+
+    def test_views_reject_two_time_containers(self):
+        cbm = _chromatic_process(coherent=True).cross_band_moments(tau_s=50.0)
+        for view in (cbm.correlation, cbm.n_eff, cbm.impropriety):
+            with pytest.raises(ValueError, match="equal-time"):
+                view()
+
+    def test_joint_covariance_blocks_match_per_pixel_maps(self):
+        """The coincident-pixel blocks of the joint object equal the map route
+        -- two independent einsum paths to the same numbers."""
+        proc = _chromatic_process(coherent=True)
+        mask = jnp.zeros((1, 12), dtype=bool).at[0, 2:7].set(True)
+        joint = np.asarray(proc.joint_covariance(mask))  # (w, 5, w, 5)
+        cov_map = np.asarray(proc.cross_band_moments().cov_map)
+        for sel, pix in enumerate(range(2, 7)):
+            np.testing.assert_allclose(
+                joint[:, sel, :, sel], cov_map[:, :, 0, pix], rtol=1e-12, atol=0
+            )
+
+    def test_joint_covariance_cross_pixel_matches_monte_carlo(self):
+        """One genuine cross-pixel cross-band MC anchor (the map route cannot
+        see r != r' terms)."""
+        proc = _chromatic_process(coherent=True)
+        mask = jnp.zeros((1, 12), dtype=bool).at[0, jnp.array([3, 9])].set(True)
+        pred = np.asarray(proc.joint_covariance(mask))  # (3, 2, 3, 2)
+
+        def sample(key):
+            f = proc.draw(key, renormalize=False)
+            d = jnp.stack([f.realize(wavelength_nm=v, time_s=0.0) for v in self._WLS])
+            return d[:, 0, jnp.array([3, 9])]  # (w, 2)
+
+        batched = jax.jit(jax.vmap(sample))
+        n_batch, batch = 10, 5000
+        covs = []
+        key = jax.random.PRNGKey(11)
+        for _ in range(n_batch):
+            key, sub = jax.random.split(key)
+            d = np.asarray(batched(jax.random.split(sub, batch)))
+            c = d - d.mean(axis=0)
+            covs.append(np.einsum("nip,njq->ipjq", c, c) / (batch - 1))
+        stack = np.array(covs)
+        est = stack.mean(axis=0)
+        se = stack.std(axis=0, ddof=1) / np.sqrt(n_batch)
+        z = np.abs((est - pred) / se)
+        assert z.max() < 7.0, f"max |z| = {z.max():.2f}"
+
+    def test_joint_covariance_guards(self):
+        proc = _chromatic_process(coherent=True)
+        with pytest.raises(ValueError, match="4096"):
+            proc.joint_covariance(jnp.ones((40, 40), dtype=bool))
+        mono = SpeckleProcess(
+            proc.e_nom[0],
+            proc.G[0],
+            proc.per_mode_rms,
+            proc.knee_hz,
+            input_energy=_e_in(1.0),
+        )
+        with pytest.raises(ValueError, match="chromatic"):
+            mono.joint_covariance(jnp.ones((1, 12), dtype=bool))
