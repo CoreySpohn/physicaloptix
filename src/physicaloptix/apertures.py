@@ -92,9 +92,9 @@ def _segment_setup(primary, npix, extent_m, supersample):
     circum = float(primary.segment_point_to_point_m)
     apothem = np.cos(np.pi / 6) * circum / 2
     thetas = np.pi / 2 + np.arange(3) * np.pi / 3
-    centres = np.asarray(primary.segment_centres_m, dtype=float)
+    centers = np.asarray(primary.segment_centers_m, dtype=float)
     half_box = circum / 2 + delta
-    return coords, offsets, apothem, thetas, centres, half_box
+    return coords, offsets, apothem, thetas, centers, half_box
 
 
 def _segment_block(cx, cy, coords, offsets, apothem, thetas, half_box):
@@ -130,18 +130,18 @@ def rasterize_primary(primary, npix, *, extent_m=None, supersample=16):
         primary: A ``SegmentedPrimary`` with an exact segment size
             (``segment_point_to_point_m``).
         npix: Output array side length in pixels.
-        extent_m: Spatial extent of the array in metres; defaults to the
+        extent_m: Spatial extent of the array in meters; defaults to the
             circumscribed diameter, matching the design-survey pupils.
         supersample: Subpixel samples per axis (16 matches the survey).
 
     Returns:
         The pupil as an ``(npix, npix)`` float array in [0, 1].
     """
-    coords, offsets, apothem, thetas, centres, half_box = _segment_setup(
+    coords, offsets, apothem, thetas, centers, half_box = _segment_setup(
         primary, npix, extent_m, supersample
     )
     pupil = np.zeros((npix, npix))
-    for cx, cy in centres:
+    for cx, cy in centers:
         rendered = _segment_block(cx, cy, coords, offsets, apothem, thetas, half_box)
         if rendered is None:
             continue
@@ -161,19 +161,19 @@ def rasterize_segments(primary, npix, *, extent_m=None, supersample=16):
     Args:
         primary: A ``SegmentedPrimary`` with an exact segment size.
         npix: Output side length in pixels.
-        extent_m: Spatial extent in metres; defaults to the circumscribed
+        extent_m: Spatial extent in meters; defaults to the circumscribed
             diameter.
         supersample: Subpixel samples per axis.
 
     Returns:
         An ``(n_segments, npix, npix)`` float array in [0, 1], ordered as
-        ``primary.segment_centres_m`` (centre segment first).
+        ``primary.segment_centers_m`` (center segment first).
     """
-    coords, offsets, apothem, thetas, centres, half_box = _segment_setup(
+    coords, offsets, apothem, thetas, centers, half_box = _segment_setup(
         primary, npix, extent_m, supersample
     )
-    masks = np.zeros((len(centres), npix, npix))
-    for seg, (cx, cy) in enumerate(centres):
+    masks = np.zeros((len(centers), npix, npix))
+    for seg, (cx, cy) in enumerate(centers):
         rendered = _segment_block(cx, cy, coords, offsets, apothem, thetas, half_box)
         if rendered is None:
             continue
@@ -191,7 +191,7 @@ def normalize_unit_energy(pupil, dx_m):
 
     Args:
         pupil: The pupil amplitude array.
-        dx_m: Pixel pitch in metres.
+        dx_m: Pixel pitch in meters.
 
     Returns:
         The normalized pupil array.

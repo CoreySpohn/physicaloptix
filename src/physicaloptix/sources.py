@@ -48,7 +48,7 @@ def point_source(
             angular units; overrides ``separation_lod``.
         reference_wavelength_nm: Reference wavelength defining the angular
             unit; required for a chromatic off-axis source.
-        opd_nm: Optional OPD map in nanometres, bound per wavelength as
+        opd_nm: Optional OPD map in nanometers, bound per wavelength as
             ``exp(2j pi opd / lambda)``. A mono source with an OPD needs
             ``reference_wavelength_nm`` to bind against.
 

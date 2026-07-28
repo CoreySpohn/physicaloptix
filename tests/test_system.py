@@ -76,9 +76,9 @@ class TestFromMask:
 
     def test_refuses_grey_mask(self):
         _, grid = _pupil_field()
-        grey = jnp.full((NPIX, NPIX), 0.5)
+        gray = jnp.full((NPIX, NPIX), 0.5)
         with pytest.raises(ValueError, match="binary"):
-            BeamSplitter.from_mask(grey, grid=grid, plane=PlaneKind.PUPIL)
+            BeamSplitter.from_mask(gray, grid=grid, plane=PlaneKind.PUPIL)
 
 
 class TestEnergySplit:

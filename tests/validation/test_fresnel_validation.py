@@ -2,7 +2,7 @@
 
 These are physics-acceptance tests, not unit tests: each checks the propagator
 against an external analytic prediction or an independent high-resolution
-reference, in the regime the design actually targets (a centimetre-scale relay
+reference, in the regime the design actually targets (a centimeter-scale relay
 beam, dimensionless alpha ~ 1e-3). They back the two claims the adversarial
 design review made load-bearing:
 
@@ -27,7 +27,7 @@ from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.transforms import Fraunhofer, Fresnel
 
 WL = 500.0
-DIAM_M = 0.02  # centimetre-scale relay beam
+DIAM_M = 0.02  # centimeter-scale relay beam
 
 
 def _distance_for_alpha(alpha, diameter_m=DIAM_M, wavelength_nm=WL):

@@ -21,7 +21,7 @@ def sellmeier(wavelengths_nm, b, c_um2):
     """Refractive index from the three-term Sellmeier relation.
 
     Args:
-        wavelengths_nm: Wavelengths in nanometres, shape ``(w,)``.
+        wavelengths_nm: Wavelengths in nanometers, shape ``(w,)``.
         b: The three B coefficients, shape ``(3,)``.
         c_um2: The three C coefficients in square microns, shape ``(3,)``.
 
@@ -44,10 +44,10 @@ def multilayer_response(
     """Complex ``(r, t)`` of a layer stack by the characteristic-matrix method.
 
     Args:
-        wavelengths_nm: Wavelengths in nanometres, shape ``(w,)``.
+        wavelengths_nm: Wavelengths in nanometers, shape ``(w,)``.
         layer_indices: Per-layer refractive index, scalar or ``(w,)`` each,
             ordered from the incident side.
-        layer_thicknesses_nm: Per-layer physical thickness in nanometres.
+        layer_thicknesses_nm: Per-layer physical thickness in nanometers.
         n_incident: Index of the incident medium.
         n_substrate: Index of the substrate, scalar or ``(w,)``.
 
@@ -100,10 +100,10 @@ def thickness_kernel(
     the matching mode in ``B`` (coefficient in the same nm unit).
 
     Args:
-        wavelengths_nm: Wavelengths in nanometres, shape ``(w,)``.
+        wavelengths_nm: Wavelengths in nanometers, shape ``(w,)``.
         layer_indices: Per-layer refractive index, scalar or ``(w,)`` each,
             ordered from the incident side.
-        layer_thicknesses_nm: Per-layer physical thickness in nanometres.
+        layer_thicknesses_nm: Per-layer physical thickness in nanometers.
         layer: Index into ``layer_indices``/``layer_thicknesses_nm`` of the
             layer whose thickness the derivative is taken with respect to.
         output: Which amplitude to differentiate, ``"r"`` or ``"t"``.

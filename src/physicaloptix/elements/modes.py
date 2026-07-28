@@ -1,14 +1,14 @@
 """Mode-basis constructors: physically meaningful ``ModeBasis`` stacks.
 
 These build the ``B`` stack that ``linearize`` propagates into the sensitivity
-``G``. Two contracts they all honour, both easy to get silently wrong:
+``G``. Two contracts they all honor, both easy to get silently wrong:
 
 - **Units.** ``linearize`` reads an OPD basis in the SAME length unit as the
-  wavelength (nanometres), so every constructor returns ``B`` already scaled to
-  nanometres. A coefficient of 1 on a mode produces that mode's ``*_nm``
+  wavelength (nanometers), so every constructor returns ``B`` already scaled to
+  nanometers. A coefficient of 1 on a mode produces that mode's ``*_nm``
   amount of wavefront error, not a dimensionless shape.
 - **Grid.** The modes live on the dimensionless pupil ``Grid`` the field uses
-  (coordinates in pupil diameters), not on a metre grid.
+  (coordinates in pupil diameters), not on a meter grid.
 """
 
 import math
@@ -61,7 +61,7 @@ def segment_ptt_basis(primary, grid, *, ptt_nm=1.0, supersample=16):
     """Per-segment piston, tip, and tilt modes as an OPD ``ModeBasis``.
 
     Three modes per segment (piston, then the x- and y-tilts), ordered by
-    ``primary.segment_centres_m`` (centre segment first). Each mode is confined
+    ``primary.segment_centers_m`` (center segment first). Each mode is confined
     to its own segment and normalized so a coefficient of 1 gives ``ptt_nm`` of
     area-weighted RMS wavefront error over that segment. This is the dominant
     segment-phasing basis for a segmented aperture (the PASTIS control set).
@@ -70,23 +70,23 @@ def segment_ptt_basis(primary, grid, *, ptt_nm=1.0, supersample=16):
         primary: A ``SegmentedPrimary`` with an exact segment size.
         grid: The pupil ``Grid`` the field is sampled on (sets ``npix`` and the
             dimensionless tilt coordinates).
-        ptt_nm: Per-mode RMS amplitude in nanometres for a unit coefficient.
+        ptt_nm: Per-mode RMS amplitude in nanometers for a unit coefficient.
         supersample: Subpixel samples per axis for the segment masks.
 
     Returns:
         A ``ModeBasis`` with ``B`` of shape ``(3 * n_segments, npix, npix)`` in
-        nanometres, zero coefficients, and ``kind="opd"``.
+        nanometers, zero coefficients, and ``kind="opd"``.
     """
     npix = grid.npix
     masks = rasterize_segments(primary, npix, supersample=supersample)
     coords = np.asarray(grid.coords)
     x_grid, y_grid = np.meshgrid(coords, coords)
-    centres = np.asarray(primary.segment_centres_m, dtype=float) / float(
+    centers = np.asarray(primary.segment_centers_m, dtype=float) / float(
         primary.diameter_m
     )
 
     modes = []
-    for mask, (cx, cy) in zip(masks, centres, strict=True):
+    for mask, (cx, cy) in zip(masks, centers, strict=True):
         area = mask.sum()
         for ramp in (np.ones_like(mask), x_grid - cx, y_grid - cy):
             shape = mask * ramp
@@ -117,11 +117,11 @@ def fourier_dm_basis(grid, *, n_actuators, k_min=1.0, k_max=None, rms_nm=1.0):
         k_min: Smallest controlled frequency (inner working angle in lambda/D).
         k_max: Largest controlled frequency; clamped to the Nyquist cap and
             defaulting to it when ``None`` (outer working angle in lambda/D).
-        rms_nm: Per-mode RMS amplitude in nanometres for a unit coefficient.
+        rms_nm: Per-mode RMS amplitude in nanometers for a unit coefficient.
 
     Returns:
         A ``ModeBasis`` with ``B`` of shape ``(n_modes, npix, npix)`` in
-        nanometres and zero coefficients, ``n_modes`` even (cosine/sine pairs).
+        nanometers and zero coefficients, ``n_modes`` even (cosine/sine pairs).
 
     Raises:
         ValueError: If the band selects no frequencies.
@@ -162,13 +162,13 @@ def zernike_basis(grid, n_modes, *, rms_nm=1.0, diameter=1.0):
     Args:
         grid: The pupil ``Grid`` the field is sampled on.
         n_modes: Number of Noll modes, starting from piston (j = 1).
-        rms_nm: Per-mode RMS amplitude in nanometres for a unit coefficient.
+        rms_nm: Per-mode RMS amplitude in nanometers for a unit coefficient.
         diameter: Aperture diameter in grid units (1.0 fills the pupil grid,
             whose coordinates span one diameter).
 
     Returns:
         A ``ModeBasis`` with ``B`` of shape ``(n_modes, npix, npix)`` in
-        nanometres, zero coefficients, and ``kind="opd"``.
+        nanometers, zero coefficients, and ``kind="opd"``.
     """
     coords = np.asarray(grid.coords)
     x_grid, y_grid = np.meshgrid(coords, coords)

@@ -65,10 +65,10 @@ class Fresnel(eqx.Module):
 
         Args:
             grid: The (same in/out) propagation grid.
-            distance_m: Physical propagation distance (metres); may be negative.
+            distance_m: Physical propagation distance (meters); may be negative.
             beam_diameter_m: Physical beam diameter AT this plane (the
                 demagnified relay beam, not the primary), which forms ``alpha``.
-            wavelength_nm: Design wavelength (nanometres); mono fields use it,
+            wavelength_nm: Design wavelength (nanometers); mono fields use it,
                 chromatic fields scale each slice by its own wavelength.
             plane_in: Plane the input field must be in.
             plane_out: Plane the output field is tagged with.

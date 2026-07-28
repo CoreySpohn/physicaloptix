@@ -14,7 +14,7 @@ class PhaseScreen(Element):
     The mode basis is the programmable state: its ``coeffs`` are the
     differentiable command (a deformable-mirror actuation, a segment-phasing
     setpoint) or the fixed coefficients of a static aberration. The OPD map
-    ``coeffs . B`` (nanometres) becomes a monochromatic pupil phasor, so the
+    ``coeffs . B`` (nanometers) becomes a monochromatic pupil phasor, so the
     stage enters an ``OpticalPath`` as a commandable, differentiable optic whose
     command is swapped per step with ``eqx.tree_at`` on the basis coefficients --
     never a reconstruction, which would re-run the construction-time gates.

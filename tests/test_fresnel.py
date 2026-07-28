@@ -13,7 +13,7 @@ from physicaloptix.transforms import Fraunhofer, Fresnel
 
 WL = 500.0
 LAM_M = WL * 1e-9
-DIAM_M = 0.02  # a centimetre-scale relay beam (the regime the design targets)
+DIAM_M = 0.02  # a centimeter-scale relay beam (the regime the design targets)
 
 
 def _coords(npix, dx):

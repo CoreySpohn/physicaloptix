@@ -36,18 +36,18 @@ class TestSegmentPTT:
         assert segment_ptt_basis(primary, Grid.pupil(48)).kind == "opd"
 
     def test_modes_are_segment_local(self, primary):
-        """Each of the centre segment's three modes is zero outside the
-        centre hexagon, so a segment-local error cannot leak."""
+        """Each of the center segment's three modes is zero outside the
+        center hexagon, so a segment-local error cannot leak."""
         npix = 48
         basis = segment_ptt_basis(primary, Grid.pupil(npix))
         centre_support = rasterize_segments(primary, npix)[0] > 0
-        for k in range(3):  # piston, tip, tilt of the centre segment
+        for k in range(3):  # piston, tip, tilt of the center segment
             mode = np.asarray(basis.B[k])
             assert np.all(mode[~centre_support] == 0.0)
 
     def test_piston_honours_the_nm_unit_contract(self, primary):
         """A piston coefficient of 1 gives ptt_nm of area-weighted RMS over
-        its segment: B is delivered in nanometres, not a dimensionless mode."""
+        its segment: B is delivered in nanometers, not a dimensionless mode."""
         npix = 48
         ptt_nm = 7.0
         basis = segment_ptt_basis(primary, Grid.pupil(npix), ptt_nm=ptt_nm)

@@ -2,7 +2,7 @@
 
 A chromatic {class}`~physicaloptix.SpeckleProcess` drives every wavelength channel
 with the **same** real mode trajectory: a wavefront error expressed in
-nanometres is one physical surface, and only the per-channel response
+nanometers is one physical surface, and only the per-channel response
 $G(\lambda)$ differs across the band. Two channels of a chromatic process are
 therefore not two independent noise draws with a fitted correlation between
 them. They are one field over the joint space of pixel and wavelength, driven
@@ -192,7 +192,7 @@ channel, not by how finely the band is sampled. A spectrograph with far more
 channels than $m(m+3)/2$ therefore cannot be resolving $m(m+3)/2 + 1$ genuinely
 independent chromatic degrees of freedom: the extra channels are, in this
 exact sense, redundant with the ones already measured. This is the cross-band
-analogue of the low-rank residual-field structure Pogorelyuk, Kasdin, and
+analog of the low-rank residual-field structure Pogorelyuk, Kasdin, and
 Rowley (2019) exploit for state estimation, here applied to the wavelength
 axis of the same underlying object.
 

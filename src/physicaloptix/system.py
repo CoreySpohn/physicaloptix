@@ -13,7 +13,7 @@ ports in phase quadrature, which ``energy()`` bakes in (``r = i sqrt(R)``).
 
 The physical reject port is only shipped where it is physical: a BINARY mask
 (the Babinet complement -- an occulter's reject is the occulted core) via
-``from_mask``. An absorbing grey apodizer has no coherent reject port (the
+``from_mask``. An absorbing gray apodizer has no coherent reject port (the
 blocked light is gone), so ``from_mask`` refuses a non-binary mask rather than
 inventing a fictitious sensing field.
 """
@@ -159,7 +159,7 @@ class BeamSplitter(eqx.Module):
 
     @classmethod
     def energy(cls, reflectance, *, grid, plane, on_violation="raise"):
-        """A grey (achromatic) energy split sending ``reflectance`` aside.
+        """A gray (achromatic) energy split sending ``reflectance`` aside.
 
         Uses the symmetric lossless convention ``t = sqrt(1 - R)``,
         ``r = i sqrt(R)`` (the two ports in quadrature), so a future
@@ -192,7 +192,7 @@ class BeamSplitter(eqx.Module):
         The transmit port is bit-identical to ``SampledOptic(mask)``, so the
         science channel is unchanged; the reflect port is the exact Babinet
         complement (an occulting mask's reject is the occulted core -- the
-        low-order-sensor feed). A non-binary (grey) mask is refused: an
+        low-order-sensor feed). A non-binary (gray) mask is refused: an
         absorbing apodizer has no coherent reject port.
 
         Args:
@@ -207,7 +207,7 @@ class BeamSplitter(eqx.Module):
         arr = np.asarray(mask)
         if not np.all((np.abs(arr) < 1e-12) | (np.abs(arr - 1.0) < 1e-12)):
             raise ValueError(
-                "from_mask requires a binary mask: an absorbing grey "
+                "from_mask requires a binary mask: an absorbing gray "
                 "apodizer has no coherent reject port (model it as a "
                 "through-path SampledOptic instead)"
             )

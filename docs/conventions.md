@@ -7,7 +7,7 @@ in this page are defined in the [glossary](glossary).
 ## Coordinates and units
 
 Each plane has its own natural unit, and a {class}`~physicaloptix.Grid` carries
-its coordinates in that unit -- never in metres or pixels.
+its coordinates in that unit -- never in meters or pixels.
 
 - A **pupil** grid, `Grid.pupil(npix)`, spans one aperture diameter: its
   coordinates run over roughly $[-0.5, 0.5]$ in units of the pupil diameter, so
@@ -15,7 +15,7 @@ its coordinates in that unit -- never in metres or pixels.
 - A **focal** grid, `Grid.focal(npix, pixel_scale)`, is sampled in
   {term}`lambda/D`: its `pixel_scale` is the {term}`lambda/D` per pixel, and its
   coordinates are angular separations in {term}`lambda/D`.
-- **Wavelengths** are in nanometres everywhere they appear
+- **Wavelengths** are in nanometers everywhere they appear
   (`wavelength_nm`, `Spectrum`).
 
 Because focal coordinates are in {term}`lambda/D`, a monochromatic result is
@@ -25,16 +25,16 @@ is a wavelength-aware conversion the consumer does.
 
 ## The half-pixel-offset grid
 
-Every grid is symmetric about its centre; for the **even** `npix` used
+Every grid is symmetric about its center; for the **even** `npix` used
 throughout, there is no sample at the origin:
 
 $$ x_i = \left(i - \tfrac{\mathrm{npix}}{2} + \tfrac{1}{2}\right)\,\mathrm{d}x,
 \qquad i = 0, \dots, \mathrm{npix}-1. $$
 
-The centre falls between the four central pixels (index $(\mathrm{npix}-1)/2$),
+The center falls between the four central pixels (index $(\mathrm{npix}-1)/2$),
 which is the shared radial convention `hwoutils.radial.radial_distance` uses, so
 a {func}`~physicaloptix.stats.dark_zone_mask` annulus lines up with the PSF
-centre. The missing sample at $r = 0$ is deliberate: it steps around the
+center. The missing sample at $r = 0$ is deliberate: it steps around the
 $\mathrm{atan2}$ singularity at the core of a {term}`vortex coronagraph` mask,
 where the gradient would otherwise be undefined. Odd `npix` is legal but places
 a sample exactly at $r = 0$, forfeiting that protection -- use even grids in
@@ -46,7 +46,7 @@ One phase convention runs through every element and propagator, and every
 formula imported from a textbook must be checked against it before use.
 
 - **Accumulated path is positive phase.** An optical path difference of $h$
-  nanometres multiplies the field by $\exp(+i\,2\pi h/\lambda)$
+  nanometers multiplies the field by $\exp(+i\,2\pi h/\lambda)$
   ({class}`~physicaloptix.PhaseScreen`), and the exact angular-spectrum kernel
   advances a propagating wave with positive phase,
   $\exp\!\big(+i\,2\pi(z/\lambda)\sqrt{1-\lambda^2\nu^2}\big)$
@@ -130,7 +130,7 @@ gates only the design wavelength.
 
 ## Wavelength binding and chromatic layout
 
-Wavefront error is stored achromatically -- an OPD map in nanometres -- and
+Wavefront error is stored achromatically -- an OPD map in nanometers -- and
 the wavelength binds late: the phasor $\exp(+i\,2\pi\,\mathrm{OPD}/\lambda)$
 is formed where the optic is applied, once per wavelength. This OPD phasor
 is the special case of a more general per-mode complex dispersion kernel
@@ -217,7 +217,7 @@ coexist in the stack and must not be mixed:
   {meth}`~physicaloptix.AnalyticSpeckleField.peak_contrast` with
   {func}`~physicaloptix.telescope_peak`; compute the peak **on the same
   focal grid as the data being normalized** (the half-pixel grid has no
-  sample at the exact centre, so the sampled maximum is
+  sample at the exact center, so the sampled maximum is
   sampling-dependent, which is why the peak is never stored). The two
   conventions differ by the peak-pixel fraction (tens of times at typical
   sampling).
@@ -242,7 +242,7 @@ record `input_energy` and `pixel_scale_lod` beside their maps.
 
 ## Wavefront error
 
-Wavefront error is an {term}`optical path difference` in **nanometres**, the
+Wavefront error is an {term}`optical path difference` in **nanometers**, the
 same length unit as the wavelength. A {class}`~physicaloptix.ModeBasis` is an
 unnormalized container; the normalization contract belongs to the mode
 constructors in `physicaloptix.elements.modes`, and it is **per mode, over
@@ -252,12 +252,12 @@ wavefront error over the aperture disk for Zernike and Fourier modes, and
 over-aperture RMS is smaller by the square root of the segment-to-aperture
 area ratio. Several unit coefficients add in quadrature.
 
-An OPD of $h$ nanometres is a phase of $2\pi h/\lambda$;
+An OPD of $h$ nanometers is a phase of $2\pi h/\lambda$;
 {func}`~physicaloptix.linearize` applies that factor when it builds the
 sensitivity `G`, and it injects the perturbation **at the input field's
 plane** -- linearizing about an interior stage means linearizing the
 sub-path from that stage onward. Coefficient units follow the basis kind:
-`"opd"` coefficients are lengths in nanometres; `"amplitude"` coefficients
+`"opd"` coefficients are lengths in nanometers; `"amplitude"` coefficients
 are dimensionless fractional amplitude ($E(1 + B\,\epsilon)$) with
 wavelength-independent sensitivity columns. The analytic method is exact
 because every stage is linear in the field; any future nonlinear stage makes

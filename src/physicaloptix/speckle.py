@@ -163,7 +163,7 @@ class AnalyticSpeckleField(AbstractSpeckleField):
     ``wavelengths_nm`` set, ``e_nom`` / ``G`` (and optionally
     ``normalization``) carry a leading channel axis and ``realize`` selects
     the channel nearest the requested wavelength while the mode trajectory
-    stays shared across channels (a wavefront error in nanometres is
+    stays shared across channels (a wavefront error in nanometers is
     achromatic). Build the stacks per sub-band for an exact model, or with
     :func:`lambda_scaled_channels` / :meth:`broadened` for the standard
     lambda-scaling approximation. The deep-contrast cross term needs
@@ -284,7 +284,7 @@ class AnalyticSpeckleField(AbstractSpeckleField):
         Args:
             telescope_peak: Peak intensity density of the unocculted
                 telescope PSF on this field's grid.
-            wavelength_nm: Wavelength in nanometres (chromatic fields select
+            wavelength_nm: Wavelength in nanometers (chromatic fields select
                 the nearest channel, as in :meth:`realize`).
             time_s: Time since ``epoch_jd`` in seconds.
 

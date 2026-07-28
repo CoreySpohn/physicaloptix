@@ -40,7 +40,7 @@ class Spectrum(eqx.Module):
         """An equal-weight band: ``n_samples`` wavelengths across the band.
 
         Args:
-            center_nm: Band center in nanometres.
+            center_nm: Band center in nanometers.
             fractional_bandwidth: Full fractional width (0.2 spans
                 ``0.9 * center`` to ``1.1 * center``).
             n_samples: Number of wavelength samples (endpoints included).
@@ -62,7 +62,7 @@ class Spectrum(eqx.Module):
         reference pipeline evaluates bands with.
 
         Args:
-            center_nm: Band center in nanometres.
+            center_nm: Band center in nanometers.
             fractional_bandwidth: Full fractional width.
             n_samples: Number of wavelength samples.
 
