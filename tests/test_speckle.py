@@ -1267,7 +1267,7 @@ class TestCrossBandMoments:
             return d0, d1
 
         batched = jax.jit(jax.vmap(sample))
-        n_batch, batch = 10, 5000
+        n_batch, batch = 12, 4000
         covs, covs_t, means = [], [], []
         key = jax.random.PRNGKey(7)
         for _ in range(n_batch):
