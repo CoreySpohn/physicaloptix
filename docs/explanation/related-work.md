@@ -39,11 +39,7 @@ upstream.
 | [chromatix](https://github.com/chromatix-team/chromatix) | JAX + Equinox, differentiable | computational and microscopy wave optics | typed `Field` with explicit wavelength and polarization axes | not coronagraph specific |
 | [hcipy](https://docs.hcipy.org) | NumPy (newer parts JAX tested) | high-contrast imaging and adaptive optics | `Field` = data + `Grid` | strong: Lyot, vortex, adaptive optics |
 | [poppy](https://poppy-optics.readthedocs.io) | NumPy with optional acceleration | astronomical PSF, Fraunhofer and Fresnel | `Wavefront` with a `PlaneType` tag | Lyot style via semi-analytic MFT |
-| [prysm](https://prysm.readthedocs.io) | NumPy | physical and first-order optics, interferometer data | arrays on coordinate grids | segmented apertures, deformable mirrors |
-
-The short version: physicaloptix is closest to dLux and chromatix in machinery
-(JAX, Equinox, autodiff), and closest to hcipy and poppy in purpose
-(high-contrast coronagraphy). It is the intersection of those two groups.
+| [prysm](https://prysm.readthedocs.io) | NumPy, with an interchangeable backend (CuPy for GPU, PyTorch for autodiff) | physical and first-order optics, interferometer data | arrays on coordinate grids | segmented apertures, deformable mirrors |
 
 ## Ideas we build on
 
