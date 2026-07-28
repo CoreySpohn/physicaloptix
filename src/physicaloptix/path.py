@@ -87,6 +87,8 @@ class OpticalPath(eqx.Module):
         """Build the (E_nom, G) linearization of this path around ``field``.
 
         See :func:`physicaloptix.linearize.linearize` for the arguments
-        (``wavelength_nm`` is required; ``method`` defaults to ``"auto"``).
+        (``wavelength_nm`` is required for a monochromatic ``field`` and
+        defaults to the first band when ``wavelengths_nm`` is given for a
+        chromatic one; ``method`` defaults to ``"auto"``).
         """
         return _linearize(self, field, basis, **kwargs)

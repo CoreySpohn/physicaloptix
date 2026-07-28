@@ -249,6 +249,15 @@ class TestChromaticLinearize:
         )
         assert lin.G.shape[0] == wavelengths.shape[0]
         assert lin.n_modes == opd_basis.n_modes  # shape[-3], not shape[0]
+        # input_energy is the cross-task contract the next task consumes:
+        # one entry per wavelength band, matching field.energy() exactly.
+        assert len(lin.input_energy) == wavelengths.shape[0]
+        np.testing.assert_allclose(
+            np.asarray(lin.input_energy),
+            np.asarray(chromatic_field.energy()),
+            rtol=0,
+            atol=1e-12,
+        )
         for w, wl in enumerate(wavelengths):
             mono_field = Field(
                 data=chromatic_field.data[w],
@@ -334,6 +343,13 @@ class TestChromaticLinearize:
         assert lin_ad.G.shape == lin.G.shape  # (w, m, y, x) after normalization
         np.testing.assert_allclose(
             np.asarray(lin.G), np.asarray(lin_ad.G), rtol=0, atol=1e-12
+        )
+        # The stored dispersion is linearity_residual's only route back to
+        # the exact nonlinear map; pin it against the supplied table so a
+        # regression that drops it to None cannot hide behind the default
+        # OPD table being rebuilt identically.
+        np.testing.assert_allclose(
+            np.asarray(lin.dispersion), np.asarray(d), rtol=0, atol=1e-12
         )
 
     def test_chromatic_jvp_matches_analytic(
@@ -441,9 +457,14 @@ class TestChromaticLinearize:
         assert lin.wavelengths_nm is None
         assert lin.G.ndim == 3
 
+    @pytest.mark.parametrize("method", ["auto", "jvp", "jacfwd"])
     def test_rejects_dispersion_without_wavelengths(
-        self, small_path, mono_field, opd_basis
+        self, small_path, mono_field, opd_basis, method
     ):
+        """The guard must fire on every method, not just the analytic
+        default -- jvp/jacfwd only reach _factors through perturbed_map,
+        which is gated on wavelengths_nm and would otherwise silently
+        discard a mono-call dispersion table."""
         with pytest.raises(ValueError, match="dispersion requires wavelengths_nm"):
             linearize(
                 small_path,
@@ -451,6 +472,7 @@ class TestChromaticLinearize:
                 opd_basis,
                 wavelength_nm=550.0,
                 dispersion=jnp.ones((4, 3), dtype=complex),
+                method=method,
             )
 
     def test_rejects_dispersion_shape_mismatch(

@@ -258,6 +258,8 @@ def linearize(
     Returns:
         A ``Linearization``.
     """
+    if dispersion is not None and wavelengths_nm is None:
+        raise ValueError("dispersion requires wavelengths_nm")
     if wavelengths_nm is not None:
         wavelengths_nm = jnp.asarray(wavelengths_nm, dtype=float)
         if field.spectrum is None:
