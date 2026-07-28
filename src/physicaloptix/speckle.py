@@ -56,7 +56,9 @@ def telescope_peak(field, grid_out):
     return float(jnp.max(transform(field).intensity()))
 
 
-def lambda_scaled_channels(e_nom, G, reference_wavelength_nm, wavelengths_nm):
+def lambda_scaled_channels(
+    e_nom, G, reference_wavelength_nm, wavelengths_nm, *, scale_e_nom=False
+):
     """Per-wavelength ``(e_nom, G)`` stacks under the lambda-scaling approximation.
 
     The standard chromatic model for a speckle field generated at one
@@ -67,20 +69,34 @@ def lambda_scaled_channels(e_nom, G, reference_wavelength_nm, wavelengths_nm):
     ``i 2 pi / lambda``, so ``G(lambda) = G(lambda0) * (lambda0/lambda)``
     -- the incoherent halo then scales as ``(lambda0/lambda)^2``. The
     nominal field ``e_nom`` is held fixed (the design leakage's own
-    chromaticity is NOT modeled; propagate per sub-band for that).
+    chromaticity is NOT modeled; propagate per sub-band for that). Note the
+    frozen default strictly decorrelates wavelength channels under ``coherent``
+    statistics wherever the pinned heterodyne variance is nonzero (the heterodyne
+    term scales as the product of the two channels' scale factors while the
+    speckle-speckle term scales as its square), so a spectral correlation length
+    measured from a frozen lambda-scaled simulation with a static field partly
+    reflects this approximation rather than the optics; pass ``scale_e_nom=True``
+    or build the stacks per band to remove it.
 
     Args:
         e_nom: Complex nominal focal field, shape ``(y, x)``.
         G: Complex sensitivity ``d(E_focal)/d(mode)``, shape ``(m, y, x)``.
         reference_wavelength_nm: The wavelength ``G`` was generated at.
         wavelengths_nm: Channel wavelengths, shape ``(w,)``.
+        scale_e_nom: Also scale the nominal field by ``lambda0/lambda`` (the
+            linear-regime leakage scaling), so the achromatic limit is exact for
+            coherent statistics as well as incoherent. Default ``False``
+            (frozen field, existing behavior).
 
     Returns:
         ``(e_stack, g_stack)`` of shapes ``(w, y, x)`` and ``(w, m, y, x)``.
     """
     wavelengths = jnp.asarray(wavelengths_nm, dtype=float)
     scale = reference_wavelength_nm / wavelengths
-    e_stack = jnp.broadcast_to(e_nom, (wavelengths.shape[0], *e_nom.shape))
+    if scale_e_nom:
+        e_stack = e_nom[jnp.newaxis] * scale[:, jnp.newaxis, jnp.newaxis]
+    else:
+        e_stack = jnp.broadcast_to(e_nom, (wavelengths.shape[0], *e_nom.shape))
     g_stack = G[jnp.newaxis] * scale[:, jnp.newaxis, jnp.newaxis, jnp.newaxis]
     return e_stack, g_stack
 
@@ -285,7 +301,7 @@ class AnalyticSpeckleField(AbstractSpeckleField):
         delta = self.realize(wavelength_nm=wavelength_nm, time_s=time_s)
         return delta * norm / telescope_peak
 
-    def broadened(self, *, reference_wavelength_nm, wavelengths_nm):
+    def broadened(self, *, reference_wavelength_nm, wavelengths_nm, scale_e_nom=False):
         """A chromatic copy under the lambda-scaling approximation.
 
         See :func:`lambda_scaled_channels` for the physics and its limits.
@@ -294,6 +310,10 @@ class AnalyticSpeckleField(AbstractSpeckleField):
             reference_wavelength_nm: The wavelength this field's ``G`` was
                 generated at.
             wavelengths_nm: Channel wavelengths for the broadened field.
+            scale_e_nom: Also scale the nominal field by ``lambda0/lambda`` (the
+                linear-regime leakage scaling), so the achromatic limit is exact for
+                coherent statistics as well as incoherent. Default ``False``
+                (frozen field, existing behavior).
 
         Returns:
             A chromatic ``AnalyticSpeckleField`` sharing this field's
@@ -302,7 +322,11 @@ class AnalyticSpeckleField(AbstractSpeckleField):
         if self.wavelengths_nm is not None:
             raise ValueError("field is already chromatic")
         e_stack, g_stack = lambda_scaled_channels(
-            self.e_nom, self.G, reference_wavelength_nm, wavelengths_nm
+            self.e_nom,
+            self.G,
+            reference_wavelength_nm,
+            wavelengths_nm,
+            scale_e_nom=scale_e_nom,
         )
         return AnalyticSpeckleField(
             e_stack,

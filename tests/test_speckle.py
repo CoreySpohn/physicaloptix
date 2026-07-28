@@ -1505,3 +1505,85 @@ class TestCrossBandViews:
         )
         with pytest.raises(ValueError, match="chromatic"):
             mono.joint_covariance(jnp.ones((1, 12), dtype=bool))
+
+
+class TestLambdaScalingENom:
+    """The frozen-E_nom artifact and its co-scaled fix."""
+
+    _WLS = (500.0, 550.0, 600.0)
+
+    def _mono_ingredients(self, seed=5):
+        m, ny, nx = 4, 1, 12
+        k1, k2 = jax.random.split(jax.random.PRNGKey(seed))
+        g0 = jax.random.normal(k1, (m, ny, nx, 2)) @ jnp.array([1.0, 1j])
+        e0 = jax.random.normal(k2, (ny, nx, 2)) @ jnp.array([1.0, 1j])
+        # Scale e0 so |e0|^2 ~ Gamma at unit per-mode rms: the heterodyne and
+        # speckle-speckle terms are then comparable and the artifact is O(1e-3).
+        gamma = jnp.sum(jnp.abs(g0) ** 2, axis=0)
+        e0 = e0 * jnp.sqrt(jnp.median(gamma) / jnp.median(jnp.abs(e0) ** 2))
+        return e0, g0
+
+    def test_default_is_frozen_and_option_scales(self):
+        e0, g0 = self._mono_ingredients()
+        wls = jnp.array(self._WLS)
+        e_frozen, g_frozen = lambda_scaled_channels(e0, g0, 550.0, wls)
+        e_scaled, g_scaled = lambda_scaled_channels(
+            e0, g0, 550.0, wls, scale_e_nom=True
+        )
+        np.testing.assert_array_equal(np.asarray(g_frozen), np.asarray(g_scaled))
+        for i, wl in enumerate(self._WLS):
+            np.testing.assert_array_equal(np.asarray(e_frozen[i]), np.asarray(e0))
+            np.testing.assert_allclose(
+                np.asarray(e_scaled[i]),
+                np.asarray(e0 * (550.0 / wl)),
+                rtol=1e-15,
+                atol=0,
+            )
+
+    def test_coherent_band_correlation_frozen_vs_coscaled(self):
+        """The acceptance test: frozen stacks strictly decorrelate bands under
+        coherent statistics; co-scaled stacks restore correlation exactly 1."""
+        e0, g0 = self._mono_ingredients()
+        wls = jnp.array(self._WLS)
+        rho = {}
+        for coscale in (False, True):
+            e_stack, g_stack = lambda_scaled_channels(
+                e0, g0, 550.0, wls, scale_e_nom=coscale
+            )
+            proc = SpeckleProcess(
+                e_stack,
+                g_stack,
+                1.0,
+                1e-3,
+                input_energy=_e_in(1.0),
+                coherent=True,
+                wavelengths_nm=wls,
+            )
+            rho[coscale] = np.asarray(proc.cross_band_moments().correlation())
+        off = ~np.eye(len(self._WLS), dtype=bool)
+        np.testing.assert_allclose(rho[True], 1.0, rtol=0, atol=1e-12)
+        assert rho[False][off].max() < 1.0 - 1e-6  # the artifact is real
+        assert rho[False][off].min() > 0.9  # and small -- an artifact, not physics
+
+    def test_broadened_passes_the_option_through(self):
+        e0, g0 = self._mono_ingredients()
+        field = AnalyticSpeckleField(
+            e0,
+            g0,
+            jnp.ones((4, 8)),
+            jnp.logspace(-4.0, -2.0, 8),
+            jnp.zeros((4, 8)),
+            input_energy=_e_in(1.0),
+        )
+        wls = jnp.array(self._WLS)
+        frozen = field.broadened(reference_wavelength_nm=550.0, wavelengths_nm=wls)
+        scaled = field.broadened(
+            reference_wavelength_nm=550.0, wavelengths_nm=wls, scale_e_nom=True
+        )
+        np.testing.assert_array_equal(np.asarray(frozen.e_nom[0]), np.asarray(e0))
+        np.testing.assert_allclose(
+            np.asarray(scaled.e_nom[-1]),
+            np.asarray(e0 * (550.0 / 600.0)),
+            rtol=1e-15,
+            atol=0,
+        )
