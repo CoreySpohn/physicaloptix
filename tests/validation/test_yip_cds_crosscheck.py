@@ -54,7 +54,9 @@ _HCIPY_TAPER_XFAIL_REASON = (
 
 _REFERENCE_CANDIDATES = (
     "tests/data/cds_eac1_yip_reduced.npz",
-    # Development-workspace location written by the generation script.
+    # Development-workspace locations written by the generation script.
+    "../../hwo-mission-control/burn/physicaloptix-setup"  # internal-ref-ok
+    "/scripts/eac1/data/cds_eac1_yip_reduced.npz",  # internal-ref-ok
     "../../hwo-mission-control/burn/physicaloptix-setup"  # internal-ref-ok
     "/scripts/eac1_dlux/data/cds_eac1_yip_reduced.npz",  # internal-ref-ok
 )
@@ -164,9 +166,12 @@ class TestCrossCheck:
     def test_onaxis_floor_matches(self, emitted, reference):
         """The aggregate null floor is far tighter than the pointwise shape
         (measured max ratio 1.0003)."""
+        # The reference npz holds the survey pipeline's INTERNAL density
+        # convention; emitted maps are per-pixel fractions (density * du^2).
+        du2 = float(reference["meta"][5]) ** 2
         ratio = float(
             np.asarray(emitted["stellar_intens"][0]).max()
-            / np.asarray(reference["stellar_intens"][0]).max()
+            / (np.asarray(reference["stellar_intens"][0]).max() * du2)
         )
         assert abs(ratio - 1.0) < 0.01, f"floor ratio {ratio:.6f}"
 
@@ -180,8 +185,14 @@ class TestCrossCheck:
         """Bright products agree with the survey pipeline in ABSOLUTE value:
         fitted scales are 1 to ~5e-5 (deep-null maps excluded; their scale
         fit is biased by the shape mismatch)."""
+        # Emitted intensity maps are per-pixel fractions; the reference npz
+        # is the survey-internal density (1/du^2 larger). sky_trans is value
+        # semantics in both conventions and carries no factor.
+        du2 = float(reference["meta"][5]) ** 2
         scales = [
-            scale_and_residual(emitted["offax_psf"][i], reference["offax_psf"][i])[0]
+            scale_and_residual(
+                emitted["offax_psf"][i] / du2, reference["offax_psf"][i]
+            )[0]
             for i in range(reference["offax_psf"].shape[0])
         ]
         scales.append(

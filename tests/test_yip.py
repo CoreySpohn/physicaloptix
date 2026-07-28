@@ -119,7 +119,8 @@ class TestEmittedPackage:
         band = broadcast_to_spectrum(base, Spectrum.tophat(REF_NM, 0.1, 3))
         lyot, _ = core.propagate(band)
         out = science(lyot)
-        expected = np.asarray(out.intensity())
+        # Emitted maps are per-pixel flux fractions: density times cell area.
+        expected = np.asarray(out.intensity()) * 0.5**2
         np.testing.assert_allclose(package["stellar_intens"][0], expected, rtol=1e-10)
 
     def test_finite_stellar_diameter_fills_the_null(self, emitted):

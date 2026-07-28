@@ -17,7 +17,10 @@ reference implementation exactly:
   which makes an open telescope transmit exactly one.
 
 The input field is normalized to unit pre-coronagraph energy on the
-dimensionless pupil grid, so map values are in the survey convention. This is
+dimensionless pupil grid, and ``stellar_intens`` / ``offax_psf`` values are
+per-pixel flux fractions (intensity density times the pixel cell area) --
+the convention shipped survey packages carry; ``sky_trans`` is a per-pixel
+transmission and carries no area factor. This is
 builder-tier code: a full-scale package is many propagations; freeze once and
 serve from the tables.
 """
@@ -55,9 +58,16 @@ def _unit_energy(field):
 
 
 def _band_image(core_path, science, source):
-    """Equal-weight band-averaged intensity on the fixed angular grid."""
+    """Equal-weight band-averaged per-pixel flux fraction on the fixed grid.
+
+    The band-averaged intensity density is multiplied by the science-grid
+    cell area, so map values are the fraction of the unit pre-coronagraph
+    energy landing in each pixel -- the convention shipped survey packages
+    carry and table readers consume. The survey pipeline's internal arrays
+    are the bare density, larger by exactly ``1 / dx**2``.
+    """
     lyot, _ = core_path.propagate(source)
-    return np.asarray(science(lyot).intensity())
+    return np.asarray(science(lyot).intensity()) * float(science.grid_out.dx) ** 2
 
 
 def _make_header(

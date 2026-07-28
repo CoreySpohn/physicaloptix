@@ -16,7 +16,10 @@ enable_x64()
 EAC1_CACHE_ENV = "PHYSICALOPTIX_EAC1_CACHE"
 _DATA_DIRS = (
     Path(__file__).parent / "data",
-    # Development-workspace fallback path.
+    # Development-workspace fallback paths.
+    Path(__file__).parents[3]
+    / "hwo-mission-control/burn/physicaloptix-setup"  # internal-ref-ok
+    / "scripts/eac1/data",  # internal-ref-ok
     Path(__file__).parents[3]
     / "hwo-mission-control/burn/physicaloptix-setup"  # internal-ref-ok
     / "scripts/eac1_dlux/data",  # internal-ref-ok
