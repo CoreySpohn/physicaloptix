@@ -934,7 +934,9 @@ class SpeckleProcess(eqx.Module):
         """
         if self.wavelengths_nm is not None:
             raise NotImplementedError(
-                "moments is monochromatic; select a channel's (e_nom, G) first"
+                "moments is monochromatic; select a channel's (e_nom, G) "
+                "first, or use cross_band_moments for the joint band "
+                "statistics"
             )
         rms2 = self.per_mode_rms**2
         gamma = jnp.einsum("k,kyx->yx", rms2, jnp.abs(self.G) ** 2)

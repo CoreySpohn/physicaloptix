@@ -157,6 +157,7 @@ examples/07_Instrument_Subsystems
 
 explanation/architecture
 explanation/related-work
+explanation/cross-band-statistics
 ```
 
 ```{toctree}
