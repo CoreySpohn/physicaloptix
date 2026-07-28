@@ -27,6 +27,7 @@ from physicaloptix.apertures import (
     rasterize_primary,
     rasterize_segments,
 )
+from physicaloptix.coatings import multilayer_response, sellmeier, thickness_kernel
 from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
 from physicaloptix.detector import read_detector
 from physicaloptix.diagnostics import mft_sampling_parameter
@@ -115,6 +116,7 @@ __all__ = [
     "linearize_shared",
     "load_primary_yaml",
     "mft_sampling_parameter",
+    "multilayer_response",
     "ncpa_differential_opd",
     "normalize_unit_energy",
     "pastis_matrix",
@@ -126,6 +128,8 @@ __all__ = [
     "render_path",
     "save_psflet_pack",
     "segment_ptt_basis",
+    "sellmeier",
     "telescope_peak",
+    "thickness_kernel",
     "zernike_basis",
 ]
