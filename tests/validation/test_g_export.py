@@ -131,6 +131,21 @@ class TestGExportReproduction:
             float(tele.max()), float(dense_export["tele_peak"]), rtol=1e-12
         )
 
+    def test_export_records_photometric_primitives(
+        self, dense_export, aavc_speckle_path
+    ):
+        """The canonical export must carry the seam primitives, not only the
+        derived peak: consumers reconstruct the flux-fraction normalization
+        from input_energy and pixel_scale_lod. The stored energy is anchored
+        against field.energy() of the same bare pupil."""
+        _, field, _, science_grid = aavc_speckle_path
+        assert "input_energy" in dense_export.files
+        assert "pixel_scale_lod" in dense_export.files
+        np.testing.assert_allclose(
+            float(dense_export["input_energy"]), float(field.energy()), rtol=1e-12
+        )
+        assert float(dense_export["pixel_scale_lod"]) == pytest.approx(science_grid.dx)
+
     def test_linearize_reproduces_g_columns(self, dense_export, aavc_speckle_path):
         path, field, pupil_grid, _ = aavc_speckle_path
         amp = jnp.abs(field.data)

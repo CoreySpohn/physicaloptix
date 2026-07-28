@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from physicaloptix.core import Field, Grid, PlaneKind
+from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
 from physicaloptix.elements import ModeBasis, SampledOptic
 from physicaloptix.linearize import linearity_residual
 from physicaloptix.path import OpticalPath, Stage
@@ -94,15 +94,20 @@ class TestLinearizationProduct:
         assert lin.wavelength_nm == WL_NM
         assert lin.method in ("analytic", "jvp", "jacfwd")
 
-    def test_stamps_focal_pixel_scale_and_carries_it_to_speckle(self, setup):
-        """linearize records the output plane's real pixel scale, and
-        to_speckle_process carries it through instead of the 0.25 default -- so
-        the speckle/coronagraph plate-scale equality can be checked downstream."""
+    def test_stamps_primitives_and_carries_them_to_speckle(self, setup):
+        """linearize records the output pixel scale AND the input energy, and
+        to_speckle_process derives the flux-fraction normalization from them
+        -- so the speckle/coronagraph plate-scale and photometry equalities
+        can be checked downstream."""
         path, field, basis = setup
         lin = path.linearize(field, basis, wavelength_nm=WL_NM)
         assert lin.pixel_scale_lod == 0.5  # the focal grid's dx
-        proc = lin.to_speckle_process(normalization=1.0, per_mode_rms=1.0, knee_hz=1e-3)
+        assert lin.input_energy == pytest.approx(float(field.energy()))
+        proc = lin.to_speckle_process(per_mode_rms=1.0, knee_hz=1e-3)
         assert proc.pixel_scale_lod == 0.5
+        assert float(proc.normalization) == pytest.approx(
+            float(field.energy()) / 0.5**2
+        )
 
     def test_auto_resolves_by_memory_budget(self, setup):
         path, field, basis = setup
@@ -136,9 +141,7 @@ class TestSpeckleBridge:
     def test_to_speckle_process_round_trip(self, setup):
         path, field, basis = setup
         lin = path.linearize(field, basis, wavelength_nm=WL_NM)
-        process = lin.to_speckle_process(
-            normalization=1.0, decorr_hours=1.0, total_rms=0.01
-        )
+        process = lin.to_speckle_process(decorr_hours=1.0, total_rms=0.01)
         assert isinstance(process, SpeckleProcess)
         np.testing.assert_array_equal(np.asarray(process.G), np.asarray(lin.G))
         speckle_field = process.draw(jax.random.PRNGKey(0))
@@ -173,3 +176,38 @@ class TestAmplitudeKind:
         rng = np.random.default_rng(0)
         eps = 0.05 * jnp.asarray(rng.standard_normal(4))
         assert linearity_residual(path, field, amp, lin, eps) < 1e-12
+
+
+def test_realize_is_flux_fraction_end_to_end(setup):
+    """The absolute-scale anchor at the linearize -> speckle -> consumer
+    seam: a drawn field's realize() equals the flux fraction computed
+    independently from the primitives (input energy, pixel area), with no
+    stored ratio anywhere. Scale- and convention-visible by construction."""
+    path, field, basis = setup
+    lin = path.linearize(field, basis, wavelength_nm=WL_NM)
+    process = lin.to_speckle_process(per_mode_rms=0.01, knee_hz=1e-3)
+    drawn = process.draw(jax.random.PRNGKey(0))
+    t = 30.0
+    got = drawn.realize(wavelength_nm=WL_NM, time_s=t)
+    g_eps = jnp.tensordot(drawn._eps(t), lin.G, axes=1)
+    du2 = 0.5**2  # the focal grid's cell area, from the fixture
+    e_in = float(field.energy())
+    expected = jnp.abs(g_eps) ** 2 * du2 / e_in
+    np.testing.assert_allclose(
+        np.asarray(got), np.asarray(expected), rtol=0, atol=1e-15
+    )
+
+
+def test_rejects_chromatic_field(setup):
+    """linearize is monochromatic; a chromatic field must raise, not silently
+    apply the design-wavelength phase factor to every channel."""
+    path, field, basis = setup
+    spectrum = Spectrum.tophat(500.0, 0.2, 3)
+    chrom = Field(
+        data=jnp.broadcast_to(field.data, (3, *field.data.shape)),
+        grid=field.grid,
+        plane=field.plane,
+        spectrum=spectrum,
+    )
+    with pytest.raises(ValueError, match="monochromatic"):
+        path.linearize(chrom, basis, wavelength_nm=500.0)

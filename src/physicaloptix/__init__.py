@@ -67,6 +67,7 @@ from physicaloptix.speckle import (
     SpeckleMoments,
     SpeckleProcess,
     lambda_scaled_channels,
+    telescope_peak,
 )
 from physicaloptix.system import BeamSplitter, Branch, OpticalSystem, SplitterPort
 from physicaloptix.transforms import Fraunhofer, Fresnel, cmft_bwd, cmft_fwd
@@ -125,5 +126,6 @@ __all__ = [
     "render_path",
     "save_psflet_pack",
     "segment_ptt_basis",
+    "telescope_peak",
     "zernike_basis",
 ]

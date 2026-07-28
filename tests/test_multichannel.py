@@ -139,6 +139,8 @@ class TestLinearizeShared:
         system, field, _basis = _entrance_system()
         mcl = linearize_shared(system, field, wavelength_nm=WL, shared_stage="screen")
         assert set(mcl.names) == {"sci", "wfs"}
+        # the shared photometric primitive is recorded once for all channels
+        assert mcl.input_energy == pytest.approx(float(field.energy()))
         for name in mcl.names:
             truth = _true_channel_jacobian(system, field, name, "screen")
             got = mcl[name].g_shared

@@ -45,6 +45,11 @@ class Linearization(eqx.Module):
         pixel_scale_lod: The output plane's pixel scale (lambda/D per pixel for
             a focal output) -- the grid ``e_nom`` / ``G`` are sampled on, so a
             speckle field built from this product carries its true plate scale.
+        input_energy: Total energy of the input field at the plane the
+            linearization was built from (``field.energy()``): the
+            pre-coronagraph photometric reference that, with
+            ``pixel_scale_lod``, converts intensity densities to per-pixel
+            flux fractions.
     """
 
     e_nom: Array
@@ -53,6 +58,7 @@ class Linearization(eqx.Module):
     method: str = eqx.field(static=True)
     kind: str = eqx.field(static=True)
     pixel_scale_lod: float = eqx.field(static=True)
+    input_energy: float = eqx.field(static=True)
 
     @property
     def n_modes(self):
@@ -62,7 +68,6 @@ class Linearization(eqx.Module):
     def to_speckle_process(
         self,
         *,
-        normalization,
         per_mode_rms=None,
         knee_hz=None,
         decorr_hours=None,
@@ -73,11 +78,14 @@ class Linearization(eqx.Module):
 
         Either give the process parameters directly (``per_mode_rms`` +
         ``knee_hz``) or the decorrelation parameterization
-        (``decorr_hours`` + ``total_rms``).
+        (``decorr_hours`` + ``total_rms``). The process inherits the recorded
+        photometric primitives (``input_energy``, ``pixel_scale_lod``), so
+        realized maps are per-pixel flux fractions with no further input;
+        pass ``input_energy=...`` explicitly to re-reference (e.g. when a
+        coronagraph mask was baked into the input field instead of living in
+        the path).
 
         Args:
-            normalization: Intensity that maps to unit contrast (the
-                telescope PSF peak the focal field is referenced to).
             per_mode_rms: Per-mode rms drift (with ``knee_hz``).
             knee_hz: Temporal PSD knee frequency (with ``per_mode_rms``).
             decorr_hours: Decorrelation time (with ``total_rms``).
@@ -89,13 +97,13 @@ class Linearization(eqx.Module):
             ``AnalyticSpeckleField`` realizations.
         """
         kwargs.setdefault("pixel_scale_lod", self.pixel_scale_lod)
+        kwargs.setdefault("input_energy", self.input_energy)
         if decorr_hours is not None:
             return SpeckleProcess.from_decorrelation(
                 self.e_nom,
                 self.G,
                 decorr_hours=decorr_hours,
                 total_rms=total_rms,
-                normalization=normalization,
                 **kwargs,
             )
         return SpeckleProcess(
@@ -103,7 +111,6 @@ class Linearization(eqx.Module):
             self.G,
             per_mode_rms,
             knee_hz,
-            normalization,
             **kwargs,
         )
 
@@ -168,6 +175,11 @@ def linearize(
     Returns:
         A ``Linearization``.
     """
+    if field.spectrum is not None:
+        raise ValueError(
+            "linearize is monochromatic: got a chromatic field; run it per "
+            "sub-band on each wavelength slice"
+        )
     e_nom_field, _ = path.propagate(field)
     n_modes = basis.n_modes
 
@@ -221,6 +233,7 @@ def linearize(
         method=resolved,
         kind=basis.kind,
         pixel_scale_lod=float(e_nom_field.grid.dx),
+        input_energy=float(field.energy()),
     )
 
 

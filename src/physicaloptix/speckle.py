@@ -4,8 +4,11 @@
 generator -- a complex nominal focal field ``E_nom``, a complex wavefront-error
 sensitivity ``G = d(E_focal)/d(mode)``, and a temporal model for the drifting mode
 coefficients ``eps(t)`` -- behind optixstuff's :class:`AbstractSpeckleField`. It
-realizes ``I(t) = |E_nom + G eps(t)|^2`` as a contrast map for coronagraphoto's
-speckle path.
+realizes ``I(t) = |E_nom + G eps(t)|^2`` as a per-pixel flux-fraction map for
+coronagraphoto's speckle path, carrying the photometric primitives (input pupil
+energy, output pixel scale) rather than a pre-derived scalar; peak-referenced
+contrast is a derived view (:meth:`AnalyticSpeckleField.peak_contrast` with
+:func:`telescope_peak`).
 
 The ingredients come from a physical-optics propagation of a specific design (e.g.
 the EAC-1 AAVC): ``G`` carries the coronagraphic PSF morphology because it is
@@ -26,7 +29,30 @@ import jax.numpy as jnp
 from jaxtyping import Array
 from optixstuff.speckle import AbstractSpeckleField
 
+from physicaloptix.transforms.fraunhofer import Fraunhofer
+
 J2000_JD = 2451545.0
+
+
+def telescope_peak(field, grid_out):
+    """Peak intensity density of the unocculted telescope PSF.
+
+    Propagates ``field`` (monochromatic, pupil plane) through a bare
+    Fraunhofer transform to ``grid_out`` and returns the maximum intensity
+    density -- the caller-side reference that converts flux-fraction maps to
+    peak-referenced contrast (:meth:`AnalyticSpeckleField.peak_contrast`).
+    Computed on the grid in use because the sampled peak value depends on the
+    pixel scale; do not cache it across grids.
+
+    Args:
+        field: The unocculted aperture ``Field`` at the pupil plane.
+        grid_out: The focal ``Grid`` the peak is sampled on.
+
+    Returns:
+        The peak intensity density as a float.
+    """
+    transform = Fraunhofer(field.grid, grid_out)
+    return float(jnp.max(transform(field).intensity()))
 
 
 def lambda_scaled_channels(e_nom, G, reference_wavelength_nm, wavelengths_nm):
@@ -58,7 +84,7 @@ def lambda_scaled_channels(e_nom, G, reference_wavelength_nm, wavelengths_nm):
     return e_stack, g_stack
 
 
-def _check_chromatic_layout(e_nom, G, normalization, wavelengths_nm):
+def _check_chromatic_layout(e_nom, G, input_energy, wavelengths_nm):
     """Validate mono ``(y,x)/(m,y,x)`` or chromatic ``(w,...)`` ingredients."""
     if wavelengths_nm is None:
         if e_nom.ndim != 2 or G.ndim != 3:
@@ -67,10 +93,10 @@ def _check_chromatic_layout(e_nom, G, normalization, wavelengths_nm):
                 f"(m, y, x); got {e_nom.shape} and {G.shape} (set "
                 "wavelengths_nm for a chromatic field)"
             )
-        if normalization.ndim != 0:
+        if input_energy.ndim != 0:
             raise ValueError(
-                "monochromatic normalization must be a scalar, got shape "
-                f"{normalization.shape}"
+                "monochromatic input_energy must be a scalar, got shape "
+                f"{input_energy.shape}"
             )
         return
     w = wavelengths_nm.shape[0]
@@ -79,12 +105,12 @@ def _check_chromatic_layout(e_nom, G, normalization, wavelengths_nm):
             f"chromatic ingredients must be e_nom (w, y, x) and G "
             f"(w, m, y, x) with w == {w}; got {e_nom.shape} and {G.shape}"
         )
-    if normalization.ndim not in (0, 1) or (
-        normalization.ndim == 1 and normalization.shape[0] != w
+    if input_energy.ndim not in (0, 1) or (
+        input_energy.ndim == 1 and input_energy.shape[0] != w
     ):
         raise ValueError(
-            f"chromatic normalization must be a scalar or shape ({w},); "
-            f"got {normalization.shape}"
+            f"chromatic input_energy must be a scalar or shape ({w},); "
+            f"got {input_energy.shape}"
         )
 
 
@@ -100,14 +126,20 @@ def _select_channel(e_nom, G, normalization, wavelengths_nm, wavelength_nm):
 class AnalyticSpeckleField(AbstractSpeckleField):
     """Time-driven speckle field from frozen ``E_nom`` / ``G`` / ``eps(t)``.
 
-    :meth:`realize` returns the contrast delta -- the wavefront-error excess
-    over the deterministic floor, i.e. ``(I(t) - |E_nom|^2) / normalization``
-    -- never the floor itself, so it adds cleanly on top of the coronagraph's
-    ``stellar_intens`` in ``coronagraphoto.speckle_rate``. With
-    ``coherent=False`` (default) it returns the strictly positive incoherent
-    halo ``|G eps|^2 / normalization`` (no pinning); with ``coherent=True`` it
-    adds the cross term ``2 Re(E_nom* . G eps)``, which carries the bright-tail
-    speckle pinning and needs the complex ``E_nom``.
+    :meth:`realize` returns the per-pixel flux-fraction delta -- the
+    wavefront-error excess over the deterministic floor, i.e.
+    ``(I(t) - |E_nom|^2) * du^2 / E_in`` -- never the floor itself, so it adds
+    cleanly on top of the coronagraph's ``stellar_intens`` (itself a
+    flux-fraction map) in ``coronagraphoto.speckle_rate``, honoring the
+    optixstuff :class:`AbstractSpeckleField` contract. The photometric
+    primitives are stored (``input_energy`` = ``E_in``, ``pixel_scale_lod`` =
+    ``du``) and the divisor ``normalization = input_energy /
+    pixel_scale_lod**2`` is derived once at construction, so the hot path
+    carries no unit branching; peak-referenced contrast is the derived view
+    :meth:`peak_contrast`. With ``coherent=False`` (default) the delta is the
+    strictly positive incoherent halo ``|G eps|^2`` (no pinning); with
+    ``coherent=True`` it adds the cross term ``2 Re(E_nom* . G eps)``, which
+    carries the bright-tail speckle pinning and needs the complex ``E_nom``.
 
     Monochromatic by default: ``G`` / ``E_nom`` are at the design wavelength
     and ``realize`` ignores its ``wavelength_nm`` argument. With
@@ -126,6 +158,7 @@ class AnalyticSpeckleField(AbstractSpeckleField):
     amplitudes: Array  # float (m, f): per-mode spectral amplitudes a_kj
     frequencies_hz: Array  # float (f,) shared or (m, f) per-mode: frequencies f_j
     phases: Array  # float (m, f): per-mode random phases phi_kj
+    input_energy: Array
     normalization: Array
     pixel_scale_lod: float
     epoch_jd: float
@@ -139,8 +172,8 @@ class AnalyticSpeckleField(AbstractSpeckleField):
         amplitudes,
         frequencies_hz,
         phases,
-        normalization,
         *,
+        input_energy,
         pixel_scale_lod=0.25,
         epoch_jd=J2000_JD,
         coherent=False,
@@ -159,9 +192,12 @@ class AnalyticSpeckleField(AbstractSpeckleField):
                 (shared across modes) or ``(m, f)`` (per-mode grids, which
                 ``_eps`` broadcasts against the ``(m, f)`` phases unchanged).
             phases: Per-mode random phases ``phi_kj``, shape ``(m, f)``.
-            normalization: Intensity that maps to unit contrast (the telescope
-                PSF peak the focal field is referenced to); a scalar, or one
-                value per channel for a chromatic field.
+            input_energy: Total energy of the field handed to the coronagraph
+                train at the pre-coronagraph reference plane
+                (``field.energy()``: ``sum(|E|^2)`` times the pupil cell
+                area); a scalar, or one value per channel for a chromatic
+                field. ``linearize`` records it as
+                ``Linearization.input_energy``.
             pixel_scale_lod: Native pixel scale in lambda/D per pixel
                 (shared by every channel: the maps live in lambda/D units,
                 where the morphology is achromatic).
@@ -177,8 +213,14 @@ class AnalyticSpeckleField(AbstractSpeckleField):
         self.amplitudes = amplitudes
         self.frequencies_hz = frequencies_hz
         self.phases = phases
-        self.normalization = jnp.asarray(normalization, dtype=float)
+        self.input_energy = jnp.asarray(input_energy, dtype=float)
         self.pixel_scale_lod = pixel_scale_lod
+        # Derived once, eagerly: realize() divides by one stored value, so the
+        # jitted hot path carries no unit branching, and the primitives stay
+        # recorded for export / the peak_contrast view. tree_at on
+        # input_energy does not re-derive this; rebuild the field to change
+        # photometry.
+        self.normalization = self.input_energy / pixel_scale_lod**2
         self.epoch_jd = epoch_jd
         self.wavelengths_nm = (
             None if wavelengths_nm is None else jnp.asarray(wavelengths_nm, dtype=float)
@@ -188,7 +230,7 @@ class AnalyticSpeckleField(AbstractSpeckleField):
     def __check_init__(self):
         """Validate the (chromatic) ingredient layout."""
         _check_chromatic_layout(
-            self.e_nom, self.G, self.normalization, self.wavelengths_nm
+            self.e_nom, self.G, self.input_energy, self.wavelengths_nm
         )
 
     def _eps(self, time_s):
@@ -198,7 +240,7 @@ class AnalyticSpeckleField(AbstractSpeckleField):
         return jnp.sum(self.amplitudes * jnp.cos(phase), axis=-1)
 
     def realize(self, *, wavelength_nm, time_s=0.0):
-        """Speckle contrast delta at ``time_s`` (see class docstring)."""
+        """Per-pixel flux-fraction delta at ``time_s`` (see class docstring)."""
         e_nom, g, normalization = _select_channel(
             self.e_nom, self.G, self.normalization, self.wavelengths_nm, wavelength_nm
         )
@@ -211,6 +253,36 @@ class AnalyticSpeckleField(AbstractSpeckleField):
         else:
             delta = jnp.abs(g_eps) ** 2
         return delta / normalization
+
+    def peak_contrast(self, *, telescope_peak, wavelength_nm, time_s=0.0):
+        """The :meth:`realize` map as peak-referenced contrast (a view).
+
+        Contrast curves are quoted against the unocculted telescope PSF peak;
+        this rescales the per-pixel flux fraction by
+        ``normalization / telescope_peak`` (the stored primitives make the
+        conversion exact). Get ``telescope_peak`` from
+        :func:`telescope_peak` on the grid actually in use -- the peak-pixel
+        value is sampling-dependent, which is why it is never stored.
+
+        Args:
+            telescope_peak: Peak intensity density of the unocculted
+                telescope PSF on this field's grid.
+            wavelength_nm: Wavelength in nanometres (chromatic fields select
+                the nearest channel, as in :meth:`realize`).
+            time_s: Time since ``epoch_jd`` in seconds.
+
+        Returns:
+            2D contrast-delta array (dimensionless, peak-referenced).
+        """
+        _, _, norm = _select_channel(
+            self.e_nom,
+            self.G,
+            self.normalization,
+            self.wavelengths_nm,
+            wavelength_nm,
+        )
+        delta = self.realize(wavelength_nm=wavelength_nm, time_s=time_s)
+        return delta * norm / telescope_peak
 
     def broadened(self, *, reference_wavelength_nm, wavelengths_nm):
         """A chromatic copy under the lambda-scaling approximation.
@@ -237,7 +309,7 @@ class AnalyticSpeckleField(AbstractSpeckleField):
             self.amplitudes,
             self.frequencies_hz,
             self.phases,
-            self.normalization,
+            input_energy=self.input_energy,
             pixel_scale_lod=self.pixel_scale_lod,
             epoch_jd=self.epoch_jd,
             coherent=self.coherent,
@@ -249,15 +321,15 @@ class SpeckleMoments(eqx.Module):
     """Closed-form ensemble moments of a :class:`SpeckleProcess` contrast field.
 
     The frozen output of :meth:`SpeckleProcess.moments`: the per-pixel mean and
-    variance maps of the contrast delta (in contrast units), the raw kernels
-    they are built from (``Gamma``, the complex pseudo-covariance ``P``, and
-    the pinning-quadrature variance ``Var(X)``, in the field's intensity
-    units), and -- when a dark-zone mask is supplied -- the mask-averaged mean
-    and variance.
+    variance maps of the flux-fraction delta (the units :meth:`realize`
+    returns), the raw kernels they are built from (``Gamma``, the complex
+    pseudo-covariance ``P``, and the pinning-quadrature variance ``Var(X)``,
+    in the field's intensity units), and -- when a dark-zone mask is supplied
+    -- the mask-averaged mean and variance.
     """
 
-    mean_map: Array  # E[delta] per pixel (contrast units)
-    var_map: Array  # Var[delta] per pixel (contrast units^2)
+    mean_map: Array  # E[delta] per pixel (flux-fraction units)
+    var_map: Array  # Var[delta] per pixel (flux-fraction units^2)
     gamma_map: Array  # Gamma = sum_k rms_k^2 |g_k|^2 (real, >= 0)
     p_map: Array  # P = sum_k rms_k^2 g_k^2 (complex pseudo-covariance)
     var_x_map: Array  # Var(X), the pinning-quadrature variance
@@ -307,7 +379,8 @@ class SpeckleProcess(eqx.Module):
     per_mode_rms: Array  # float (m,): rms drift per mode
     knee_hz: Array  # float (m,): per-mode temporal PSD knee
     slope: Array  # float (m,): per-mode high-frequency PSD slope
-    normalization: float
+    input_energy: Array
+    normalization: Array
     pixel_scale_lod: float
     epoch_jd: float
     coherent: bool = eqx.field(static=True)
@@ -323,8 +396,8 @@ class SpeckleProcess(eqx.Module):
         G,
         per_mode_rms,
         knee_hz,
-        normalization,
         *,
+        input_energy,
         slope=-2.0,
         pixel_scale_lod=0.25,
         epoch_jd=J2000_JD,
@@ -345,7 +418,11 @@ class SpeckleProcess(eqx.Module):
                 (``1 / (2 pi tau)`` for a decorrelation time ``tau``);
                 scalar (shared by every mode) or shape ``(m,)`` for
                 per-mode timescales.
-            normalization: Intensity that maps to unit contrast.
+            input_energy: Total energy of the field handed to the coronagraph
+                train at the pre-coronagraph reference plane
+                (``field.energy()``); the flux-fraction normalization
+                ``input_energy / pixel_scale_lod**2`` is derived once at
+                construction.
             slope: High-frequency PSD power-law slope. Default -2; scalar
                 or shape ``(m,)`` for per-mode slopes.
             pixel_scale_lod: Native pixel scale in lambda/D per pixel.
@@ -379,7 +456,11 @@ class SpeckleProcess(eqx.Module):
             bool(jnp.all(self.knee_hz == self.knee_hz[0]))
             and bool(jnp.all(self.slope == self.slope[0]))
         )
-        self.normalization = normalization
+        self.input_energy = jnp.asarray(input_energy, dtype=float)
+        # Derived once, eagerly, from the stored primitives (see
+        # AnalyticSpeckleField.__init__); tree_at on input_energy does not
+        # re-derive it.
+        self.normalization = self.input_energy / pixel_scale_lod**2
         self.pixel_scale_lod = pixel_scale_lod
         self.epoch_jd = epoch_jd
         self.coherent = coherent
@@ -401,6 +482,11 @@ class SpeckleProcess(eqx.Module):
                     f"{name} has shape {value.shape}; expected {m} to match "
                     "G's mode axis"
                 )
+        if self.input_energy.ndim != 0:
+            raise ValueError(
+                "input_energy must be a scalar for a monochromatic process, "
+                f"got shape {self.input_energy.shape}"
+            )
 
     @classmethod
     def from_decorrelation(
@@ -410,7 +496,7 @@ class SpeckleProcess(eqx.Module):
         *,
         decorr_hours,
         total_rms,
-        normalization,
+        input_energy,
         **kwargs,
     ):
         """Parameterize by decorrelation time and a total WFE budget.
@@ -426,7 +512,7 @@ class SpeckleProcess(eqx.Module):
             G,
             total_rms / jnp.sqrt(float(m)),
             1.0 / (2.0 * jnp.pi * tau_s),
-            normalization,
+            input_energy=input_energy,
             **kwargs,
         )
 
@@ -635,7 +721,7 @@ class SpeckleProcess(eqx.Module):
             amp,
             f,
             phases,
-            normalization=self.normalization,
+            input_energy=self.input_energy,
             pixel_scale_lod=self.pixel_scale_lod,
             epoch_jd=self.epoch_jd,
             coherent=self.coherent,
@@ -685,7 +771,7 @@ class SpeckleProcess(eqx.Module):
         return jax.lax.map(kappa_of, weights)
 
     def moments(self, *, mask=None, renormalized=False) -> "SpeckleMoments":
-        """Closed-form ensemble moments of the contrast ``realize`` returns.
+        """Closed-form ensemble moments of the delta ``realize`` returns.
 
         Implements the improper (non-circular) complex-Gaussian moment
         theorem for the diagonal modal covariance ``C_a = diag(rms_k^2)``:

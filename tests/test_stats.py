@@ -90,7 +90,7 @@ class TestMonteCarloConsistency:
             g,
             per_mode_rms=rms,
             knee_hz=1e-3,
-            normalization=1.0,
+            input_energy=0.25**2,  # derived normalization 1.0 at default du
         )
         keys = jax.random.split(jax.random.PRNGKey(0), 400)
         # Each draw is one frozen realization; sample its eps at a fixed time.

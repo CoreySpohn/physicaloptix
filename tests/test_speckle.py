@@ -15,6 +15,11 @@ _DIMS, _M, _F = 8, 3, 4
 _EPOCH_JD = 2451545.0
 
 
+def _e_in(norm, du=0.25):
+    """input_energy that makes the derived normalization equal ``norm``."""
+    return norm * du * du
+
+
 class _MockCoro(ox.AbstractScalarCoronagraph):
     """Minimal coronagraph so OpticalPath.from_default_setup has a backend."""
 
@@ -53,7 +58,7 @@ def _field(coherent=False):
         amplitudes,
         frequencies_hz,
         phases,
-        normalization=10.0,
+        input_energy=_e_in(10.0),
         pixel_scale_lod=0.25,
         epoch_jd=_EPOCH_JD,
         coherent=coherent,
@@ -110,7 +115,7 @@ class TestRealize:
             1e-9 * jnp.ones((m, f)),  # eps ~ 1e-9, so g_eps ~ 1e-9 << |E_nom|
             jnp.array([1e-3]),
             jnp.zeros((m, f)),
-            normalization=1.0,
+            input_energy=_e_in(1.0),
             coherent=True,
         )
         delta = field.realize(wavelength_nm=1000.0, time_s=0.0)
@@ -164,7 +169,7 @@ class TestSpeckleProcess:
             G=g,
             per_mode_rms=0.1,
             knee_hz=1e-4,
-            normalization=10.0,
+            input_energy=_e_in(10.0),
             pixel_scale_lod=0.25,
             epoch_jd=_EPOCH_JD,
         )
@@ -177,6 +182,7 @@ class TestSpeckleProcess:
         assert isinstance(field, AnalyticSpeckleField)
         assert jnp.array_equal(field.e_nom, proc.e_nom)
         assert jnp.array_equal(field.G, proc.G)
+        assert jnp.array_equal(field.input_energy, proc.input_energy)
         assert field.normalization == proc.normalization
         assert field.pixel_scale_lod == proc.pixel_scale_lod
         assert field.epoch_jd == proc.epoch_jd
@@ -228,7 +234,7 @@ class TestSpeckleProcess:
             G=proc.G,
             decorr_hours=10.0,
             total_rms=0.3,
-            normalization=proc.normalization,
+            input_energy=proc.input_energy,
         )
         tau_s = 10.0 * 3600.0
         # knee_hz broadcasts to (m,) now (per-mode timescales are expressible).
@@ -308,7 +314,7 @@ class TestChromaticField:
                 mono.amplitudes,
                 mono.frequencies_hz,
                 mono.phases,
-                normalization=1.0,
+                input_energy=_e_in(1.0),
                 wavelengths_nm=[500.0, 600.0],
             )
         except ValueError as err:
@@ -352,7 +358,7 @@ def _small_process(m=_M, dims=_DIMS, **kwargs):
     g = jax.random.normal(k3, (m, dims, dims)) + 1j * jax.random.normal(
         k4, (m, dims, dims)
     )
-    defaults = dict(per_mode_rms=0.1, knee_hz=1e-4, normalization=10.0)
+    defaults = dict(per_mode_rms=0.1, knee_hz=1e-4, input_energy=_e_in(10.0))
     defaults.update(kwargs)
     return SpeckleProcess(e_nom, g, **defaults)
 
@@ -546,7 +552,12 @@ def _oracle_process(coherent, m=6, dims=8):
     )
     rms = jnp.asarray(np.linspace(0.02, 0.08, m))
     return SpeckleProcess(
-        e_nom, g, per_mode_rms=rms, knee_hz=1e-3, normalization=5.0, coherent=coherent
+        e_nom,
+        g,
+        per_mode_rms=rms,
+        knee_hz=1e-3,
+        input_energy=_e_in(5.0),
+        coherent=coherent,
     )
 
 
@@ -658,7 +669,7 @@ class TestMoments:
             g,
             per_mode_rms=0.1,
             knee_hz=1e-3,
-            normalization=1.0,
+            input_energy=_e_in(1.0),
             slope=0.0,
             n_freq=32,
             df_weighted=False,
@@ -876,3 +887,93 @@ class TestRealizedSpectrum:
         ordinate = _small_process(knee_hz=self.KNEE, df_weighted=False)
         spec = self._intended_csdf(correct)
         assert np.abs(self._realized_csdf(ordinate) - spec).max() > 0.30
+
+
+class TestFluxFractionNormalization:
+    """The seam contract: primitives in, per-pixel flux fraction out."""
+
+    def test_normalization_derived_from_primitives(self):
+        sp = _field()
+        assert jnp.allclose(sp.normalization, sp.input_energy / 0.25**2)
+
+    def test_removed_kwarg_breaks_loudly(self):
+        """The legacy peak-referenced kwarg must raise, never mis-scale."""
+        from physicaloptix import SpeckleProcess
+
+        sp = _field()
+        with pytest.raises(TypeError):
+            AnalyticSpeckleField(
+                sp.e_nom,
+                sp.G,
+                sp.amplitudes,
+                sp.frequencies_hz,
+                sp.phases,
+                normalization=10.0,
+            )
+        with pytest.raises(TypeError):
+            SpeckleProcess(sp.e_nom, sp.G, 0.1, 1e-4, normalization=10.0)
+
+    def test_realize_is_flux_fraction_of_primitives(self):
+        """realize == raw intensity delta * du^2 / E_in, from primitives."""
+        sp = _field()
+        t = 10.0
+        g_eps = jnp.tensordot(sp._eps(t), sp.G, axes=1)
+        expected = jnp.abs(g_eps) ** 2 * 0.25**2 / sp.input_energy
+        got = sp.realize(wavelength_nm=1000.0, time_s=t)
+        np.testing.assert_allclose(
+            np.asarray(got), np.asarray(expected), rtol=0, atol=1e-15
+        )
+
+    def test_peak_contrast_is_the_rescaled_view(self):
+        sp = _field(coherent=True)
+        frac = sp.realize(wavelength_nm=1000.0, time_s=5.0)
+        peak = 0.7  # any caller-supplied telescope peak intensity density
+        contrast = sp.peak_contrast(
+            telescope_peak=peak, wavelength_nm=1000.0, time_s=5.0
+        )
+        np.testing.assert_allclose(
+            np.asarray(contrast),
+            np.asarray(frac * sp.normalization / peak),
+            rtol=0,
+            atol=1e-15,
+        )
+
+    def test_peak_contrast_selects_the_channel_normalization(self):
+        chrom = _field().broadened(
+            reference_wavelength_nm=1000.0, wavelengths_nm=[500.0, 1000.0]
+        )
+        a = chrom.peak_contrast(telescope_peak=0.7, wavelength_nm=500.0, time_s=5.0)
+        b = chrom.realize(wavelength_nm=500.0, time_s=5.0)
+        np.testing.assert_allclose(
+            np.asarray(a),
+            np.asarray(b * chrom.normalization / 0.7),
+            rtol=0,
+            atol=1e-15,
+        )
+
+
+class TestTelescopePeak:
+    """Anchor against an independent numpy DFT (sign- and scale-visible)."""
+
+    def test_matches_brute_force_dft(self):
+        from physicaloptix import telescope_peak
+        from physicaloptix.core import Field, Grid, PlaneKind
+
+        npup = 24
+        pupil_grid = Grid.pupil(npup)
+        focal_grid = Grid.focal(32, 0.25)
+        x = np.asarray(pupil_grid.coords)
+        xx, yy = np.meshgrid(x, x)
+        disk = ((xx**2 + yy**2) <= 0.25).astype(float)
+        field = Field(
+            data=jnp.asarray(disk).astype(complex),
+            grid=pupil_grid,
+            plane=PlaneKind.PUPIL,
+        )
+        # independent oracle: forward kernel e^{-2 i pi u x}, weights dx^2
+        u = np.asarray(focal_grid.coords)
+        kernel = np.exp(-2j * np.pi * np.outer(u, x))
+        e = kernel @ disk @ kernel.T * pupil_grid.dx**2
+        expected = float((np.abs(e) ** 2).max())
+        got = telescope_peak(field, focal_grid)
+        np.testing.assert_allclose(got, expected, rtol=0, atol=1e-12)

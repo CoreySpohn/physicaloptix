@@ -61,11 +61,16 @@ class MultiChannelLinearization(eqx.Module):
         channels: One ``ChannelLinearization`` per branch.
         wavelength_nm: Design wavelength of the phase factor.
         kind: The shared basis kind (``"opd"`` or ``"amplitude"``).
+        input_energy: Total energy of the shared entrance field
+            (``field.energy()``) -- one photometric reference for every
+            channel; each channel pairs it with its own ``pixel_scale_lod``
+            to derive that channel's flux-fraction normalization.
     """
 
     channels: tuple
     wavelength_nm: float = eqx.field(static=True)
     kind: str = eqx.field(static=True)
+    input_energy: float = eqx.field(static=True)
 
     @property
     def names(self):
@@ -177,6 +182,7 @@ def linearize_shared(
         channels=tuple(channels),
         wavelength_nm=float(wavelength_nm),
         kind=basis.kind,
+        input_energy=float(field.energy()),
     )
 
 
