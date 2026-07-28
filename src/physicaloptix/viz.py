@@ -201,7 +201,13 @@ def render_path(
             or panel_norm
             or log_norm(max(inten.max() * 1e-8, inten[inten > 0].min()), inten.max())
         )
-        ax.imshow(inten, norm=norm, extent=st["extent"], interpolation="nearest")
+        ax.imshow(
+            inten,
+            norm=norm,
+            extent=st["extent"],
+            interpolation="nearest",
+            origin="lower",
+        )
         ax.set_xticks([])
         ax.set_yticks([])
         ax.set_xlabel(
@@ -218,6 +224,7 @@ def render_path(
                 vmax=np.pi,
                 extent=st["extent"],
                 interpolation="nearest",
+                origin="lower",
             )
             axp.set_xticks([])
             axp.set_yticks([])
