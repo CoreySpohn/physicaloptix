@@ -376,7 +376,7 @@ class CrossBandMoments(eqx.Module):
     (``P`` is the pseudo-covariance -- the phase-sensitive correlation of the
     improper complex Gaussian field; it vanishes for circular statistics but
     not in general) and the intensity-level covariance is the complex Gaussian
-    moment theorem, exact and noncentral:
+    moment theorem, exact and noncentral::
 
         N_i N_j Cov[delta_i, delta_j] = |Gamma_ij|^2 + |P_ij|^2
             + 2 Re[conj(A_i) A_j Gamma_ij + conj(A_i) conj(A_j) P_ij]
@@ -1064,20 +1064,23 @@ class SpeckleProcess(eqx.Module):
         ``Cov[delta(band i, pixel p, t), delta(band j, pixel q, t + tau_s)]``
         with shape ``(w, p, w, p)`` over the ``mask`` pixels in raster order.
         Memory scales as ``(w * p)^2``, so the selection is capped at
-        ``w * p <= 4096``.
+        ``w * p <= 4096``. Like :meth:`cross_band_moments` with
+        ``renormalized=False`` (the default), this describes the exact-Gaussian
+        ``renormalize=False`` ensemble; there is no renormalized-ensemble
+        variant of this method.
 
         Args:
             mask: Boolean array over the focal grid selecting the pixels;
                 must be concrete (the selection happens host-side, so this
-                method is not jittable).
+                method is not jittable). Must match the focal grid shape.
             tau_s: Two-time lag in seconds, as in :meth:`cross_band_moments`.
 
         Returns:
             The real covariance array, shape ``(w, p, w, p)``.
 
         Raises:
-            ValueError: On a monochromatic process, or when ``w * p`` exceeds
-                4096.
+            ValueError: On a monochromatic process, when ``w * p`` exceeds
+                4096, or when ``mask``'s shape does not match the focal grid.
         """
         if self.wavelengths_nm is None:
             raise ValueError(
@@ -1091,6 +1094,11 @@ class SpeckleProcess(eqx.Module):
                 f"w * p = {w * rows.size} exceeds the 4096 cap; the "
                 "(w p) x (w p) covariance would be too large -- select fewer "
                 "pixels"
+            )
+        if tuple(np.shape(mask)) != tuple(self.G.shape[-2:]):
+            raise ValueError(
+                f"mask shape {tuple(np.shape(mask))} does not match the focal "
+                f"grid {tuple(self.G.shape[-2:])}"
             )
         g = self.G[:, :, rows, cols]  # (w, m, p)
         e = self.e_nom[:, rows, cols]  # (w, p)

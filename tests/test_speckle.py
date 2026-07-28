@@ -1290,7 +1290,7 @@ class TestCrossBandMoments:
             assert z.mean() < 2.0, f"mean |z| = {z.mean():.2f}"
 
     def test_mutation_direction_pseudo_covariance_matters(self):
-        """The |P|^2 term is load-bearing: zeroing it must break the MC match.
+        """The |P|^2 term is load-bearing: dropping it changes cov_map by >10%.
 
         Guards against a regression that silently drops the pseudo-covariance
         (the circular-Gaussian formula would pass every proper-basis test).
@@ -1465,6 +1465,18 @@ class TestCrossBandViews:
                 joint[:, sel, :, sel], cov_map[:, :, 0, pix], rtol=1e-12, atol=0
             )
 
+    def test_joint_covariance_blocks_match_per_pixel_maps_at_nonzero_tau(self):
+        """Same coincident-pixel identity at a nonzero lag -- pins the two-time
+        damping into joint_covariance rather than a hardcoded tau_s=0 path."""
+        proc = _chromatic_process(coherent=True)
+        mask = jnp.zeros((1, 12), dtype=bool).at[0, 2:7].set(True)
+        joint = np.asarray(proc.joint_covariance(mask, tau_s=50.0))  # (w, 5, w, 5)
+        cov_map = np.asarray(proc.cross_band_moments(tau_s=50.0).cov_map)
+        for sel, pix in enumerate(range(2, 7)):
+            np.testing.assert_allclose(
+                joint[:, sel, :, sel], cov_map[:, :, 0, pix], rtol=1e-12, atol=0
+            )
+
     def test_joint_covariance_cross_pixel_matches_monte_carlo(self):
         """One genuine cross-pixel cross-band MC anchor (the map route cannot
         see r != r' terms)."""
@@ -1505,6 +1517,15 @@ class TestCrossBandViews:
         )
         with pytest.raises(ValueError, match="chromatic"):
             mono.joint_covariance(jnp.ones((1, 12), dtype=bool))
+
+    def test_joint_covariance_rejects_off_grid_mask(self):
+        """A wrong-shaped mask must raise even when it is under the 4096 cap
+        -- (2, 6) has the same 12-element budget as the (1, 12) grid but is
+        the wrong shape, so only an explicit shape check catches it (JAX's
+        gather would otherwise clamp the out-of-range indices silently)."""
+        proc = _chromatic_process(coherent=True)
+        with pytest.raises(ValueError, match="shape"):
+            proc.joint_covariance(jnp.ones((2, 6), dtype=bool))
 
 
 class TestLambdaScalingENom:
