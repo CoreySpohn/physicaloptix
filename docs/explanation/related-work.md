@@ -35,7 +35,7 @@ upstream.
 | Library | Backend and autodiff | Primary domain | Data model | Coronagraph focus |
 |---|---|---|---|---|
 | **physicaloptix** | JAX + Equinox, differentiable | HWO coronagraph propagation | plane-tagged `Field` on a static `Grid` | first class: owned multi-scale vortex, `PathCoronagraph`, live or freeze-to-table |
-| [dLux](https://github.com/LouisDesdoigts/dLux) | JAX + Equinox, differentiable | general differentiable optical modelling, phase retrieval | `Wavefront` through composed `Optics` layers | by composition |
+| [dLux](https://github.com/LouisDesdoigts/dLux) | JAX + Equinox, differentiable | general differentiable optical modeling, phase retrieval | `Wavefront` through composed `Optics` layers | by composition |
 | [chromatix](https://github.com/chromatix-team/chromatix) | JAX + Equinox, differentiable | computational and microscopy wave optics | typed `Field` with explicit wavelength and polarization axes | not coronagraph specific |
 | [hcipy](https://docs.hcipy.org) | NumPy (newer parts JAX tested) | high-contrast imaging and adaptive optics | `Field` = data + `Grid` | strong: Lyot, vortex, adaptive optics |
 | [poppy](https://poppy-optics.readthedocs.io) | NumPy with optional acceleration | astronomical PSF, Fraunhofer and Fresnel | `Wavefront` with a `PlaneType` tag | Lyot style via semi-analytic MFT |

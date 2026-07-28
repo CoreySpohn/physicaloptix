@@ -255,7 +255,7 @@ $A_i \equiv A_0$ (the default {func}`~physicaloptix.lambda_scaled_channels`
 behavior, which does not rescale $E_{\mathrm{nom}}$ with wavelength), write
 $K_1 = 2\,\mathrm{Re}\!\left[|A_0|^2\,\Gamma_{00} + \overline{A_0}^2\,P_{00}\right]$
 for the heterodyne weight. Substituting into the joint law gives, up to the
-overall (wavelength-independent, so cancelling in a ratio) normalization,
+overall (wavelength-independent, so canceling in a ratio) normalization,
 
 $$
 \mathrm{Cov}[\delta_i, \delta_j] \propto c_i^2 c_j^2\,K_2 + c_i c_j\,K_1,
