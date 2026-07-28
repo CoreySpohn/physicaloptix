@@ -126,6 +126,9 @@ assume.
   `(E_nom, G)` speckle realizations.
 - **[7. Instrument Subsystems](examples/07_Instrument_Subsystems)** -- how-tos for
   the beam splitter, the detector readout, and the integral-field spectrograph.
+- **[8. Cross-Band Speckle Statistics](examples/08_Cross_Band_Speckle_Statistics)**
+  -- driving `cross_band_moments`, its derived views, `joint_covariance`, and the
+  `scale_e_nom` fix on a genuinely chromatic process.
 
 ```{toctree}
 :maxdepth: 1
@@ -148,6 +151,7 @@ examples/04_Wavefront_Error_and_Elements
 examples/05_Speckles_from_First_Principles
 examples/06_The_Speckle_Layer_in_Code
 examples/07_Instrument_Subsystems
+examples/08_Cross_Band_Speckle_Statistics
 ```
 
 ```{toctree}

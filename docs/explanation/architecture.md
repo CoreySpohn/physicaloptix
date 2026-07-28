@@ -131,7 +131,11 @@ that maps small wavefront perturbations to focal-field changes. That linear
 {class}`~physicaloptix.AnalyticSpeckleField`, and it feeds the statistical
 tools in `physicaloptix.stats`. The [speckle theory tutorial](../examples/05_Speckles_from_First_Principles) builds
 this picture up from first principles, and the [speckle-layer-in-code tutorial](../examples/06_The_Speckle_Layer_in_Code)
-drives the `linearize` / `stats` / `SpeckleProcess` API end to end. The same `(E_nom, G)` product is the seam the
+drives the `linearize` / `stats` / `SpeckleProcess` API end to end. A chromatic process --
+`e_nom` / `G` with a leading wavelength axis -- gets its own joint statistics
+through {meth}`~physicaloptix.SpeckleProcess.cross_band_moments`, derived in
+[cross-band speckle statistics](cross-band-statistics) and driven in code by the
+[cross-band tutorial](../examples/08_Cross_Band_Speckle_Statistics). The same `(E_nom, G)` product is the seam the
 `tiptilt` library builds on: physicaloptix supplies the linearization, and
 tiptilt uses it to generate drifting wavefront-error realizations and to close a
 wavefront-control loop.
