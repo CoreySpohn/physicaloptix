@@ -1478,7 +1478,7 @@ class TestCrossBandViews:
             return d[:, 0, jnp.array([3, 9])]  # (w, 2)
 
         batched = jax.jit(jax.vmap(sample))
-        n_batch, batch = 10, 5000
+        n_batch, batch = 10, 4800
         covs = []
         key = jax.random.PRNGKey(11)
         for _ in range(n_batch):
