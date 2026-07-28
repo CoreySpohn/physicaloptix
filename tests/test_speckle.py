@@ -1178,3 +1178,222 @@ class TestSeamIdentity:
             np.testing.assert_allclose(
                 delta, direct, atol=5e-3 * float(jnp.max(jnp.abs(direct)))
             )
+
+
+_CROSS_WLS = (500.0, 550.0, 600.0)
+
+
+def _chromatic_process(coherent, e_scale=0.5, seed=0):
+    """Small chromatic process shared by the cross-band test classes."""
+    w, m, ny, nx = 3, 4, 1, 12
+    k1, k2 = jax.random.split(jax.random.PRNGKey(seed))
+    g = jax.random.normal(k1, (w, m, ny, nx, 2)) @ jnp.array([1.0, 1j])
+    e = e_scale * (jax.random.normal(k2, (w, ny, nx, 2)) @ jnp.array([1.0, 1j]))
+    return SpeckleProcess(
+        e,
+        g,
+        1.0,
+        1e-3,
+        input_energy=_e_in(1.0),
+        coherent=coherent,
+        wavelengths_nm=jnp.array(_CROSS_WLS),
+    )
+
+
+class TestCrossBandMoments:
+    """The exact joint two-wavelength law, validated against moments() and MC."""
+
+    _WLS = _CROSS_WLS
+
+    @pytest.mark.parametrize("coherent", [True, False])
+    @pytest.mark.parametrize("renormalized", [True, False])
+    def test_diagonal_matches_moments(self, coherent, renormalized):
+        """Band-diagonal blocks reproduce the per-channel monochromatic moments.
+
+        This ties every einsum (kernels, heterodyne, kurtosis correction,
+        normalization) to the shipped single-band implementation; a transposed
+        axis, a dropped conjugate, or a wrong normalization broadcast all fail
+        it at machine precision.
+        """
+        proc = _chromatic_process(coherent)
+        cbm = proc.cross_band_moments(renormalized=renormalized)
+        for i in range(len(self._WLS)):
+            mono = SpeckleProcess(
+                proc.e_nom[i],
+                proc.G[i],
+                proc.per_mode_rms,
+                proc.knee_hz,
+                input_energy=_e_in(1.0),
+                coherent=coherent,
+            ).moments(renormalized=renormalized)
+            np.testing.assert_allclose(
+                np.asarray(cbm.mean_map[i]),
+                np.asarray(mono.mean_map),
+                rtol=1e-12,
+                atol=0,
+            )
+            np.testing.assert_allclose(
+                np.asarray(cbm.cov_map[i, i]),
+                np.asarray(mono.var_map),
+                rtol=1e-12,
+                atol=0,
+            )
+            np.testing.assert_allclose(
+                np.asarray(cbm.gamma_map[i, i]),
+                np.asarray(mono.gamma_map),
+                rtol=1e-12,
+                atol=0,
+            )
+            np.testing.assert_allclose(
+                np.asarray(cbm.p_map[i, i]),
+                np.asarray(mono.p_map),
+                rtol=1e-12,
+                atol=0,
+            )
+
+    def test_covariance_matches_monte_carlo(self):
+        """Genuine ensemble test through the shipped draw/realize path,
+        equal-time AND two-time, all band pairs at every pixel."""
+        proc = _chromatic_process(coherent=True)
+        tau = 110.0  # rho(tau) ~ 0.5 at the 1e-3 Hz knee
+        pred_0 = np.asarray(proc.cross_band_moments().cov_map)
+        pred_t = np.asarray(proc.cross_band_moments(tau_s=tau).cov_map)
+        pred_mean = np.asarray(proc.cross_band_moments().mean_map)
+
+        def sample(key):
+            f = proc.draw(key, renormalize=False)
+            d0 = jnp.stack([f.realize(wavelength_nm=v, time_s=0.0) for v in self._WLS])
+            d1 = jnp.stack([f.realize(wavelength_nm=v, time_s=tau) for v in self._WLS])
+            return d0, d1
+
+        batched = jax.jit(jax.vmap(sample))
+        n_batch, batch = 10, 5000
+        covs, covs_t, means = [], [], []
+        key = jax.random.PRNGKey(7)
+        for _ in range(n_batch):
+            key, sub = jax.random.split(key)
+            d0, d1 = (np.asarray(a) for a in batched(jax.random.split(sub, batch)))
+            c0 = d0 - d0.mean(axis=0)
+            c1 = d1 - d1.mean(axis=0)
+            covs.append(np.einsum("niyx,njyx->ijyx", c0, c0) / (batch - 1))
+            covs_t.append(np.einsum("niyx,njyx->ijyx", c0, c1) / (batch - 1))
+            means.append(d0.mean(axis=0))
+        for stack, pred in (
+            (np.array(covs), pred_0),
+            (np.array(covs_t), pred_t),
+            (np.array(means), pred_mean),
+        ):
+            est = stack.mean(axis=0)
+            se = stack.std(axis=0, ddof=1) / np.sqrt(n_batch)
+            z = np.abs((est - pred) / se)
+            assert z.max() < 7.0, f"max |z| = {z.max():.2f}"
+            assert z.mean() < 2.0, f"mean |z| = {z.mean():.2f}"
+
+    def test_mutation_direction_pseudo_covariance_matters(self):
+        """The |P|^2 term is load-bearing: zeroing it must break the MC match.
+
+        Guards against a regression that silently drops the pseudo-covariance
+        (the circular-Gaussian formula would pass every proper-basis test).
+        """
+        proc = _chromatic_process(coherent=False)
+        cbm = proc.cross_band_moments()
+        norms = np.broadcast_to(np.asarray(proc.normalization), (len(self._WLS),))
+        denom = norms[:, None, None, None] * norms[None, :, None, None]
+        wrong = np.asarray(cbm.cov_map) - np.abs(np.asarray(cbm.p_map)) ** 2 / denom
+        rel = np.abs(wrong - np.asarray(cbm.cov_map)) / np.asarray(cbm.cov_map)
+        assert rel.max() > 0.1  # the dropped term is a >10% effect somewhere
+
+    def test_achromatic_channels_are_perfectly_correlated(self):
+        """lambda-scaled stacks + zero offset: every band pair has correlation
+        exactly 1 (the achromatic limit is an equality, not an approximation)."""
+        _, m, ny, nx = 3, 4, 1, 12
+        key = jax.random.PRNGKey(3)
+        g0 = jax.random.normal(key, (m, ny, nx, 2)) @ jnp.array([1.0, 1j])
+        e_stack, g_stack = lambda_scaled_channels(
+            jnp.zeros((ny, nx), dtype=complex), g0, 550.0, jnp.array(self._WLS)
+        )
+        proc = SpeckleProcess(
+            e_stack,
+            g_stack,
+            1.0,
+            1e-3,
+            input_energy=_e_in(1.0),
+            coherent=False,
+            wavelengths_nm=jnp.array(self._WLS),
+        )
+        cov = proc.cross_band_moments().cov_map
+        d = jnp.sqrt(jnp.einsum("iiyx->iyx", cov))
+        rho = cov / (d[:, None] * d[None, :])
+        np.testing.assert_allclose(np.asarray(rho), 1.0, rtol=0, atol=1e-12)
+
+    def test_two_time_kernels_use_the_synthesis_autocorrelation(self):
+        """With one shared knee, the lagged kernels are the equal-time kernels
+        times rho(tau) -- pins the kernel-slot wiring to autocorrelation()."""
+        proc = _chromatic_process(coherent=True)
+        tau = 300.0
+        r = float(np.asarray(proc.autocorrelation(tau))[0])
+        cbm_0 = proc.cross_band_moments()
+        cbm_t = proc.cross_band_moments(tau_s=tau)
+        np.testing.assert_allclose(
+            np.asarray(cbm_t.gamma_map),
+            r * np.asarray(cbm_0.gamma_map),
+            rtol=1e-12,
+            atol=1e-15,
+        )
+        np.testing.assert_allclose(
+            np.asarray(cbm_t.p_map),
+            r * np.asarray(cbm_0.p_map),
+            rtol=1e-12,
+            atol=1e-15,
+        )
+        np.testing.assert_allclose(  # the mean is time-independent
+            np.asarray(cbm_t.mean_map),
+            np.asarray(cbm_0.mean_map),
+            rtol=1e-12,
+            atol=0,
+        )
+
+    def test_mask_reductions(self):
+        proc = _chromatic_process(coherent=True)
+        mask = jnp.zeros((1, 12), dtype=bool).at[0, :6].set(True)
+        cbm = proc.cross_band_moments(mask=mask)
+        np.testing.assert_allclose(
+            np.asarray(cbm.annulus_cov),
+            np.asarray(cbm.cov_map[..., 0, :6].mean(axis=-1)),
+            rtol=1e-12,
+            atol=0,
+        )
+        np.testing.assert_allclose(
+            np.asarray(cbm.annulus_mean),
+            np.asarray(cbm.mean_map[:, 0, :6].mean(axis=-1)),
+            rtol=1e-12,
+            atol=0,
+        )
+        assert proc.cross_band_moments().annulus_cov is None
+
+    def test_jit_compatible(self):
+        proc = _chromatic_process(coherent=True)
+        jitted = jax.jit(lambda p: p.cross_band_moments().cov_map)
+        np.testing.assert_allclose(
+            np.asarray(jitted(proc)),
+            np.asarray(proc.cross_band_moments().cov_map),
+            rtol=1e-12,
+            atol=0,
+        )
+
+    def test_guards(self):
+        w, m, ny, nx = 3, 4, 1, 12
+        key = jax.random.PRNGKey(0)
+        g = jax.random.normal(key, (w, m, ny, nx, 2)) @ jnp.array([1.0, 1j])
+        mono = SpeckleProcess(
+            jnp.zeros((ny, nx), dtype=complex),
+            g[0],
+            1.0,
+            1e-3,
+            input_energy=_e_in(1.0),
+        )
+        with pytest.raises(ValueError, match="chromatic"):
+            mono.cross_band_moments()
+        proc = _chromatic_process(coherent=False)
+        with pytest.raises(NotImplementedError, match="equal-time"):
+            proc.cross_band_moments(tau_s=10.0, renormalized=True)

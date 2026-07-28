@@ -66,6 +66,7 @@ from physicaloptix.robustness import (
 from physicaloptix.sources import broadcast_to_spectrum, point_source
 from physicaloptix.speckle import (
     AnalyticSpeckleField,
+    CrossBandMoments,
     SpeckleMoments,
     SpeckleProcess,
     lambda_scaled_channels,
@@ -80,6 +81,7 @@ __all__ = [
     "BeamSplitter",
     "Branch",
     "ChannelLinearization",
+    "CrossBandMoments",
     "DispersiveScreen",
     "Field",
     "Fraunhofer",

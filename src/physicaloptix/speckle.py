@@ -337,6 +337,41 @@ class SpeckleMoments(eqx.Module):
     annulus_var: Array | None = None  # mask-averaged Var[delta]
 
 
+class CrossBandMoments(eqx.Module):
+    """Closed-form joint band-pair moments of a chromatic :class:`SpeckleProcess`.
+
+    The frozen output of :meth:`SpeckleProcess.cross_band_moments`: per pixel,
+    the exact second-order description of the flux-fraction deltas across the
+    process's wavelength channels, which share one real mode trajectory. The
+    field-level kernels are
+
+        Gamma_ij = sum_k rms_k^2 rho_k(tau) G_k(i) conj(G_k(j))
+        P_ij     = sum_k rms_k^2 rho_k(tau) G_k(i) G_k(j)
+
+    (``P`` is the pseudo-covariance -- the phase-sensitive correlation of the
+    improper complex Gaussian field; it vanishes for circular statistics but
+    not in general) and the intensity-level covariance is the complex Gaussian
+    moment theorem, exact and noncentral:
+
+        N_i N_j Cov[delta_i, delta_j] = |Gamma_ij|^2 + |P_ij|^2
+            + 2 Re[conj(A_i) A_j Gamma_ij + conj(A_i) conj(A_j) P_ij]
+
+    with ``A_i = e_nom[i]`` and the heterodyne bracket present only for a
+    ``coherent`` process. ``tau_s`` is the lag both kernels are damped by
+    (``rho_k`` is the synthesis autocorrelation); the equal-time container has
+    ``tau_s = 0.0`` and its band-diagonal reproduces the per-channel
+    :meth:`SpeckleProcess.moments` exactly. ``mean_map`` is time-independent.
+    """
+
+    mean_map: Array  # (w, y, x): E[delta] per channel (flux-fraction units)
+    cov_map: Array  # (w, w, y, x): Cov[delta_i(t), delta_j(t + tau_s)]
+    gamma_map: Array  # (w, w, y, x) complex: Gamma_ij
+    p_map: Array  # (w, w, y, x) complex: P_ij (pseudo-covariance)
+    tau_s: float = eqx.field(static=True)
+    annulus_mean: Array | None = None  # (w,): mask-averaged mean
+    annulus_cov: Array | None = None  # (w, w): mask-averaged covariance
+
+
 class SpeckleProcess(eqx.Module):
     """One parameter set for the linear speckle process; views derive from it.
 
@@ -360,8 +395,8 @@ class SpeckleProcess(eqx.Module):
     wavelengths through to its :class:`AnalyticSpeckleField`, which then
     selects the channel nearest a requested wavelength; the mode trajectory
     itself is shared across channels. :meth:`moments` is monochromatic only
-    (cross-band statistics are out of scope) and raises on a chromatic
-    process -- select a channel's ``(e_nom, G)`` first.
+    (the joint band statistics live in :meth:`cross_band_moments`) and raises
+    on a chromatic process -- select a channel's ``(e_nom, G)`` first.
 
     The PSD is the SCoOB-style knee form ``(1 + (f / knee)^2)^(slope / 2)``,
     evaluated on a log-spaced frequency grid straddling the knee. ``knee_hz``
@@ -860,4 +895,89 @@ class SpeckleProcess(eqx.Module):
             var_x_map=var_x,
             annulus_mean=annulus_mean,
             annulus_var=annulus_var,
+        )
+
+    def cross_band_moments(
+        self, *, mask=None, tau_s=0.0, renormalized=False
+    ) -> "CrossBandMoments":
+        """Exact joint band-pair moments of a chromatic process.
+
+        Because every wavelength channel is driven by the SAME real mode
+        trajectory, the channels are one jointly improper complex Gaussian
+        field; this returns its complete per-pixel second-order description
+        (see :class:`CrossBandMoments` for the formulas). The result scales
+        as ``w^2 * y * x`` in memory -- about 40 MB of complex kernels for
+        six channels on a 256 x 256 grid; pass wide-band, fine grids through
+        ``mask``-reduced or per-pair workflows if that grows too large.
+
+        Args:
+            mask: Optional boolean dark-zone mask over the focal grid; when
+                given the result also carries the mask-averaged mean ``(w,)``
+                and covariance ``(w, w)``.
+            tau_s: Two-time lag in seconds. The returned ``cov_map`` is then
+                ``Cov[delta_i(t), delta_j(t + tau_s)]``: both kernels carry
+                the per-mode synthesis autocorrelation ``rho_k(tau_s)``
+                (:meth:`autocorrelation`), which is exactly 1 at lag 0.
+            renormalized: Add the closed-form sub-Gaussian correction for a
+                ``renormalize=True`` ensemble (per-draw rms exact), the
+                cross-band mirror of ``moments(renormalized=True)``:
+                ``sum_k kappa_k rms_k^4 |G_k(i)|^2 |G_k(j)|^2``. Equal-time
+                only; raises with a nonzero ``tau_s``. Default ``False``
+                (the exact-Gaussian ``renormalize=False`` ensemble).
+
+        Returns:
+            A :class:`CrossBandMoments` with the per-pixel maps (and the
+            annulus reductions when ``mask`` is given).
+
+        Raises:
+            ValueError: On a monochromatic process (use :meth:`moments`).
+            NotImplementedError: For ``renormalized=True`` with ``tau_s != 0``.
+        """
+        if self.wavelengths_nm is None:
+            raise ValueError(
+                "cross_band_moments needs a chromatic process (wavelengths_nm "
+                "set); use moments for a monochromatic one"
+            )
+        if renormalized and tau_s != 0.0:
+            raise NotImplementedError(
+                "the renormalization correction is equal-time only; pass "
+                "tau_s=0.0 or renormalized=False"
+            )
+        rms2 = self.per_mode_rms**2
+        damped = rms2 * self.autocorrelation(tau_s)
+        gamma = jnp.einsum("m,imyx,jmyx->ijyx", damped, self.G, jnp.conj(self.G))
+        p = jnp.einsum("m,imyx,jmyx->ijyx", damped, self.G, self.G)
+        w = self.wavelengths_nm.shape[0]
+        norms = jnp.broadcast_to(self.normalization, (w,))
+        denom = norms[:, None, None, None] * norms[None, :, None, None]
+        cov = jnp.abs(gamma) ** 2 + jnp.abs(p) ** 2
+        if self.coherent:
+            a_i = jnp.conj(self.e_nom)[:, None]
+            a_j = self.e_nom[None, :]
+            cov = cov + 2.0 * jnp.real(a_i * a_j * gamma + a_i * jnp.conj(a_j) * p)
+        if renormalized:
+            cov = cov + jnp.einsum(
+                "m,imyx,jmyx->ijyx",
+                self.renormalization_kurtosis() * rms2**2,
+                jnp.abs(self.G) ** 2,
+                jnp.abs(self.G) ** 2,
+            )
+        cov = cov / denom
+        mean = (
+            jnp.einsum("m,wmyx->wyx", rms2, jnp.abs(self.G) ** 2) / norms[:, None, None]
+        )
+        annulus_mean = annulus_cov = None
+        if mask is not None:
+            weights = jnp.asarray(mask, dtype=float)
+            total = jnp.sum(weights)
+            annulus_mean = jnp.einsum("wyx,yx->w", mean, weights) / total
+            annulus_cov = jnp.einsum("ijyx,yx->ij", cov, weights) / total
+        return CrossBandMoments(
+            mean_map=mean,
+            cov_map=cov,
+            gamma_map=gamma,
+            p_map=p,
+            tau_s=float(tau_s),
+            annulus_mean=annulus_mean,
+            annulus_cov=annulus_cov,
         )
