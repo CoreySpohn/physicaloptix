@@ -353,6 +353,16 @@ class SpeckleProcess(eqx.Module):
     exact (the random amplitudes are renormalized mode-by-mode), so the WFE
     budget is honored draw by draw rather than only in expectation.
 
+    Monochromatic by default: ``e_nom`` / ``G`` carry no channel axis. With
+    ``wavelengths_nm`` set, ``e_nom`` / ``G`` carry a leading channel axis
+    (``(w, y, x)`` / ``(w, m, y, x)``, the layout :func:`linearize` records
+    for a chromatic field) and every :meth:`draw` carries the same
+    wavelengths through to its :class:`AnalyticSpeckleField`, which then
+    selects the channel nearest a requested wavelength; the mode trajectory
+    itself is shared across channels. :meth:`moments` is monochromatic only
+    (cross-band statistics are out of scope) and raises on a chromatic
+    process -- select a channel's ``(e_nom, G)`` first.
+
     The PSD is the SCoOB-style knee form ``(1 + (f / knee)^2)^(slope / 2)``,
     evaluated on a log-spaced frequency grid straddling the knee. ``knee_hz``
     and ``slope`` are scalars shared by every mode (one shared grid) or
@@ -374,8 +384,8 @@ class SpeckleProcess(eqx.Module):
     only the temporal kernel changes.
     """
 
-    e_nom: Array  # complex (y, x): nominal focal field
-    G: Array  # complex (m, y, x): d(E_focal)/d(mode)
+    e_nom: Array  # complex (y, x) or (w, y, x): nominal focal field
+    G: Array  # complex (m, y, x) or (w, m, y, x): d(E_focal)/d(mode)
     per_mode_rms: Array  # float (m,): rms drift per mode
     knee_hz: Array  # float (m,): per-mode temporal PSD knee
     slope: Array  # float (m,): per-mode high-frequency PSD slope
@@ -383,6 +393,7 @@ class SpeckleProcess(eqx.Module):
     normalization: Array
     pixel_scale_lod: float
     epoch_jd: float
+    wavelengths_nm: Array | None
     coherent: bool = eqx.field(static=True)
     n_freq: int = eqx.field(static=True)
     decades_below: float = eqx.field(static=True)
@@ -406,12 +417,16 @@ class SpeckleProcess(eqx.Module):
         decades_below=1.7,
         decades_above=2.3,
         df_weighted=True,
+        wavelengths_nm=None,
     ):
         """Build the process parameter object.
 
         Args:
-            e_nom: Complex nominal focal field, shape ``(y, x)``.
-            G: Complex sensitivity ``d(E_focal)/d(mode)``, shape ``(m, y, x)``.
+            e_nom: Complex nominal focal field, shape ``(y, x)`` -- or
+                ``(w, y, x)`` with ``wavelengths_nm`` set.
+            G: Complex sensitivity ``d(E_focal)/d(mode)``, shape
+                ``(m, y, x)`` -- or ``(w, m, y, x)`` with ``wavelengths_nm``
+                set.
             per_mode_rms: Per-mode rms drift, scalar (broadcast to every
                 mode) or shape ``(m,)``.
             knee_hz: Temporal PSD knee frequency in Hz
@@ -422,10 +437,13 @@ class SpeckleProcess(eqx.Module):
                 train at the pre-coronagraph reference plane
                 (``field.energy()``); the flux-fraction normalization
                 ``input_energy / pixel_scale_lod**2`` is derived once at
-                construction.
+                construction. A scalar, or one value per channel for a
+                chromatic process.
             slope: High-frequency PSD power-law slope. Default -2; scalar
                 or shape ``(m,)`` for per-mode slopes.
-            pixel_scale_lod: Native pixel scale in lambda/D per pixel.
+            pixel_scale_lod: Native pixel scale in lambda/D per pixel
+                (shared by every channel: the maps live in lambda/D units,
+                where the morphology is achromatic).
             epoch_jd: Julian Date mapping to ``time_s = 0``. Default J2000.
             coherent: Drawn fields include the pinning cross term.
             n_freq: Number of spectral-synthesis frequencies.
@@ -439,10 +457,14 @@ class SpeckleProcess(eqx.Module):
                 synthesized temporal kernel is the PSD's transform. Default
                 ``True``; pass ``False`` (with ``decades_below=0.7``) to
                 reproduce ensembles drawn before 2026-07-25.
+            wavelengths_nm: Channel wavelengths, shape ``(w,)``, enabling
+                the chromatic layout above and carried through :meth:`draw`
+                into the returned :class:`AnalyticSpeckleField`. ``None``
+                (default) for a monochromatic process.
         """
         self.e_nom = e_nom
         self.G = G
-        m = G.shape[0]
+        m = G.shape[-3]
         self.per_mode_rms = jnp.broadcast_to(
             jnp.asarray(per_mode_rms, dtype=float), (m,)
         )
@@ -463,6 +485,9 @@ class SpeckleProcess(eqx.Module):
         self.normalization = self.input_energy / pixel_scale_lod**2
         self.pixel_scale_lod = pixel_scale_lod
         self.epoch_jd = epoch_jd
+        self.wavelengths_nm = (
+            None if wavelengths_nm is None else jnp.asarray(wavelengths_nm, dtype=float)
+        )
         self.coherent = coherent
         self.n_freq = n_freq
         self.decades_below = decades_below
@@ -470,8 +495,8 @@ class SpeckleProcess(eqx.Module):
         self.df_weighted = df_weighted
 
     def __check_init__(self):
-        """Validate that the per-mode parameters match G's mode axis."""
-        m = (self.G.shape[0],)
+        """Validate the per-mode parameters and (chromatic) ingredient layout."""
+        m = (self.G.shape[-3],)
         for name, value in (
             ("per_mode_rms", self.per_mode_rms),
             ("knee_hz", self.knee_hz),
@@ -482,11 +507,9 @@ class SpeckleProcess(eqx.Module):
                     f"{name} has shape {value.shape}; expected {m} to match "
                     "G's mode axis"
                 )
-        if self.input_energy.ndim != 0:
-            raise ValueError(
-                "input_energy must be a scalar for a monochromatic process, "
-                f"got shape {self.input_energy.shape}"
-            )
+        _check_chromatic_layout(
+            self.e_nom, self.G, self.input_energy, self.wavelengths_nm
+        )
 
     @classmethod
     def from_decorrelation(
@@ -506,7 +529,7 @@ class SpeckleProcess(eqx.Module):
         (``per_mode_rms = total_rms / sqrt(m)``; rms adds in quadrature).
         """
         tau_s = decorr_hours * 3600.0
-        m = G.shape[0]
+        m = G.shape[-3]
         return cls(
             e_nom,
             G,
@@ -578,7 +601,7 @@ class SpeckleProcess(eqx.Module):
             )
             weights = weights * df
         if weights.ndim == 1:
-            weights = jnp.broadcast_to(weights, (self.G.shape[0], self.n_freq))
+            weights = jnp.broadcast_to(weights, (self.G.shape[-3], self.n_freq))
         return weights
 
     def autocorrelation(self, lag_s) -> Array:
@@ -607,7 +630,7 @@ class SpeckleProcess(eqx.Module):
         tau = jnp.asarray(lag_s, dtype=float)
         f = self.frequencies_hz()
         if f.ndim == 1:
-            f = jnp.broadcast_to(f, (self.G.shape[0], self.n_freq))
+            f = jnp.broadcast_to(f, (self.G.shape[-3], self.n_freq))
         w = self.line_weights()
         flat = tau.reshape(-1)  # (t,)
         phase = 2.0 * jnp.pi * f[:, :, None] * flat[None, None, :]  # (m, f, t)
@@ -660,7 +683,7 @@ class SpeckleProcess(eqx.Module):
         t_exp = jnp.asarray(exposure_s, dtype=float)
         f = self.frequencies_hz()
         if f.ndim == 1:
-            f = jnp.broadcast_to(f, (self.G.shape[0], self.n_freq))
+            f = jnp.broadcast_to(f, (self.G.shape[-3], self.n_freq))
         w = self.line_weights()
         flat = t_exp.reshape(-1)  # (t,)
         # jnp.sinc is the normalized sin(pi x) / (pi x), which is exactly the
@@ -689,7 +712,7 @@ class SpeckleProcess(eqx.Module):
           ensemble is the exact improper-Gaussian process :meth:`moments`
           describes -- the oracle-exact draw.
         """
-        m = self.G.shape[0]
+        m = self.G.shape[-3]
         f = self.frequencies_hz()
         # The line weight S(f_j) df_j, not the bare PSD ordinate, is what the
         # synthesis coefficients carry; see line_weights.
@@ -725,6 +748,7 @@ class SpeckleProcess(eqx.Module):
             pixel_scale_lod=self.pixel_scale_lod,
             epoch_jd=self.epoch_jd,
             coherent=self.coherent,
+            wavelengths_nm=self.wavelengths_nm,
         )
 
     def renormalization_kurtosis(self, n_points=4000) -> Array:
@@ -764,7 +788,7 @@ class SpeckleProcess(eqx.Module):
             integrand = t**2 * jnp.exp(log_prod) * inner  # dt = t dlog(t)
             return -1.5 * 3.0 * jnp.trapezoid(integrand, jnp.log(t))
 
-        m = self.G.shape[0]
+        m = self.G.shape[-3]
         if not self.per_mode_freq:
             # Every mode shares one grid, so one quadrature serves them all.
             return jnp.broadcast_to(kappa_of(weights[0]), (m,))
@@ -803,6 +827,10 @@ class SpeckleProcess(eqx.Module):
             A :class:`SpeckleMoments` with the per-pixel maps (and the annulus
             reductions when ``mask`` is given).
         """
+        if self.wavelengths_nm is not None:
+            raise NotImplementedError(
+                "moments is monochromatic; select a channel's (e_nom, G) first"
+            )
         rms2 = self.per_mode_rms**2
         gamma = jnp.einsum("k,kyx->yx", rms2, jnp.abs(self.G) ** 2)
         p = jnp.einsum("k,kyx->yx", rms2, self.G**2)

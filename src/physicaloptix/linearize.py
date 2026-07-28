@@ -111,11 +111,12 @@ class Linearization(eqx.Module):
         Either give the process parameters directly (``per_mode_rms`` +
         ``knee_hz``) or the decorrelation parameterization
         (``decorr_hours`` + ``total_rms``). The process inherits the recorded
-        photometric primitives (``input_energy``, ``pixel_scale_lod``), so
-        realized maps are per-pixel flux fractions with no further input;
-        pass ``input_energy=...`` explicitly to re-reference (e.g. when a
-        coronagraph mask was baked into the input field instead of living in
-        the path).
+        photometric primitives (``input_energy``, ``pixel_scale_lod``) and,
+        for a chromatic linearization, the recorded ``wavelengths_nm``, so
+        realized maps are per-pixel flux fractions (per channel, chromatic)
+        with no further input; pass ``input_energy=...`` explicitly to
+        re-reference (e.g. when a coronagraph mask was baked into the input
+        field instead of living in the path).
 
         Args:
             per_mode_rms: Per-mode rms drift (with ``knee_hz``).
@@ -130,6 +131,7 @@ class Linearization(eqx.Module):
         """
         kwargs.setdefault("pixel_scale_lod", self.pixel_scale_lod)
         kwargs.setdefault("input_energy", self.input_energy)
+        kwargs.setdefault("wavelengths_nm", self.wavelengths_nm)
         if decorr_hours is not None:
             return SpeckleProcess.from_decorrelation(
                 self.e_nom,

@@ -7,7 +7,8 @@ import optixstuff as ox
 import pytest
 
 from physicaloptix import AnalyticSpeckleField
-from physicaloptix.speckle import lambda_scaled_channels
+from physicaloptix.linearize import linearize, perturbed_map
+from physicaloptix.speckle import SpeckleProcess, lambda_scaled_channels
 
 jax.config.update("jax_enable_x64", True)
 
@@ -977,3 +978,199 @@ class TestTelescopePeak:
         expected = float((np.abs(e) ** 2).max())
         got = telescope_peak(field, focal_grid)
         np.testing.assert_allclose(got, expected, rtol=0, atol=1e-12)
+
+
+# input_energy = norm * du^2 makes the derived normalization equal `norm`
+# at the default pixel_scale_lod=0.25 (same helper test_speckle.py defines).
+_UNIT_E_IN = 0.25**2
+
+
+class TestChromaticProcess:
+    def test_draw_and_nearest_channel_selection(self):
+        """Chromatic draw passes wavelengths through, and realize picks the
+        nearest channel -- pinned at value level, not just d0 != d2."""
+        w, m, n = 3, 4, 16
+        key = jax.random.PRNGKey(0)
+        e_nom = jnp.zeros((w, n, n), dtype=complex)
+        g = jax.random.normal(key, (w, m, n, n, 2)) @ jnp.array([1.0, 1j])
+        wavelengths = jnp.array([500.0, 550.0, 600.0])
+        process = SpeckleProcess(
+            e_nom,
+            g,
+            100.0,
+            1e-4,
+            input_energy=_UNIT_E_IN,
+            wavelengths_nm=wavelengths,
+        )
+        field = process.draw(jax.random.PRNGKey(1))
+        assert field.wavelengths_nm is not None
+        eps = field._eps(0.0)
+        expected0 = jnp.abs(jnp.tensordot(eps, g[0], axes=1)) ** 2
+        np.testing.assert_allclose(
+            field.realize(wavelength_nm=500.0), expected0, rtol=0, atol=1e-12
+        )
+        np.testing.assert_allclose(  # 510 nm is nearest to the 500 channel
+            field.realize(wavelength_nm=510.0), expected0, rtol=0, atol=1e-12
+        )
+        assert not jnp.allclose(field.realize(wavelength_nm=600.0), expected0)
+
+    def test_per_channel_input_energy(self):
+        """A (w,) input_energy derives per-channel normalizations."""
+        w, m, n = 3, 4, 16
+        key = jax.random.PRNGKey(0)
+        e_nom = jnp.zeros((w, n, n), dtype=complex)
+        g = jax.random.normal(key, (w, m, n, n, 2)) @ jnp.array([1.0, 1j])
+        wavelengths = jnp.array([500.0, 550.0, 600.0])
+        energies = _UNIT_E_IN * jnp.array([1.0, 2.0, 4.0])
+        scalar = SpeckleProcess(
+            e_nom,
+            g,
+            100.0,
+            1e-4,
+            input_energy=_UNIT_E_IN,
+            wavelengths_nm=wavelengths,
+        )
+        vector = SpeckleProcess(
+            e_nom,
+            g,
+            100.0,
+            1e-4,
+            input_energy=energies,
+            wavelengths_nm=wavelengths,
+        )
+        f_s = scalar.draw(jax.random.PRNGKey(1))
+        f_v = vector.draw(jax.random.PRNGKey(1))
+        np.testing.assert_allclose(
+            f_v.realize(wavelength_nm=600.0),
+            f_s.realize(wavelength_nm=600.0) / 4.0,
+            rtol=0,
+            atol=1e-12,
+        )
+
+    def test_from_decorrelation_chromatic_mode_count(self):
+        """The budget split must divide by sqrt(m), not sqrt(w)."""
+        w, m, n = 3, 4, 16
+        key = jax.random.PRNGKey(0)
+        e_nom = jnp.zeros((w, n, n), dtype=complex)
+        g = jax.random.normal(key, (w, m, n, n, 2)) @ jnp.array([1.0, 1j])
+        proc = SpeckleProcess.from_decorrelation(
+            e_nom,
+            g,
+            decorr_hours=10.0,
+            total_rms=0.3,
+            input_energy=_UNIT_E_IN,
+            wavelengths_nm=jnp.array([500.0, 550.0, 600.0]),
+        )
+        assert proc.per_mode_rms.shape == (m,)
+        np.testing.assert_allclose(proc.per_mode_rms, 0.3 / jnp.sqrt(m))
+        assert proc.draw(jax.random.PRNGKey(1)).wavelengths_nm is not None
+
+    def test_moments_raises_on_chromatic(self):
+        w, m, n = 3, 4, 16
+        key = jax.random.PRNGKey(0)
+        e_nom = jnp.zeros((w, n, n), dtype=complex)
+        g = jax.random.normal(key, (w, m, n, n, 2)) @ jnp.array([1.0, 1j])
+        proc = SpeckleProcess(
+            e_nom,
+            g,
+            100.0,
+            1e-4,
+            input_energy=_UNIT_E_IN,
+            wavelengths_nm=jnp.array([500.0, 550.0, 600.0]),
+        )
+        with pytest.raises(NotImplementedError, match="monochromatic"):
+            proc.moments()
+
+    def test_rejects_chromatic_wavelengths_with_mono_layout(self):
+        m, n = 4, 16
+        key = jax.random.PRNGKey(0)
+        e_nom = jnp.zeros((n, n), dtype=complex)
+        g = jax.random.normal(key, (m, n, n, 2)) @ jnp.array([1.0, 1j])
+        with pytest.raises(ValueError, match="chromatic ingredients"):
+            SpeckleProcess(
+                e_nom,
+                g,
+                100.0,
+                1e-4,
+                input_energy=_UNIT_E_IN,
+                wavelengths_nm=jnp.array([500.0, 550.0]),
+            )
+
+    def test_mono_process_unchanged(self):
+        m, n = 4, 16
+        key = jax.random.PRNGKey(0)
+        e_nom = jnp.zeros((n, n), dtype=complex)
+        g = jax.random.normal(key, (m, n, n, 2)) @ jnp.array([1.0, 1j])
+        process = SpeckleProcess(e_nom, g, 100.0, 1e-4, input_energy=_UNIT_E_IN)
+        assert process.draw(jax.random.PRNGKey(1)).wavelengths_nm is None
+
+    def test_linearization_forwards_wavelengths_and_energies(
+        self, small_path, chromatic_field, opd_basis
+    ):
+        """to_speckle_process inherits BOTH recorded primitives: the channel
+        wavelengths and the per-channel input energies."""
+        wavelengths = chromatic_field.spectrum.wavelengths_nm
+        lin = linearize(
+            small_path, chromatic_field, opd_basis, wavelengths_nm=wavelengths
+        )
+        process = lin.to_speckle_process(per_mode_rms=100.0, knee_hz=1e-4)
+        assert process.wavelengths_nm is not None
+        np.testing.assert_allclose(
+            np.asarray(process.input_energy),
+            np.asarray(chromatic_field.energy()),
+            rtol=1e-12,
+        )
+
+
+class TestSeamIdentity:
+    def test_realize_matches_direct_propagation_per_band(
+        self, small_path, chromatic_field, opd_basis
+    ):
+        """End-to-end: generator delta == direct nonlinear propagation per
+        band, both sides in flux-fraction units via the recorded primitives.
+
+        eps = 0.002 nm/mode over 4 unit-normal modes at ~500 nm gives
+        worst-case grid phase ~2e-4 rad. The coherent cross term's
+        second-order correction scales with the field's own intensity near
+        the PSF core rather than with the delta itself (measured ~5% of
+        max|direct| at eps=0.05, the value that motivated this test before
+        that scaling was accounted for); eps=0.002 keeps the measured ratio
+        to ~2e-3, so atol at 5e-3*max|direct| holds a ~2x margin (the
+        conftest opd_basis pins the unit normalization this relies on).
+        """
+        wavelengths = chromatic_field.spectrum.wavelengths_nm
+        lin = linearize(
+            small_path, chromatic_field, opd_basis, wavelengths_nm=wavelengths
+        )
+        eps = 0.002 * jnp.ones(opd_basis.n_modes)
+        field = AnalyticSpeckleField(
+            lin.e_nom,
+            lin.G,
+            amplitudes=eps[:, None],
+            frequencies_hz=jnp.zeros(1),
+            phases=jnp.zeros((opd_basis.n_modes, 1)),
+            input_energy=jnp.asarray(lin.input_energy),
+            pixel_scale_lod=lin.pixel_scale_lod,
+            coherent=True,
+            wavelengths_nm=wavelengths,
+        )
+        run = perturbed_map(
+            small_path,
+            chromatic_field,
+            opd_basis,
+            float(wavelengths[0]),
+            wavelengths_nm=wavelengths,
+        )
+        exact = run(eps)  # (w, y, x) complex
+        du2 = lin.pixel_scale_lod**2
+        e_in = np.asarray(
+            jnp.broadcast_to(jnp.asarray(lin.input_energy), wavelengths.shape)
+        )
+        for w, wl in enumerate(wavelengths):
+            delta = field.realize(wavelength_nm=float(wl), time_s=0.0)
+            direct = (
+                (jnp.abs(exact[w]) ** 2 - jnp.abs(lin.e_nom[w]) ** 2) * du2 / e_in[w]
+            )
+            np.testing.assert_allclose(
+                delta, direct, atol=5e-3 * float(jnp.max(jnp.abs(direct)))
+            )
