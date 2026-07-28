@@ -219,6 +219,65 @@ halo scaling.
   $N_\mathrm{eff}$ of the synthesis as built, so where the two disagree it is
   the synthesis that departs from the process it names.
 
+### Chromatic optics
+
+`DispersiveScreen` generalizes the fixed OPD-to-phase law to a per-mode
+complex dispersion kernel $D_k(\lambda)$, tabulated and linearly
+interpolated at the field's wavelengths; chromatic `linearize` and the
+coating transfer-matrix model carry that kernel through full optical paths.
+`test_dispersive.py`, `test_linearize.py`, `test_coatings.py`, and
+`tests/validation/test_coatings_crosscheck.py` anchor it:
+
+- **OPD equivalence.** `TestOpdEquivalence` sets the kernel to the OPD law
+  $D(\lambda) = i\,2\pi/\lambda$, with table nodes placed exactly at the
+  field's wavelengths so the interpolation is exact, and checks that a
+  `DispersiveScreen` reproduces `PhaseScreen` at $\mathrm{atol}=10^{-12}$,
+  for both a monochromatic field and a five-channel chromatic field.
+- **Per-band mono equality.** `TestChromaticLinearize` checks the chromatic
+  `linearize` stack against a per-band monochromatic `linearize` call, both
+  on an achromatic path
+  (`test_matches_per_band_mono_linearize`) and with a `DispersiveScreen`
+  prepended to the path, table nodes at the band wavelengths so the
+  per-band rebuild is exact
+  (`test_in_path_dispersive_matches_per_band_mono`); both match at
+  $\mathrm{atol}=10^{-12}$.
+- **The kernel_at to dispersion contract.**
+  `test_kernel_feeds_dispersion_for_input_plane_screen` linearizes with
+  respect to an input-plane `DispersiveScreen`'s own coefficients by
+  passing `dispersion=screen.kernel_at(wavelengths)`, and checks the
+  result against `jacfwd` autodiff through the same coefficients (via
+  `eqx.tree_at`), at $\mathrm{atol}=10^{-12}$.
+- **Lambda scaling, exactly, and its deliberate breakage.**
+  `test_opd_reduces_to_lambda_scaling_on_achromatic_path` pins
+  $G(\lambda) = G(\lambda_0)\,\lambda_0/\lambda$ as an equality on an
+  achromatic path with native lambda/D output, and
+  `test_dispersive_screen_breaks_lambda_scaling` is the mutation check: a
+  genuinely non-OPD kernel (phase increasing with wavelength, not merely
+  nonzero) must fail that same scaling law.
+- **Coating closed forms** (`test_coatings.py::TestAnalyticAnchors`). A
+  bare interface reduces to the Fresnel amplitude
+  $r=(n_0-n_s)/(n_0+n_s)$; an index-matched slab is pure propagation,
+  giving $r=0$ and $t=\exp(+i\,2\pi n d/\lambda)$ in the library's
+  $e^{+ikz}$ convention, the sign-convention anchor that a conjugated
+  transfer matrix cannot pass (backed by
+  `TestThicknessKernel::test_matched_slab_kernel_is_opd_law`, which pins
+  the same slab's $d(\log t)/dd = +i\,2\pi n/\lambda$); a single
+  quarter-wave layer matches
+  $r=(n_0 n_s - n_1^2)/(n_0 n_s + n_1^2)$; an N-pair quarter-wave stack
+  matches the admittance-recursion closed form for peak reflectance; and a
+  three-layer real-index stack conserves energy,
+  $|r|^2 + (n_s/n_0)|t|^2 = 1$, at $\mathrm{rtol}=10^{-10}$ across 31
+  wavelengths.
+- **Sellmeier anchor.** `test_fused_silica_at_reference_wavelength` checks
+  that the Malitson (1965) fused-silica coefficients reproduce
+  $n(587.6\,\mathrm{nm}) \approx 1.4585$ to $2\times10^{-4}$.
+- **Signed hcipy cross-check.**
+  `tests/validation/test_coatings_crosscheck.py` compares the bare-interface
+  Fresnel amplitude against `hcipy.fresnel_reflection_coefficients` for
+  three index pairs as complex numbers, so a conjugated sign convention
+  would fail and not only a magnitude mismatch, at $\mathrm{rtol}=10^{-10}$;
+  it skips silently when hcipy is not importable.
+
 ## Tier B: the design-survey benchmark
 
 The primary external reference is the HWO Coronagraph Design Survey
