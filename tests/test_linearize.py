@@ -488,6 +488,22 @@ class TestChromaticLinearize:
                 dispersion=jnp.ones((2, 3), dtype=complex),
             )
 
+    def test_rejects_wavelengths_length_mismatch(
+        self, small_path, chromatic_field, opd_basis
+    ):
+        """A different-length wavelengths_nm (e.g. band edges instead of
+        band centers, or a resampled grid) must raise the intended
+        length-mismatch message, not numpy's opaque broadcast ValueError
+        from allclose on differently-shaped arrays."""
+        wavelengths = chromatic_field.spectrum.wavelengths_nm
+        with pytest.raises(ValueError, match="wavelengths_nm must match"):
+            linearize(
+                small_path,
+                chromatic_field,
+                opd_basis,
+                wavelengths_nm=wavelengths[:-1],
+            )
+
     def test_rejects_wavelengths_on_mono_field(self, small_path, mono_field, opd_basis):
         with pytest.raises(ValueError, match="chromatic field"):
             linearize(

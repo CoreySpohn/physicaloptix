@@ -229,6 +229,11 @@ def linearize(
 ):
     """Build the (E_nom, G) linearization of a path around ``field``.
 
+    ``wavelengths_nm`` must be passed explicitly rather than inferred from
+    ``field.spectrum``: it is a deliberate opt-in, so a caller cannot
+    silently get a 4-D chromatic ``G`` back from what looks like a
+    monochromatic call.
+
     Args:
         path: The ``OpticalPath`` (or any object with ``propagate``); every
             stage must be linear in the field for the analytic method.
@@ -268,8 +273,10 @@ def linearize(
             raise ValueError(
                 "wavelengths_nm requires a chromatic field (with a spectrum)"
             )
-        if not np.allclose(
-            np.asarray(field.spectrum.wavelengths_nm), np.asarray(wavelengths_nm)
+        field_wavelengths = np.asarray(field.spectrum.wavelengths_nm)
+        query_wavelengths = np.asarray(wavelengths_nm)
+        if field_wavelengths.shape != query_wavelengths.shape or not np.allclose(
+            field_wavelengths, query_wavelengths
         ):
             raise ValueError("wavelengths_nm must match field.spectrum.wavelengths_nm")
         if wavelength_nm is None:

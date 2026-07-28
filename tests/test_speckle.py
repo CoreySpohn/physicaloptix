@@ -1126,17 +1126,21 @@ class TestSeamIdentity:
     def test_realize_matches_direct_propagation_per_band(
         self, small_path, chromatic_field, opd_basis
     ):
-        """End-to-end: generator delta == direct nonlinear propagation per
-        band, both sides in flux-fraction units via the recorded primitives.
+        """End-to-end: the generator's ``realize()`` delta equals direct
+        nonlinear propagation per band, both in flux-fraction units through
+        the recorded photometric primitives (``input_energy``,
+        ``pixel_scale_lod``).
 
-        eps = 0.002 nm/mode over 4 unit-normal modes at ~500 nm gives
-        worst-case grid phase ~2e-4 rad. The coherent cross term's
-        second-order correction scales with the field's own intensity near
-        the PSF core rather than with the delta itself (measured ~5% of
-        max|direct| at eps=0.05, the value that motivated this test before
-        that scaling was accounted for); eps=0.002 keeps the measured ratio
-        to ~2e-3, so atol at 5e-3*max|direct| holds a ~2x margin (the
-        conftest opd_basis pins the unit normalization this relies on).
+        The coherent cross term's second-order correction scales with the
+        field's own intensity ``|E_nom|^2`` near the PSF core rather than
+        with the delta itself, so the residual between the linear ``delta``
+        and the exact nonlinear response is second order in ``eps`` while
+        the signal is first order: the residual falls off as ``eps^2``
+        against a signal that only falls off as ``eps``. At
+        eps = 0.002 nm/mode over 4 unit-normal modes at ~500 nm (worst-case
+        grid phase ~2e-4 rad), this keeps the residual well under the atol
+        of ``5e-3 * max|direct|`` (the conftest ``opd_basis`` pins the unit
+        normalization this relies on).
         """
         wavelengths = chromatic_field.spectrum.wavelengths_nm
         lin = linearize(

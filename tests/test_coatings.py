@@ -1,9 +1,15 @@
 """Analytic anchors for the coating transfer-matrix module."""
 
+import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from physicaloptix.coatings import multilayer_response, sellmeier, thickness_kernel
+from physicaloptix.elements import DispersiveScreen, ModeBasis
+from physicaloptix.linearize import linearize
+from physicaloptix.path import OpticalPath, Stage
 
 WL = jnp.linspace(400.0, 700.0, 31)
 
@@ -108,3 +114,71 @@ class TestThicknessKernel:
             wl, [n], [100.0], layer=0, output="t", n_incident=n, n_substrate=n
         )
         np.testing.assert_allclose(kern, 1j * 2.0 * jnp.pi * n / wl, rtol=1e-8)
+
+    def test_rejects_unknown_output(self):
+        """output="R" (or any typo) must raise, not silently fall through to
+        the transmission branch and return the wrong kernel."""
+        wl = jnp.linspace(500.0, 600.0, 3)
+        with pytest.raises(ValueError, match="output must be 'r' or 't'"):
+            thickness_kernel(wl, [1.5], [100.0], layer=0, output="R", n_substrate=1.5)
+
+
+class TestFeedsDispersiveScreen:
+    """The coatings -> DispersiveScreen composition seam.
+
+    ``thickness_kernel`` returns a complex ``(w,)`` curve that is by design
+    a ``DispersiveScreen`` kernel row (both docstrings name each other);
+    this pins the composition, mirroring
+    ``test_kernel_feeds_dispersion_for_input_plane_screen`` in
+    ``test_linearize.py`` but with a kernel actually produced by
+    ``thickness_kernel`` rather than a hand-built table.
+    """
+
+    def test_thickness_kernel_feeds_dispersive_screen(
+        self, small_path, chromatic_field
+    ):
+        wavelengths = chromatic_field.spectrum.wavelengths_nm
+        kern = thickness_kernel(
+            wavelengths, [2.35, 1.38], [60.0, 95.0], layer=0, n_substrate=1.5
+        )
+        grid = small_path.stages[0].op.grid
+        rng = np.random.default_rng(2)
+        basis = ModeBasis(
+            B=jnp.asarray(rng.standard_normal((1, grid.npix, grid.npix))),
+            coeffs=jnp.array([0.3]),
+        )
+        screen = DispersiveScreen(
+            basis,
+            kern[None, :],
+            wavelengths,
+            grid,
+            wavelength_nm=float(wavelengths[0]),
+        )
+        # Table nodes sit exactly at the query wavelengths, so interpolation
+        # is exact and kernel_at must reproduce the curve.
+        np.testing.assert_allclose(
+            np.asarray(screen.kernel_at(wavelengths))[0],
+            np.asarray(kern),
+            rtol=0,
+            atol=1e-12,
+        )
+
+        path = OpticalPath(stages=(Stage("coating", screen), *small_path.stages))
+        lin = linearize(
+            path,
+            chromatic_field,
+            screen.basis,
+            wavelengths_nm=wavelengths,
+            dispersion=screen.kernel_at(wavelengths),
+        )
+
+        def run(coeffs):
+            p = eqx.tree_at(lambda q: q.stages[0].op.basis.coeffs, path, coeffs)
+            out, _ = p.propagate(chromatic_field)
+            return out.data
+
+        jac = jax.jacfwd(run)(screen.basis.coeffs)  # (w, y, x, m)
+        g_ad = jnp.moveaxis(jac, -1, 1)  # (w, m, y, x)
+        np.testing.assert_allclose(
+            np.asarray(lin.G), np.asarray(g_ad), rtol=0, atol=1e-12
+        )

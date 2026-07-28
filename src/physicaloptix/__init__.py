@@ -33,6 +33,7 @@ from physicaloptix.detector import read_detector
 from physicaloptix.diagnostics import mft_sampling_parameter
 from physicaloptix.diff import diff_spec
 from physicaloptix.elements import (
+    DispersiveScreen,
     ModeBasis,
     MultiScaleVortex,
     PhaseScreen,
@@ -79,6 +80,7 @@ __all__ = [
     "BeamSplitter",
     "Branch",
     "ChannelLinearization",
+    "DispersiveScreen",
     "Field",
     "Fraunhofer",
     "Fresnel",

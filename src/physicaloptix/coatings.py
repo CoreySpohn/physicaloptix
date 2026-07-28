@@ -113,12 +113,17 @@ def thickness_kernel(
     Returns:
         The complex log-derivative curve, shape ``(w,)``.
 
+    Raises:
+        ValueError: If ``output`` is not ``"r"`` or ``"t"``.
+
     Note:
         Singular where the chosen output amplitude approaches zero (an AR
         point or a dichroic's transmission/reflection null). The first-order
         ``exp(D*B)`` extrapolation this kernel feeds is valid only for
         thickness errors small against the curve's variation scale.
     """
+    if output not in ("r", "t"):
+        raise ValueError(f"output must be 'r' or 't', got {output!r}")
     thicknesses = [jnp.asarray(d, dtype=float) for d in layer_thicknesses_nm]
 
     def log_response(d_layer):

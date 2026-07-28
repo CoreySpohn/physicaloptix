@@ -70,7 +70,10 @@ formula imported from a textbook must be checked against it before use.
   $n$ and thickness $d$ is pure propagation and must multiply the field by
   $\exp(+i\,2\pi n d/\lambda)$; if a transcription yields the minus sign,
   conjugate it. When adding any element that imprints phase, pin its sign
-  with an anchor test of this kind rather than trusting the source.
+  with an anchor test of this kind rather than trusting the source. The
+  Macleod thin-film characteristic matrix is the complex conjugate of this
+  convention, which is why {mod}`physicaloptix.coatings` negates its `1j`
+  factors when it builds `multilayer_response`'s per-layer matrix.
 - **A lossless beamsplitter reflects in quadrature.** `BeamSplitter.energy`
   uses the symmetric convention $t = \sqrt{1-R}$, $r = i\sqrt{R}$: the two
   ports differ by 90 degrees, so any future recombination is phased
@@ -129,7 +132,12 @@ gates only the design wavelength.
 
 Wavefront error is stored achromatically -- an OPD map in nanometres -- and
 the wavelength binds late: the phasor $\exp(+i\,2\pi\,\mathrm{OPD}/\lambda)$
-is formed where the optic is applied, once per wavelength. A chromatic
+is formed where the optic is applied, once per wavelength. This OPD phasor
+is the special case of a more general per-mode complex dispersion kernel
+$D_k(\lambda)$ (log-amplitude and phase, applied as
+$\exp(\sum_k c_k D_k(\lambda) B_k)$) that a
+{class}`~physicaloptix.DispersiveScreen` supplies for non-OPD chromatic
+responses such as coatings. A chromatic
 {class}`~physicaloptix.Field` carries `data` of shape `(nlam, y, x)` with a
 {class}`~physicaloptix.Spectrum`; elements and propagators act on the
 wavelength axis slice by slice (nothing couples wavelength channels), and the
