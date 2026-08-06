@@ -50,7 +50,12 @@ from physicaloptix.ifs import (
     save_psflet_pack,
 )
 from physicaloptix.interop import PathCoronagraph
-from physicaloptix.linearize import Linearization, linearity_residual, linearize
+from physicaloptix.linearize import (
+    Linearization,
+    linearity_residual,
+    linearize,
+    linearize_stages,
+)
 from physicaloptix.multichannel import (
     ChannelLinearization,
     MultiChannelLinearization,
@@ -73,7 +78,13 @@ from physicaloptix.speckle import (
     telescope_peak,
 )
 from physicaloptix.system import BeamSplitter, Branch, OpticalSystem, SplitterPort
-from physicaloptix.trains import REFLECTION_OPD_FACTOR, synthesize_psd_surface
+from physicaloptix.trains import (
+    REFLECTION_OPD_FACTOR,
+    MirrorSpec,
+    build_mirror_train,
+    load_train_yaml,
+    synthesize_psd_surface,
+)
 from physicaloptix.transforms import Fraunhofer, Fresnel, cmft_bwd, cmft_fwd
 from physicaloptix.viz import render_path
 
@@ -91,6 +102,7 @@ __all__ = [
     "Grid",
     "LensletChain",
     "Linearization",
+    "MirrorSpec",
     "ModeBasis",
     "MultiChannelLinearization",
     "MultiScaleVortex",
@@ -110,6 +122,7 @@ __all__ = [
     "ZernikeWavefrontSensor",
     "__version__",
     "broadcast_to_spectrum",
+    "build_mirror_train",
     "cmft_bwd",
     "cmft_fwd",
     "detector_scene",
@@ -120,7 +133,9 @@ __all__ = [
     "linearity_residual",
     "linearize",
     "linearize_shared",
+    "linearize_stages",
     "load_primary_yaml",
+    "load_train_yaml",
     "mft_sampling_parameter",
     "multilayer_response",
     "ncpa_differential_opd",
