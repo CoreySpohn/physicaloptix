@@ -562,6 +562,12 @@ def linearity_residual(path, field, basis, linearization, eps):
     ``perturbed_map`` (from the recorded ``wavelengths_nm`` / ``dispersion``)
     and contracting ``G``'s mode axis, which is no longer the leading axis.
     """
+    if linearization.perturbation_stage is not None:
+        raise NotImplementedError(
+            "linearity_residual checks input-plane linearizations; for a "
+            "perturbation_stage route, cross-check method='jvp' vs "
+            "method='jacfwd' or use a finite difference"
+        )
     eps = jnp.asarray(eps)
     run = perturbed_map(
         path,

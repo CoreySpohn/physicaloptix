@@ -650,6 +650,24 @@ class TestPerturbationStage:
             np.asarray(lin_fwd.G[0]), np.asarray(lin_fwd.G[-1]), atol=1e-6
         )
 
+    def test_linearity_residual_rejects_stage_route(self):
+        """linearity_residual only knows the input-plane perturbed_map;
+        silently checking a perturbation_stage Linearization against it
+        would validate the wrong nonlinear map (a false pass)."""
+        path, field = _train_and_field()
+        stage_basis = path.stages[
+            [s.name for s in path.stages].index("q_drift")
+        ].op.basis
+        lin = linearize(
+            path,
+            field,
+            wavelength_nm=500.0,
+            method="jacfwd",
+            perturbation_stage="q_drift",
+        )
+        with pytest.raises(NotImplementedError):
+            linearity_residual(path, field, stage_basis, lin, 1e-3)
+
 
 class TestLinearizeStages:
     def test_concatenation_and_slices(self):
