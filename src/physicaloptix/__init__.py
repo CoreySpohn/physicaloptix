@@ -30,7 +30,13 @@ from physicaloptix.apertures import (
 from physicaloptix.coatings import multilayer_response, sellmeier, thickness_kernel
 from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
 from physicaloptix.detector import read_detector
-from physicaloptix.diagnostics import mft_sampling_parameter
+from physicaloptix.diagnostics import (
+    QuadratureAudit,
+    mft_sampling_parameter,
+    quadrature_audit,
+    quadrature_audit_from_jacobians,
+    quadrature_partner,
+)
 from physicaloptix.diff import diff_spec
 from physicaloptix.elements import (
     DispersiveScreen,
@@ -67,16 +73,19 @@ from physicaloptix.sources import broadcast_to_spectrum, point_source
 from physicaloptix.speckle import (
     AnalyticSpeckleField,
     CrossBandMoments,
+    Photometry,
     SpeckleMoments,
     SpeckleProcess,
     lambda_scaled_channels,
     telescope_peak,
 )
 from physicaloptix.system import BeamSplitter, Branch, OpticalSystem, SplitterPort
+from physicaloptix.trains import REFLECTION_OPD_FACTOR, synthesize_psd_surface
 from physicaloptix.transforms import Fraunhofer, Fresnel, cmft_bwd, cmft_fwd
 from physicaloptix.viz import render_path
 
 __all__ = [
+    "REFLECTION_OPD_FACTOR",
     "AnalyticSpeckleField",
     "BeamSplitter",
     "Branch",
@@ -96,7 +105,9 @@ __all__ = [
     "OpticalSystem",
     "PathCoronagraph",
     "PhaseScreen",
+    "Photometry",
     "PlaneKind",
+    "QuadratureAudit",
     "SampledOptic",
     "SensitivityBudget",
     "SensitivityOperators",
@@ -126,6 +137,9 @@ __all__ = [
     "pastis_matrix",
     "point_source",
     "psflet_pack",
+    "quadrature_audit",
+    "quadrature_audit_from_jacobians",
+    "quadrature_partner",
     "rasterize_primary",
     "rasterize_segments",
     "read_detector",
@@ -133,6 +147,7 @@ __all__ = [
     "save_psflet_pack",
     "segment_ptt_basis",
     "sellmeier",
+    "synthesize_psd_surface",
     "telescope_peak",
     "thickness_kernel",
     "zernike_basis",
