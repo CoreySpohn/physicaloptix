@@ -1,0 +1,23 @@
+# HWO EAC-1 coronagraph-train partial geometry, equivalent collimated space.
+# alpha = lambda * z / D^2 at the reference wavelength. Values traced to the
+# HWO Sci-Eng-Interface obs_config (Tel/EAC1.yaml + CI/CI.yaml, release 1.9):
+# DM beam diameter 85 mm; DM1 at the pupil (pupil_separation 0 mm); DM2 at
+# DM_separation 1000 mm; back OAPs Rc 1700 mm (f = 852.94 mm) at the 21.25 mm
+# mask-relay beam. provenance: exact = stated in the config; assumption =
+# derived assuming the optic sits one focal length from a pupil or focus;
+# representative = a stand-in magnitude, replace when real geometry lands.
+reference_wavelength_nm: 500.0
+beam_diameter_m: 0.085
+mirrors:
+- name: dm1
+  alpha: 0.0
+  provenance: exact
+- name: dm2
+  alpha: 6.9e-5
+  provenance: exact
+- name: fold_mid
+  alpha: 4.0e-4
+  provenance: representative
+- name: oap_far
+  alpha: 9.4e-4
+  provenance: assumption
