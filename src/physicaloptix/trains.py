@@ -15,6 +15,8 @@ def synthesize_psd_surface(seed, grid, *, rms_nm, k_min=1.0, k_max=None, slope=-
     ``seed``. A generic polished-surface placeholder: swap in measured maps
     when metrology exists.
     """
+    if k_min <= 0:
+        raise ValueError(f"k_min must be positive, got {k_min}")
     if k_max is None:
         k_max = grid.npix / 4
     rng = np.random.default_rng(seed)
@@ -22,6 +24,8 @@ def synthesize_psd_surface(seed, grid, *, rms_nm, k_min=1.0, k_max=None, slope=-
     kk = np.hypot(*np.meshgrid(k, k))
     amplitude = np.zeros_like(kk)
     band = (kk >= k_min) & (kk <= k_max)
+    if not band.any():
+        raise ValueError(f"no grid frequencies fall in [{k_min}, {k_max}]")
     amplitude[band] = kk[band] ** (slope / 2.0)
     phases = rng.uniform(0.0, 2.0 * np.pi, kk.shape)
     surface = np.real(np.fft.ifft2(amplitude * np.exp(1j * phases)))

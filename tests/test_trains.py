@@ -44,3 +44,13 @@ class TestSynthesizePsdSurface:
         hi = power[(kk >= 15.0) & (kk < 30.0)].mean()
         measured_slope = np.log(hi / lo) / np.log(20.0 / 3.6)
         assert measured_slope == pytest.approx(-2.5, abs=0.6)
+
+    def test_rejects_nonpositive_k_min(self):
+        grid = Grid.pupil(64)
+        with pytest.raises(ValueError, match="k_min must be positive"):
+            synthesize_psd_surface(1, grid, rms_nm=1.0, k_min=0.0)
+
+    def test_rejects_empty_band(self):
+        grid = Grid.pupil(16)
+        with pytest.raises(ValueError, match="no grid frequencies fall in"):
+            synthesize_psd_surface(1, grid, rms_nm=1.0, k_min=50.0, k_max=51.0)
