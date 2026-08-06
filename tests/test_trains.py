@@ -186,6 +186,56 @@ class TestBuildMirrorTrain:
         assert np.asarray(out.data).shape == (3, 128, 128)
 
 
+class TestSpeckleProcessWiring:
+    def test_chromatic_train_feeds_speckle_process(self):
+        import jax
+
+        from physicaloptix import Fraunhofer
+        from physicaloptix.linearize import linearize_stages
+        from physicaloptix.path import OpticalPath, Stage
+
+        grid = Grid.pupil(96)
+        coords = grid.coords
+        xx, yy = np.meshgrid(coords, coords)
+        aperture = (np.hypot(xx, yy) <= 0.5).astype(complex)
+        drift = ModeBasis(
+            B=jnp.stack(
+                [
+                    synthesize_psd_surface(50 + k, grid, rms_nm=0.05, k_max=30)
+                    for k in range(3)
+                ]
+            ),
+            coeffs=jnp.zeros(3),
+        )
+        specs = (
+            MirrorSpec(name="a", alpha=0.0, drift_basis=drift),
+            MirrorSpec(name="b", alpha=9.4e-4, drift_basis=drift),
+        )
+        train = build_mirror_train(
+            specs, grid, wavelength_nm=500.0, beam_diameter_m=0.085
+        )
+        focal = Grid.focal(64, 0.3)
+        science = Stage("science", Fraunhofer(grid_in=grid, grid_out=focal))
+        path = OpticalPath(stages=(*train.stages, science))
+        spectrum = Spectrum.tophat(500.0, 0.2, 3)
+        field = broadcast_to_spectrum(
+            Field(data=jnp.asarray(aperture), grid=grid, plane=PlaneKind.PUPIL),
+            spectrum,
+        )
+        wavelengths = np.asarray(spectrum.wavelengths_nm)
+        lin, slices = linearize_stages(
+            path, field, ("a_drift", "b_drift"), wavelengths_nm=wavelengths
+        )
+        assert np.asarray(lin.G).shape == (3, 6, 64, 64)
+        assert slices == {"a_drift": slice(0, 3), "b_drift": slice(3, 6)}
+        process = lin.to_speckle_process(
+            per_mode_rms=0.05 * jnp.ones(6), knee_hz=1e-3, slope=-2.0
+        )
+        realization = process.draw(jax.random.PRNGKey(0))
+        # the chromatic draw carries every channel through
+        assert np.asarray(realization.e_nom).shape[0] == 3
+
+
 class TestLoadTrainYaml:
     def test_bundled_eac1_config(self):
         config = load_train_yaml()
