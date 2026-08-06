@@ -8,9 +8,11 @@ import pytest
 
 from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
 from physicaloptix.elements import DispersiveScreen, ModeBasis, SampledOptic
-from physicaloptix.linearize import linearity_residual, linearize
+from physicaloptix.linearize import linearity_residual, linearize, linearize_stages
 from physicaloptix.path import OpticalPath, Stage
+from physicaloptix.sources import broadcast_to_spectrum
 from physicaloptix.speckle import SpeckleProcess
+from physicaloptix.trains import MirrorSpec, build_mirror_train, synthesize_psd_surface
 from physicaloptix.transforms import Fraunhofer
 
 WL_NM = 500.0
@@ -512,3 +514,158 @@ class TestChromaticLinearize:
                 opd_basis,
                 wavelengths_nm=jnp.array([500.0, 550.0]),
             )
+
+
+def _train_and_field(nlam=None, npix=96):
+    grid = Grid.pupil(npix)
+    coords = grid.coords
+    xx, yy = np.meshgrid(coords, coords)
+    aperture = (np.hypot(xx, yy) <= 0.5).astype(complex)
+    drift = ModeBasis(
+        B=jnp.stack(
+            [
+                synthesize_psd_surface(40, grid, rms_nm=1.0, k_max=30),
+                synthesize_psd_surface(41, grid, rms_nm=1.0, k_max=30),
+            ]
+        ),
+        coeffs=jnp.zeros(2),
+    )
+    specs = (
+        MirrorSpec(name="p", alpha=0.0, drift_basis=drift),
+        MirrorSpec(
+            name="q",
+            alpha=9.4e-4,
+            surface_nm=synthesize_psd_surface(42, grid, rms_nm=1.0, k_max=30),
+            drift_basis=drift,
+        ),
+    )
+    path = build_mirror_train(specs, grid, wavelength_nm=500.0, beam_diameter_m=0.085)
+    field = Field(data=jnp.asarray(aperture), grid=grid, plane=PlaneKind.PUPIL)
+    if nlam is not None:
+        spectrum = Spectrum.tophat(500.0, 0.2, nlam)
+        field = broadcast_to_spectrum(field, spectrum)
+    return path, field
+
+
+class TestPerturbationStage:
+    def test_basis_and_stage_are_exclusive(self):
+        path, field = _train_and_field()
+        with pytest.raises(ValueError, match="basis"):
+            linearize(
+                path,
+                field,
+                ModeBasis(B=jnp.zeros((1, 96, 96)), coeffs=jnp.zeros(1)),
+                wavelength_nm=500.0,
+                perturbation_stage="q_drift",
+            )
+
+    def test_pupil_stage_matches_input_plane_route(self):
+        path, field = _train_and_field()
+        stage_basis = path.stages[0].op.basis  # p_drift at the pupil
+        lin_input = linearize(
+            path, field, stage_basis, wavelength_nm=500.0, method="jacfwd"
+        )
+        lin_stage = linearize(
+            path,
+            field,
+            wavelength_nm=500.0,
+            method="jacfwd",
+            perturbation_stage="p_drift",
+        )
+        np.testing.assert_allclose(
+            np.asarray(lin_stage.G), np.asarray(lin_input.G), atol=1e-10
+        )
+
+    def test_downstream_stage_matches_finite_difference(self):
+        path, field = _train_and_field()
+        lin = linearize(
+            path,
+            field,
+            wavelength_nm=500.0,
+            method="jacfwd",
+            perturbation_stage="q_drift",
+        )
+        index = [s.name for s in path.stages].index("q_drift")
+        eps = 1e-4
+        bumped = eqx.tree_at(
+            lambda p: p.stages[index].op.basis.coeffs,
+            path,
+            jnp.zeros(2).at[0].set(eps),
+        )
+        e_plus, _ = bumped.propagate(field)
+        e_zero, _ = path.propagate(field)
+        fd = (np.asarray(e_plus.data) - np.asarray(e_zero.data)) / eps
+        np.testing.assert_allclose(np.asarray(lin.G[0]), fd, atol=1e-6)
+
+    def test_downstream_stage_differs_from_input_plane_injection(self):
+        path, field = _train_and_field()
+        stage_basis = path.stages[
+            [s.name for s in path.stages].index("q_drift")
+        ].op.basis
+        lin_wrong = linearize(
+            path, field, stage_basis, wavelength_nm=500.0, method="jacfwd"
+        )
+        lin_right = linearize(
+            path,
+            field,
+            wavelength_nm=500.0,
+            method="jacfwd",
+            perturbation_stage="q_drift",
+        )
+        rel = (
+            np.abs(np.asarray(lin_wrong.G) - np.asarray(lin_right.G)).max()
+            / np.abs(np.asarray(lin_right.G)).max()
+        )
+        assert rel > 1e-3  # the commutator error the design doc measured
+
+    def test_chromatic_layout_and_method_cross_check(self):
+        # A mono control at a band-edge wavelength is NOT comparable here:
+        # PhaseScreen carries a static wavelength_nm and the train's z was
+        # derived from alpha at the reference wavelength, so a mono rebuild
+        # changes the physics. The independent check is method-vs-method on
+        # the same chromatic path: jvp and jacfwd share no code path beyond
+        # the perturbed map itself.
+        path, field = _train_and_field(nlam=3)
+        wavelengths = np.asarray(field.spectrum.wavelengths_nm)
+        lin_fwd = linearize(
+            path,
+            field,
+            method="jacfwd",
+            perturbation_stage="q_drift",
+            wavelengths_nm=wavelengths,
+        )
+        assert np.asarray(lin_fwd.G).shape == (3, 2, 96, 96)
+        lin_jvp = linearize(
+            path,
+            field,
+            method="jvp",
+            perturbation_stage="q_drift",
+            wavelengths_nm=wavelengths,
+        )
+        np.testing.assert_allclose(
+            np.asarray(lin_fwd.G), np.asarray(lin_jvp.G), atol=1e-11
+        )
+        # and the bands genuinely differ (the chromatic physics is present)
+        assert not np.allclose(
+            np.asarray(lin_fwd.G[0]), np.asarray(lin_fwd.G[-1]), atol=1e-6
+        )
+
+
+class TestLinearizeStages:
+    def test_concatenation_and_slices(self):
+        path, field = _train_and_field()
+        lin, slices = linearize_stages(
+            path, field, ("p_drift", "q_drift"), wavelength_nm=500.0
+        )
+        assert np.asarray(lin.G).shape[0] == 4
+        assert slices == {"p_drift": slice(0, 2), "q_drift": slice(2, 4)}
+        single = linearize(
+            path,
+            field,
+            wavelength_nm=500.0,
+            method="jacfwd",
+            perturbation_stage="q_drift",
+        )
+        np.testing.assert_allclose(
+            np.asarray(lin.G[slices["q_drift"]]), np.asarray(single.G), atol=1e-12
+        )

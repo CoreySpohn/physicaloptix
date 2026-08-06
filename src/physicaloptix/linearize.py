@@ -80,6 +80,9 @@ class Linearization(eqx.Module):
             table, shape ``(m, w)``, for a chromatic linearization (whether
             supplied explicitly or derived from ``basis.kind``); ``None``
             for a mono one.
+        perturbation_stage: The name of the stage whose own ``ModeBasis``
+            was differentiated (the plane-aware route), or ``None`` for the
+            input-plane injection route.
     """
 
     e_nom: Array
@@ -91,6 +94,7 @@ class Linearization(eqx.Module):
     input_energy: float | tuple[float, ...] = eqx.field(static=True)
     wavelengths_nm: Array | None = None
     dispersion: Array | None = None
+    perturbation_stage: str | None = eqx.field(static=True, default=None)
 
     @property
     def n_modes(self):
@@ -215,10 +219,42 @@ def perturbed_map(
     return run
 
 
+def _perturbation_run(
+    path, field, basis, wavelength_nm, *, stage_index, wavelengths_nm, dispersion
+):
+    """The map ``run`` for the jvp/jacfwd routes.
+
+    ``stage_index is None`` is the input-plane injection (``perturbed_map``);
+    otherwise the map is an additive coefficient swap on that stage's own
+    ``ModeBasis``, propagated through the remainder of the path -- correct
+    for modes living at any plane, not just the input plane.
+    """
+    if stage_index is None:
+        return perturbed_map(
+            path,
+            field,
+            basis,
+            wavelength_nm,
+            wavelengths_nm=wavelengths_nm,
+            dispersion=dispersion,
+        )
+    base_coeffs = path.stages[stage_index].op.basis.coeffs
+
+    def run(delta):
+        swapped = eqx.tree_at(
+            lambda p: p.stages[stage_index].op.basis.coeffs,
+            path,
+            base_coeffs + delta,
+        )
+        return swapped.propagate(field)[0].data
+
+    return run
+
+
 def linearize(
     path,
     field,
-    basis,
+    basis=None,
     *,
     wavelength_nm=None,
     method="auto",
@@ -226,6 +262,7 @@ def linearize(
     memory_budget_bytes=4 * 2**30,
     wavelengths_nm=None,
     dispersion=None,
+    perturbation_stage=None,
 ):
     """Build the (E_nom, G) linearization of a path around ``field``.
 
@@ -234,19 +271,32 @@ def linearize(
     silently get a 4-D chromatic ``G`` back from what looks like a
     monochromatic call.
 
+    Two ways to place the perturbed modes: ``basis`` injects them at the
+    INPUT plane ``field`` is given at; ``perturbation_stage`` instead
+    differentiates with respect to a named stage's OWN ``ModeBasis.coeffs``
+    (an additive delta around its current values, propagated through the
+    remainder of the path). The stage route is correct for modes living at
+    any plane, at the cost of requiring ``method="jvp"`` or ``"jacfwd"``
+    (the analytic shortcut assumes an input-plane injection).
+
     Args:
-        path: The ``OpticalPath`` (or any object with ``propagate``); every
-            stage must be linear in the field for the analytic method.
+        path: The ``OpticalPath`` (or any object with ``propagate`` and,
+            for ``perturbation_stage``, ``stages``); every stage must be
+            linear in the field for the analytic method.
         field: The unperturbed input field; the OPD perturbation applies at
-            this plane. Chromatic (``field.spectrum`` set) requires
+            this plane (or, with ``perturbation_stage``, is propagated from
+            it). Chromatic (``field.spectrum`` set) requires
             ``wavelengths_nm``; mono requires it to be absent.
         basis: An OPD ``ModeBasis`` in the same length unit as
-            ``wavelength_nm`` (or an ``"amplitude"`` basis).
+            ``wavelength_nm`` (or an ``"amplitude"`` basis). Required
+            unless ``perturbation_stage`` is given, and mutually exclusive
+            with it.
         wavelength_nm: Design wavelength for the phase factor. Required for
             a mono field; optional for a chromatic one, where it defaults to
             ``float(wavelengths_nm[0])`` and is then record-only (the
             per-band factors come from ``wavelengths_nm`` / ``dispersion``).
         method: ``"analytic"`` (default via ``"auto"``), ``"jvp"``, or
+            ``"jacfwd"``. ``perturbation_stage`` requires ``"jvp"`` or
             ``"jacfwd"``.
         chunk_size: Modes per propagation batch for the analytic method;
             ``None`` batches all modes (subject to ``memory_budget_bytes``
@@ -261,10 +311,37 @@ def linearize(
             evaluated at ``wavelengths_nm``; default derives from
             ``basis.kind`` (``i 2 pi / lambda_w`` for ``"opd"``, ``1`` for
             ``"amplitude"``). Only meaningful with ``wavelengths_nm`` set.
+            Not used by the ``perturbation_stage`` route (the stage's own
+            per-wavelength physics runs unchanged).
+        perturbation_stage: Name of a stage in ``path.stages`` whose own
+            ``ModeBasis.coeffs`` to differentiate, instead of injecting
+            ``basis`` at the input plane. Mutually exclusive with ``basis``;
+            ``method="analytic"``/``"auto"`` raise ``NotImplementedError``
+            for this route.
 
     Returns:
         A ``Linearization``.
     """
+    stage_index = None
+    if perturbation_stage is not None:
+        if basis is not None:
+            raise ValueError(
+                "pass either basis (input-plane injection) or "
+                "perturbation_stage (a stage's own modes), not both"
+            )
+        names = [stage.name for stage in path.stages]
+        if perturbation_stage not in names:
+            raise ValueError(f"no stage named {perturbation_stage!r}")
+        stage_index = names.index(perturbation_stage)
+        basis = path.stages[stage_index].op.basis
+        if method in ("auto", "analytic"):
+            raise NotImplementedError(
+                "analytic remaining-path injection is not built; use "
+                "method='jacfwd' (or 'jvp') with perturbation_stage"
+            )
+    elif basis is None:
+        raise ValueError("basis is required without perturbation_stage")
+
     if dispersion is not None and wavelengths_nm is None:
         raise ValueError("dispersion requires wavelengths_nm")
     if wavelengths_nm is not None:
@@ -338,11 +415,12 @@ def linearize(
                 ]
             )
     elif resolved == "jvp":
-        run = perturbed_map(
+        run = _perturbation_run(
             path,
             field,
             basis,
             wavelength_nm,
+            stage_index=stage_index,
             wavelengths_nm=wavelengths_nm,
             dispersion=dispersion,
         )
@@ -353,11 +431,12 @@ def linearize(
         ]
         g = jnp.stack(cols)
     elif resolved == "jacfwd":
-        run = perturbed_map(
+        run = _perturbation_run(
             path,
             field,
             basis,
             wavelength_nm,
+            stage_index=stage_index,
             wavelengths_nm=wavelengths_nm,
             dispersion=dispersion,
         )
@@ -388,7 +467,90 @@ def linearize(
         input_energy=input_energy,
         wavelengths_nm=wavelengths_nm,
         dispersion=resolved_dispersion,
+        perturbation_stage=perturbation_stage,
     )
+
+
+def linearize_stages(
+    path,
+    field,
+    stage_names,
+    *,
+    wavelength_nm=None,
+    method="jacfwd",
+    wavelengths_nm=None,
+):
+    """Concatenate per-stage plane-aware linearizations along the mode axis.
+
+    Builds one ``perturbation_stage`` :func:`linearize` per name in
+    ``stage_names`` and stacks their ``G`` columns, so a caller can budget a
+    sensitivity matrix across several stages (e.g. two mirrors' drift bases)
+    without re-deriving the column layout by hand.
+
+    Args:
+        path: The ``OpticalPath``.
+        field: The unperturbed input field.
+        stage_names: Names of stages in ``path.stages`` to linearize, in the
+            order their columns should appear.
+        wavelength_nm: Forwarded to :func:`linearize`.
+        method: Forwarded to :func:`linearize`; must be ``"jvp"`` or
+            ``"jacfwd"`` (the ``perturbation_stage`` route has no analytic
+            method yet).
+        wavelengths_nm: Forwarded to :func:`linearize`; set for a chromatic
+            linearization.
+
+    Returns:
+        ``(Linearization, {stage_name: slice})``: the concatenated
+        linearization (``e_nom`` and the recorded normalization primitives
+        are shared across stages by construction, so those are asserted
+        rather than merged) and each stage's column slice into ``G``'s mode
+        axis.
+    """
+    parts = [
+        linearize(
+            path,
+            field,
+            wavelength_nm=wavelength_nm,
+            method=method,
+            wavelengths_nm=wavelengths_nm,
+            perturbation_stage=name,
+        )
+        for name in stage_names
+    ]
+    first = parts[0]
+    for part in parts[1:]:
+        assert part.method == first.method
+        assert part.kind == first.kind
+        assert part.wavelength_nm == first.wavelength_nm
+        assert part.pixel_scale_lod == first.pixel_scale_lod
+        assert part.input_energy == first.input_energy
+        assert np.array_equal(np.asarray(part.e_nom), np.asarray(first.e_nom))
+        if first.wavelengths_nm is not None:
+            assert np.array_equal(
+                np.asarray(part.wavelengths_nm), np.asarray(first.wavelengths_nm)
+            )
+
+    axis = 0 if wavelengths_nm is None else 1
+    g = jnp.concatenate([part.G for part in parts], axis=axis)
+    slices, start = {}, 0
+    for name, part in zip(stage_names, parts, strict=True):
+        m = part.G.shape[axis]
+        slices[name] = slice(start, start + m)
+        start += m
+
+    merged = Linearization(
+        e_nom=first.e_nom,
+        G=g,
+        wavelength_nm=first.wavelength_nm,
+        method=first.method,
+        kind=first.kind,
+        pixel_scale_lod=first.pixel_scale_lod,
+        input_energy=first.input_energy,
+        wavelengths_nm=first.wavelengths_nm,
+        dispersion=first.dispersion,
+        perturbation_stage=None,
+    )
+    return merged, slices
 
 
 def linearity_residual(path, field, basis, linearization, eps):
