@@ -1,5 +1,41 @@
 # Changelog
 
+## [1.1.0](https://github.com/CoreySpohn/physicaloptix/compare/v1.0.1...v1.1.0) (2026-08-07)
+
+
+### Features
+
+* **coatings:** transfer-matrix stack response and thickness dispersion kernels ([4776d86](https://github.com/CoreySpohn/physicaloptix/commit/4776d8676a88a67463ba837ed66a795f6742c50a))
+* **elements:** DispersiveScreen with tabulated complex dispersion kernel ([a00e874](https://github.com/CoreySpohn/physicaloptix/commit/a00e874c14b343186e42b082b0344ab5cebb3fde))
+* **linearize:** chromatic G stacks via per-mode dispersion factors ([e5e64b0](https://github.com/CoreySpohn/physicaloptix/commit/e5e64b09b333d3dca586969200f2d51a0c33f9c4))
+* **linearize:** plane-aware perturbation_stage route and linearize_stages ([5025e8e](https://github.com/CoreySpohn/physicaloptix/commit/5025e8ea4973beb03703c2750d3eacd9866e3e0f))
+* **package:** export the mirror-train and plane-aware linearize API ([8901dda](https://github.com/CoreySpohn/physicaloptix/commit/8901ddab686021c3ae27c4ef96f3fa3b629ea7f5))
+* **robustness:** PASTIS sensitivity matrix and the exact improper dark-zone variance budget ([7afc643](https://github.com/CoreySpohn/physicaloptix/commit/7afc643fda02de76e36a81a34f2ffd71ad89b53d))
+* **speckle:** band correlation, n_eff, impropriety views and probe joint covariance ([4472b3d](https://github.com/CoreySpohn/physicaloptix/commit/4472b3d2c49c8534c2e5c88e83b40be03aab47d9))
+* **speckle:** chromatic (w, m, y, x) layout through SpeckleProcess.draw ([0054ef6](https://github.com/CoreySpohn/physicaloptix/commit/0054ef608d3c304c58a312fd8db1e8f65f522325))
+* **speckle:** closed-form exposure-averaging count per mode ([d9d6091](https://github.com/CoreySpohn/physicaloptix/commit/d9d609196dcaa3308db66975adfde52a1a25f048))
+* **speckle:** cross_band_moments exact joint band-pair statistics ([c1012b8](https://github.com/CoreySpohn/physicaloptix/commit/c1012b8b116b89377382bf504c4f608b73376d59))
+* **speckle:** derive flux-fraction normalization from recorded input-energy primitives ([25d19a2](https://github.com/CoreySpohn/physicaloptix/commit/25d19a2b0b18b553911cb265d236a012a40c9f7e))
+* **speckle:** per-mode temporal PSDs and the closed-form moment self-oracle ([b1803af](https://github.com/CoreySpohn/physicaloptix/commit/b1803af922159510822a8ca0f890153aa1e8df4b))
+* **speckle:** scale_e_nom option for lambda-scaled channels ([7fcd63b](https://github.com/CoreySpohn/physicaloptix/commit/7fcd63b3ededf704e9fa867ddaf17809434f6cec))
+* **trains:** band-limited power-law PSD surface synthesis ([e5679d3](https://github.com/CoreySpohn/physicaloptix/commit/e5679d3994dc031e50381efc2f852c1b93afe5a0))
+* **trains:** equivalent-space mirror-train builder with bundled EAC-1 geometry ([1990455](https://github.com/CoreySpohn/physicaloptix/commit/1990455d03129c7e8c39d74cd120c78bda0cee87))
+
+
+### Bug Fixes
+
+* American spelling throughout (nanometres, centre, grey, honour), match optixstuff's segment_centers_m rename ([0368ad7](https://github.com/CoreySpohn/physicaloptix/commit/0368ad74ea842e4aeaf12238f6153c4114fff014))
+* **linearize:** guard dispersion-without-wavelengths on every method ([5c1b8d7](https://github.com/CoreySpohn/physicaloptix/commit/5c1b8d76e35a56a10fb04ffd06a0ebdd6b4492a5))
+* **linearize:** mark merged stage-route linearizations and drop stale dispersion ([282f16d](https://github.com/CoreySpohn/physicaloptix/commit/282f16d20650fe1524eda3b1cefb72c65463df9d))
+* **linearize:** reject linearity_residual on perturbation_stage linearizations ([f9cda5d](https://github.com/CoreySpohn/physicaloptix/commit/f9cda5dc78f7fa702b08c1cd9ea4b46cb340542b))
+* **package:** drop exports of names not yet defined in committed modules ([c2a5a8b](https://github.com/CoreySpohn/physicaloptix/commit/c2a5a8b90e279891db850e64cf43beb7fc057ad3))
+* post-review polish for chromatic-optics dispersion feature ([11b758b](https://github.com/CoreySpohn/physicaloptix/commit/11b758bb2be61c2029219e4407b6fdc716cbfd3e))
+* **speckle:** joint_covariance mask-shape guard, docs literal-block, tau_s coverage ([8a85c37](https://github.com/CoreySpohn/physicaloptix/commit/8a85c378d8f712c26636a4b4f2448c5e0f60af88))
+* **speckle:** weight spectral lines by S(f) df so the temporal kernel is the PSD's transform ([dafbefd](https://github.com/CoreySpohn/physicaloptix/commit/dafbefd495a43787f618a413398f370ebdb66d54))
+* **trains:** reject degenerate frequency bands ([893fa21](https://github.com/CoreySpohn/physicaloptix/commit/893fa217be0edee793d3f6e03aa6b665119c2789))
+* **viz:** render focal-plane maps with origin lower ([4809228](https://github.com/CoreySpohn/physicaloptix/commit/4809228a4d647c35be713bbb9b84349e2ed4639d))
+* **yip:** emit per-pixel flux fractions and repair validation data paths ([f87346f](https://github.com/CoreySpohn/physicaloptix/commit/f87346fc1828867a2b5fe563a759f33be96b1960))
+
 ## [1.0.1](https://github.com/CoreySpohn/physicaloptix/compare/v1.0.0...v1.0.1) (2026-07-22)
 
 
