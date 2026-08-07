@@ -278,6 +278,74 @@ coating transfer-matrix model carry that kernel through full optical paths.
   would fail and not only a magnitude mismatch, at $\mathrm{rtol}=10^{-10}$;
   it skips silently when hcipy is not importable.
 
+### Multi-mirror train
+
+`trains.build_mirror_train` chains several mirrors with real `Fresnel` hops
+between conjugate planes, so a figure error on an out-of-pupil mirror
+partially converts from phase to amplitude before it reaches the exit pupil
+(the Talbot effect). No official multi-surface design-survey reference exists
+for these chains -- see the honesty note at the end of this subsection -- so
+validation rests entirely on the per-hop `Fresnel` anchors above plus
+whole-train physical invariants and a plane-aware-Jacobian cross-check.
+
+Three whole-train gates in `tests/validation/test_multi_mirror_validation.py`
+run on a four-mirror train at real EAC-1-anchored conjugation distances
+(alpha up to $9.4\times10^{-4}$) with independently synthesized PSD surfaces:
+
+- **Talbot conversion law, frequency-resolved.** A single-frequency ripple
+  carried through a one-mirror train and measured at the exit pupil recovers
+  the amplitude fraction $|\sin(\pi\alpha\nu^2)|$ and the complementary phase
+  fraction $|\cos(\pi\alpha\nu^2)|$ to 5 percent, the same closed form the
+  bare `Fresnel` hop is anchored to
+  (`test_talbot_conversion_law_through_the_train`).
+- **Raw-contrast invariance under quadrature redistribution.** The multi-hop
+  ("honest") train and a single lumped achromatic pupil-plane OPD screen
+  carrying the same total surface error produce the same RAW dark-hole
+  contrast (no correction applied) to 2 percent across a three-wavelength 20
+  percent band and a 4-12 lambda/D annulus
+  (`test_raw_contrast_matches_lumped`): the Talbot effect redistributes power
+  between quadratures, it does not create or destroy it.
+- **Achromatic-conjugation floor bounds.** After an ideal achromatic phase
+  conjugation at one reference wavelength, the lumped model is exactly
+  correctable at every wavelength (floor below $10^{-25}$), while the honest
+  train leaves a floor between 0.5 and 10 percent of the raw contrast at
+  every wavelength (`test_achromatic_phase_conjugation_floor`) -- the
+  amplitude-quadrature residue a pupil-plane-only corrector cannot reach, the
+  physical signature the whole multi-mirror model exists to capture.
+
+Three plane-aware-Jacobian gates in
+`tests/test_linearize.py::TestPerturbationStage` and `TestLinearizeStages`
+anchor `linearize(..., perturbation_stage=...)`, the route that
+differentiates a downstream stage's own mode coefficients rather than
+injecting the perturbation at the input plane:
+
+- **Finite-difference agreement.** A `jacfwd` column for a stage after a
+  Fresnel hop matches a one-sided finite difference of the full path
+  propagation at $\mathrm{atol}=10^{-6}$
+  (`test_downstream_stage_matches_finite_difference`).
+- **Input-plane-vs-stage-route discrimination.** For a mode basis AT the
+  pupil, injecting it at the input plane and using `perturbation_stage` agree
+  at $\mathrm{atol}=10^{-10}$ (`test_pupil_stage_matches_input_plane_route`);
+  for a mode basis on a stage downstream of a Fresnel hop, the two routes
+  diverge by more than 0.1 percent relative
+  (`test_downstream_stage_differs_from_input_plane_injection`) -- the
+  commutator error that motivates the plane-aware route in the first place,
+  not just its absence when the two happen to coincide.
+- **jvp==jacfwd chromatic cross-check.** On a three-band chromatic path,
+  `jvp` and `jacfwd` through the same downstream stage's coefficients agree
+  at $\mathrm{atol}=10^{-11}$ while the bands genuinely differ from each
+  other (`test_chromatic_layout_and_method_cross_check`); `linearize_stages`'
+  concatenated multi-stage `G` matches the equivalent single-stage calls
+  slice for slice at $\mathrm{atol}=10^{-12}$ (`TestLinearizeStages`).
+
+No external multi-surface propagation reference exists for these designs:
+the standard community tool could not be installed from PyPI at time of
+writing. Multi-mirror validation therefore rests entirely on the per-hop
+analytic anchors (Talbot conversion, energy conservation) and the
+whole-train invariants above, the same discipline the propagation core
+itself was validated with before any design-survey reference entered the
+picture.
+
 ## Tier B: the design-survey benchmark
 
 The primary external reference is the HWO Coronagraph Design Survey
