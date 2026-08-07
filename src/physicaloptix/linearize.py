@@ -455,7 +455,15 @@ def linearize(
         resolved_dispersion = None
     else:
         input_energy = tuple(float(e) for e in field.energy())
-        resolved_dispersion = _factors(basis, wavelength_nm, wavelengths_nm, dispersion)
+        # The perturbation_stage route ignores dispersion (the stage's own
+        # per-wavelength physics runs unchanged), so there is no derived
+        # table that describes what was actually applied; record None
+        # rather than a plausible-looking but unused value.
+        resolved_dispersion = (
+            None
+            if perturbation_stage is not None
+            else _factors(basis, wavelength_nm, wavelengths_nm, dispersion)
+        )
 
     return Linearization(
         e_nom=e_nom_field.data,
@@ -502,9 +510,15 @@ def linearize_stages(
     Returns:
         ``(Linearization, {stage_name: slice})``: the concatenated
         linearization (``e_nom`` and the recorded normalization primitives
-        are shared across stages by construction, so those are asserted
+        are shared across stages by construction, so those are checked
         rather than merged) and each stage's column slice into ``G``'s mode
-        axis.
+        axis. The merged ``Linearization`` records
+        ``perturbation_stage=",".join(stage_names)`` (a truthy marker so
+        ``linearity_residual``'s input-plane-only guard fires on it too --
+        every ``linearize_stages`` output is stage-route by construction --
+        and honest provenance of which stages contributed) and
+        ``dispersion=None`` (no single per-mode table is coherent once
+        stages with different mode counts / kinds are concatenated).
     """
     parts = [
         linearize(
@@ -519,16 +533,24 @@ def linearize_stages(
     ]
     first = parts[0]
     for part in parts[1:]:
-        assert part.method == first.method
-        assert part.kind == first.kind
-        assert part.wavelength_nm == first.wavelength_nm
-        assert part.pixel_scale_lod == first.pixel_scale_lod
-        assert part.input_energy == first.input_energy
-        assert np.array_equal(np.asarray(part.e_nom), np.asarray(first.e_nom))
-        if first.wavelengths_nm is not None:
-            assert np.array_equal(
-                np.asarray(part.wavelengths_nm), np.asarray(first.wavelengths_nm)
+        if part.method != first.method:
+            raise ValueError("linearize_stages: stage parts disagree on method")
+        if part.kind != first.kind:
+            raise ValueError("linearize_stages: stage parts disagree on kind")
+        if part.wavelength_nm != first.wavelength_nm:
+            raise ValueError("linearize_stages: stage parts disagree on wavelength_nm")
+        if part.pixel_scale_lod != first.pixel_scale_lod:
+            raise ValueError(
+                "linearize_stages: stage parts disagree on pixel_scale_lod"
             )
+        if part.input_energy != first.input_energy:
+            raise ValueError("linearize_stages: stage parts disagree on input_energy")
+        if not np.array_equal(np.asarray(part.e_nom), np.asarray(first.e_nom)):
+            raise ValueError("linearize_stages: stage parts disagree on e_nom")
+        if first.wavelengths_nm is not None and not np.array_equal(
+            np.asarray(part.wavelengths_nm), np.asarray(first.wavelengths_nm)
+        ):
+            raise ValueError("linearize_stages: stage parts disagree on wavelengths_nm")
 
     axis = 0 if wavelengths_nm is None else 1
     g = jnp.concatenate([part.G for part in parts], axis=axis)
@@ -547,8 +569,8 @@ def linearize_stages(
         pixel_scale_lod=first.pixel_scale_lod,
         input_energy=first.input_energy,
         wavelengths_nm=first.wavelengths_nm,
-        dispersion=first.dispersion,
-        perturbation_stage=None,
+        dispersion=None,
+        perturbation_stage=",".join(stage_names),
     )
     return merged, slices
 

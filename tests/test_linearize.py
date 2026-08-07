@@ -687,3 +687,26 @@ class TestLinearizeStages:
         np.testing.assert_allclose(
             np.asarray(lin.G[slices["q_drift"]]), np.asarray(single.G), atol=1e-12
         )
+
+    def test_merged_linearization_is_marked_as_stage_route(self):
+        """Every linearize_stages output is stage-route by construction, so
+        it must carry a truthy perturbation_stage (the linearity_residual
+        guard keys on this) and no coherent merged dispersion table."""
+        path, field = _train_and_field()
+        lin, _ = linearize_stages(
+            path, field, ("p_drift", "q_drift"), wavelength_nm=500.0
+        )
+        assert lin.perturbation_stage == "p_drift,q_drift"
+        assert lin.dispersion is None
+
+    def test_linearity_residual_rejects_merged_stage_route(self):
+        """The single-stage guard (f9cda5d) must also fire on a merged
+        linearize_stages output -- a hand-stacked basis plus this
+        Linearization would otherwise silently check the wrong map."""
+        path, field = _train_and_field()
+        lin, _ = linearize_stages(
+            path, field, ("p_drift", "q_drift"), wavelength_nm=500.0
+        )
+        basis = path.stages[0].op.basis  # any basis; the guard fires first
+        with pytest.raises(NotImplementedError):
+            linearity_residual(path, field, basis, lin, 1e-3)
