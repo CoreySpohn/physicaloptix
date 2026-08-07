@@ -616,7 +616,9 @@ class TestPerturbationStage:
             np.abs(np.asarray(lin_wrong.G) - np.asarray(lin_right.G)).max()
             / np.abs(np.asarray(lin_right.G)).max()
         )
-        assert rel > 1e-3  # the commutator error the design doc measured
+        # Input-plane injection does not commute with the Fresnel hop, so the
+        # two routes must differ measurably for a downstream stage.
+        assert rel > 1e-3
 
     def test_chromatic_layout_and_method_cross_check(self):
         # A mono control at a band-edge wavelength is NOT comparable here:
