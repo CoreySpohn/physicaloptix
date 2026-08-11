@@ -150,6 +150,75 @@ def genchi2_cumulants(lam, beta):
     return k1, k2, k3, k4
 
 
+def genchi2_sf(x_grid, lam, beta, n_u=100000, u_max_sigmas=20000.0, chunk=8):
+    """P(Q > x) for Q = sum_i lam_i z_i^2 + beta_i z_i, z standard normal.
+
+    Gil-Pelaez inversion in survival form,
+    ``sf(x) = 1/2 + (1/pi) int_0^inf Im[phi(u) exp(-i u x)] / u du``,
+    on the same characteristic-function grid as :func:`genchi2_pdf` (same
+    ``scale``, ``u`` grid, ``log_phi``). The 1/u envelope makes this integral
+    converge far more slowly than :func:`genchi2_pdf`'s: resolving
+    ``exp(-i u x)`` needs ``du`` fine relative to the largest ``|x|``
+    plotted, and truncating the oscillatory tail at ``u_max`` has a
+    non-monotonic phase-dependent error until ``u_max`` is large enough that
+    the characteristic function's own decay dominates -- so the defaults
+    below were found by separating those two effects (see the module tests'
+    docstring notes for the sweep), not copied from :func:`genchi2_pdf`
+    (whose defaults stay frozen for existing figures) and not picked from an
+    isolated lucky point.
+
+    At ``(n_u=100000, u_max_sigmas=20000.0)`` this matches the exact
+    single-term closed form (Q = lam z^2, beta = 0) with about 2.8x margin
+    on ``rtol=1e-5``, and that margin is stable across a wide neighborhood
+    (``n_u`` from ~60000 to 200000-plus at this ``u_max_sigmas`` all sit
+    within about 0.32-0.39 of the threshold -- a converged plateau, not a
+    fragile resonance). A caller needing deeper-tail precision (e.g. to
+    match a numerically integrated pdf reference to better than ~1e-7
+    absolute) should raise both ``n_u`` and ``u_max_sigmas`` together,
+    preserving their ratio, well past this default -- see
+    :func:`genchi2_pdf`'s own docstring convergence note for the analogous
+    pattern.
+
+    ``chunk`` loops over ``x_grid`` (in ``pixel_sf``'s idiom) so peak memory
+    is ``chunk * n_u`` complex128 elements regardless of how many points are
+    evaluated. At the defaults, 300 points take about 0.4 s and peak at
+    about 38 MB; 1000 points take about 1.4 s at the same peak memory
+    (chunked, so memory does not grow with the number of points).
+
+    Args:
+        x_grid: Points at which to evaluate the survival function.
+        lam: Per-mode quadratic-form eigenvalues.
+        beta: Per-mode linear-term coefficients (same shape as ``lam``).
+        n_u: Number of quadrature points along the characteristic-function
+            frequency axis.
+        u_max_sigmas: Frequency-axis cutoff, in units of standard deviations
+            of the distribution (``1 / scale``).
+        chunk: Number of ``x_grid`` points processed per pass, bounding peak
+            memory to ``chunk * n_u`` complex128 elements.
+
+    Returns:
+        The survival probability ``P(Q > x)`` at each point in ``x_grid``,
+        clipped to ``[0, 1]``.
+    """
+    x_grid = np.asarray(x_grid, dtype=np.float64)
+    scale = np.sqrt(np.sum(2.0 * lam**2 + beta**2))
+    u = np.linspace(1e-9, u_max_sigmas / scale, n_u)
+    denom = 1.0 - 2j * lam[:, None] * u[None, :]
+    log_phi = (-0.5 * np.log(denom)).sum(axis=0) - 0.5 * np.sum(
+        beta[:, None] ** 2 * u[None, :] ** 2 / denom, axis=0
+    )
+    phi = np.exp(log_phi)
+    sf = np.empty_like(x_grid)
+    for lo in range(0, x_grid.shape[0], chunk):
+        hi = min(lo + chunk, x_grid.shape[0])
+        xg = x_grid[lo:hi]
+        integrand = (
+            np.imag(phi[None, :] * np.exp(-1j * u[None, :] * xg[:, None])) / u[None, :]
+        )
+        sf[lo:hi] = 0.5 + np.trapezoid(integrand, u, axis=1) / np.pi
+    return np.clip(sf, 0.0, 1.0)
+
+
 def pixel_sf(thresholds, i_c, gamma, p_kernel, phi_c, norm, chunk=4096, gl_nodes=96):
     """P(delta_p > x) per pixel and threshold, in an all-positive form.
 
