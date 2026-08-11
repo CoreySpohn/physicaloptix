@@ -90,3 +90,15 @@ class TestRenderPath:
         fig = render_path(path, field, kinds={"apodizer": "pupil_mask"})
         assert fig is not None
         matplotlib.pyplot.close(fig)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="render_path drops the chromatic axis by design (frozen); "
+    "chromatic Fields are supported only by plot_path (R2)",
+)
+def test_render_path_rejects_chromatic_field(small_path, chromatic_field):
+    # _panel passes field.data straight through with no wavelength
+    # reduction, so the (nlam, y, x) chromatic data reaches imshow, which
+    # rejects the extra axis.
+    render_path(small_path, chromatic_field)
