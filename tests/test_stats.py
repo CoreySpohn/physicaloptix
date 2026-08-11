@@ -1,16 +1,23 @@
-"""Tests for physicaloptix.stats: dark zone, Ic/Is split, modified Rician."""
+"""Tests for physicaloptix.stats: dark zone, Ic/Is split, modified Rician,
+and the delta-referenced Beckmann and genchi2 speckle laws.
+"""
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from physicaloptix.core import Grid
 from physicaloptix.speckle import SpeckleProcess
 from physicaloptix.stats import (
     coherent_intensity,
     dark_zone_mask,
+    genchi2_cumulants,
+    genchi2_pdf,
     incoherent_intensity,
     modified_rician_pdf,
+    pixel_pdf,
+    pixel_sf,
 )
 
 _integrate = getattr(np, "trapezoid", None) or np.trapz
@@ -106,3 +113,86 @@ class TestMonteCarloConsistency:
         # Dark-zone-scale statistics: agree to a few percent over 400 draws.
         ratio = mean.mean() / (ic + is_).mean()
         np.testing.assert_allclose(ratio, 1.0, rtol=0.05)
+
+
+# One synthetic pixel: coherent floor, halo, impropriety, flux-fraction norm.
+I_C, GAMMA, PHI_C, NORM = 2.0e-9, 5.0e-10, 0.7, 3.0e-3
+P_STRONG = 0.8 * GAMMA * np.exp(1j * 0.9)
+
+
+def _delta_grid(n=20000):
+    lo = -I_C / NORM  # total intensity zero
+    hi = (I_C + 25.0 * GAMMA - I_C) / NORM + 20.0 * GAMMA / NORM
+    return np.linspace(lo, hi, n)
+
+
+def test_pixel_pdf_normalizes():
+    x = _delta_grid()
+    p = pixel_pdf(x, I_C, GAMMA, P_STRONG, PHI_C, NORM)
+    assert np.trapezoid(p, x) == pytest.approx(1.0, abs=2e-3)
+
+
+def test_pixel_pdf_rician_limit():
+    # p -> 0 must recover the modified Rician after the delta change of
+    # variables: p_delta(d) = norm * p_I(i_c + d * norm; Ic=i_c, Is=gamma).
+    x = _delta_grid()
+    p_beck = pixel_pdf(x, I_C, GAMMA, 1e-16 * GAMMA, PHI_C, NORM, n_theta=8192)
+    total_i = I_C + x * NORM
+    p_ric = NORM * np.asarray(modified_rician_pdf(total_i, I_C, GAMMA))
+    core = p_ric > p_ric.max() * 1e-6
+    assert np.allclose(p_beck[core], p_ric[core], rtol=2e-3)
+
+
+def test_pixel_sf_matches_pdf_tail_integral():
+    x = _delta_grid()
+    p = pixel_pdf(x, I_C, GAMMA, P_STRONG, PHI_C, NORM)
+    thresholds = np.array([x[2000], x[6000], x[12000]])
+    sf = pixel_sf(
+        thresholds,
+        np.array([I_C]),
+        np.array([GAMMA]),
+        np.array([P_STRONG]),
+        np.array([PHI_C]),
+        NORM,
+    )[0]
+    for t, s in zip(thresholds, sf, strict=True):
+        tail = np.trapezoid(p[x >= t], x[x >= t])
+        assert s == pytest.approx(tail, rel=5e-3)
+
+
+def test_pixel_sf_below_zero_intensity_is_one():
+    thresholds = np.array([-2.0 * I_C / NORM])  # total intensity < 0
+    sf = pixel_sf(
+        thresholds,
+        np.array([I_C]),
+        np.array([GAMMA]),
+        np.array([P_STRONG]),
+        np.array([PHI_C]),
+        NORM,
+    )
+    assert sf[0, 0] == 1.0
+
+
+def test_pixel_functions_return_numpy_float64():
+    x = _delta_grid(100)
+    p = pixel_pdf(x, I_C, GAMMA, P_STRONG, PHI_C, NORM, n_theta=256)
+    assert type(p) is np.ndarray and p.dtype == np.float64
+
+
+def test_genchi2_cumulants_match_integrated_moments():
+    lam = np.array([3.0, -1.0, 0.5])
+    beta = np.array([0.7, 0.2, 0.0])
+    k1, k2, _, _ = genchi2_cumulants(lam, beta)
+    x = np.linspace(k1 - 40.0 * np.sqrt(k2), k1 + 40.0 * np.sqrt(k2), 40000)
+    # This test integrates the second moment out to 40 sigma, further than
+    # genchi2_pdf's default cutoff (n_u=4000, u_max_sigmas=60.0) resolves:
+    # that default underestimates the variance here by ~1.3e-3, just past
+    # this test's tolerance. Doubling both quadrature parameters (keeping
+    # the u grid's frequency resolution fixed while raising its reach)
+    # brings the error to ~3e-4; doubling again holds it there, confirming
+    # convergence rather than a tuned pass. The library defaults stay put:
+    # they are load-bearing for existing published figures.
+    p = genchi2_pdf(x, lam, beta, n_u=8000, u_max_sigmas=120.0)
+    assert np.trapezoid(p, x) == pytest.approx(1.0, abs=1e-3)
+    assert np.trapezoid(x * p, x) == pytest.approx(k1, rel=1e-3)
+    assert np.trapezoid((x - k1) ** 2 * p, x) == pytest.approx(k2, rel=1e-3)
