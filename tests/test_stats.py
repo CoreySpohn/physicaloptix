@@ -370,3 +370,10 @@ def test_genchi2_sf_bounded():
     sf = genchi2_sf(np.linspace(-20.0, 60.0, 500), lam, beta)
     assert np.all(sf >= 0.0) and np.all(sf <= 1.0)
     assert sf[0] == pytest.approx(1.0, abs=1e-6)
+
+
+def test_stats_is_public_api():
+    import physicaloptix
+
+    assert "stats" in physicaloptix.__all__
+    assert physicaloptix.stats.pixel_pdf is pixel_pdf

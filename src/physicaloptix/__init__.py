@@ -19,6 +19,7 @@ PSFs. The speckle layer (``SpeckleProcess`` / ``AnalyticSpeckleField``) is
 the linear speckle generator (E_nom, G) and is backend-free.
 """
 
+from physicaloptix import stats
 from physicaloptix._version import __version__
 from physicaloptix.apertures import (
     eac1_primary,
@@ -150,6 +151,7 @@ __all__ = [
     "save_psflet_pack",
     "segment_ptt_basis",
     "sellmeier",
+    "stats",
     "synthesize_psd_surface",
     "telescope_peak",
     "thickness_kernel",
