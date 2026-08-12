@@ -198,6 +198,34 @@ axis of the same underlying object.
 
 ## Cross-band impropriety
 
+The single-band case, $\eta(r) = |P(r)| / \Gamma(r)$ at one wavelength, is
+{meth}`~physicaloptix.SpeckleMoments.impropriety`; everything below is its
+band-pair generalization. Both carry the same caveat, which is worth stating
+before the algebra: a large $\eta$ is a joint statement about the optics *and*
+the mode basis. A basis carrying one quadrature per spatial frequency drives
+$\eta$ toward 1 by construction, because the cancellation described below has
+nothing to cancel against, so read any measured $\eta$ together with how its
+basis was built.
+
+{func}`~physicaloptix.quadrature_audit` settles that question rather than
+leaving it to judgement. It builds each mode's missing quadrature with a
+half-plane Hilbert operator, propagates the doubled basis through the same
+chain, and compares the two impropriety statistics; the counterfactual is
+exactly the homogeneous-drift hypothesis, equal variance in both quadratures
+of every spatial frequency. A ratio near 1 means the basis had nothing to add
+and $\eta$ is physical; a ratio far below 1 means the reported $\eta$ was a
+property of the parameterization, and completing the basis would collapse it.
+
+Read the verdict, not the magnitude. How far the ratio falls for a locked
+basis depends on the chain the modes are propagated through, so the useful
+output is which side of the threshold it lands on; the audit predicts what a
+rebuilt basis would measure without performing the rebuild, which is what
+makes it worth running before trusting a reported $\eta$.
+
+{func}`~physicaloptix.quadrature_audit_from_jacobians` is the same check for
+builders that propagate mode by mode, since a production mode stack does not
+fit in memory twice.
+
 {meth}`~physicaloptix.CrossBandMoments.impropriety` is the band-pair
 generalization of Schreier and Scharf's degree of impropriety,
 

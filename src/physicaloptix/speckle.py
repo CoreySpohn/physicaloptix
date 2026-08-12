@@ -23,6 +23,8 @@ This class owns no file I/O: a caller builds the arrays (e.g. from a cached
 export) and constructs the field.
 """
 
+from dataclasses import dataclass
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -360,6 +362,75 @@ class SpeckleMoments(eqx.Module):
     var_x_map: Array  # Var(X), the pinning-quadrature variance
     annulus_mean: Array | None = None  # mask-averaged E[delta]
     annulus_var: Array | None = None  # mask-averaged Var[delta]
+
+    def impropriety(self) -> Array:
+        """Degree of impropriety ``eta = |P| / Gamma`` per pixel, ``(y, x)``.
+
+        The single-band counterpart of :meth:`CrossBandMoments.impropriety`:
+        how far the drifting field is from circular at each pixel, bounded in
+        ``[0, 1]`` by Cauchy-Schwarz on the modal sum.
+
+        The two poles are worth naming, because they bracket every real case:
+
+        - ``eta = 0`` is the classical circular limit, where the
+          modified-Rician intensity law is exactly right. It is reached when
+          the drift is statistically homogeneous (translation-invariant),
+          because translation invariance pairs each spatial frequency's two
+          quadratures and cancels ``P`` term by term.
+        - ``eta = 1`` is the opposite pole, where the field is confined to a
+          line in the complex plane rather than filling an ellipse. A single
+          real-coefficient mode does this exactly, as does any
+          definite-parity family through a parity-preserving train.
+
+        A large ``eta`` is therefore not automatically a statement about the
+        optics: a mode basis carrying one quadrature per spatial frequency
+        forces ``eta`` upward by construction, whatever the hardware does.
+        Read this together with how the basis was built.
+
+        Pixels with no modal response (``Gamma == 0``) return ``0.0`` rather
+        than NaN; the doubled ``where`` also keeps reverse-mode gradients
+        finite there.
+        """
+        live = self.gamma_map > 0
+        safe = jnp.where(live, self.gamma_map, 1.0)
+        return jnp.where(live, jnp.abs(self.p_map) / safe, 0.0)
+
+
+@dataclass(frozen=True)
+class Photometry:
+    """The photometric contract of a :class:`SpeckleProcess`, with guards.
+
+    A plain frozen report, deliberately not a PyTree: it is meant to be
+    printed and eyeballed on the host, not carried through a transformation.
+
+    ``normalization`` is derived, not stored input: it is always
+    ``input_energy / pixel_scale_lod**2``. It is the divisor that makes
+    :meth:`AnalyticSpeckleField.realize` a per-pixel **flux fraction** of the
+    beam entering the coronagraph. ``contrast_scale`` (present only when a
+    ``telescope_peak`` is supplied) is the factor that converts that flux
+    fraction to the peak-referenced contrast a contrast curve is quoted in,
+    which is what :meth:`AnalyticSpeckleField.peak_contrast` applies.
+    """
+
+    input_energy: Array  # scalar, or (w,) for a chromatic process
+    pixel_scale_lod: float
+    normalization: Array  # input_energy / pixel_scale_lod**2
+    e_nom_flux_fraction: Array  # energy in e_nom, as a fraction of input_energy
+    contrast_scale: Array | None  # normalization / telescope_peak
+    warnings: tuple[str, ...]
+
+    def __str__(self) -> str:
+        """One field per line, with any warnings appended."""
+        lines = [
+            f"input_energy        {np.asarray(self.input_energy)}",
+            f"pixel_scale_lod     {self.pixel_scale_lod}",
+            f"normalization       {np.asarray(self.normalization)}",
+            f"e_nom flux fraction {np.asarray(self.e_nom_flux_fraction)}",
+        ]
+        if self.contrast_scale is not None:
+            lines.append(f"contrast_scale      {np.asarray(self.contrast_scale)}")
+        lines += [f"WARNING: {w}" for w in self.warnings]
+        return "\n".join(lines)
 
 
 class CrossBandMoments(eqx.Module):
@@ -898,6 +969,80 @@ class SpeckleProcess(eqx.Module):
             # Every mode shares one grid, so one quadrature serves them all.
             return jnp.broadcast_to(kappa_of(weights[0]), (m,))
         return jax.lax.map(kappa_of, weights)
+
+    def photometry(self, *, telescope_peak=None, unity_tol=1e-6) -> "Photometry":
+        """Report the photometric primitives, the derived divisor, and guards.
+
+        A host-side diagnostic, **not** jit-compatible: it inspects values to
+        decide whether to warn. Call it once when wiring a process up, not on
+        a hot path.
+
+        The failure mode this exists to catch is silent. ``input_energy`` and
+        a peak intensity are both "a number describing how bright the star
+        is", they differ by a factor of order ten to a hundred, and a process
+        built with the wrong one runs perfectly happily while every contrast
+        it reports is wrong by that factor. Two checks are applied:
+
+        - **Energy conservation** (rigorous). The energy in ``e_nom``, which
+          is ``sum |e_nom|^2 * pixel_scale_lod**2``, cannot exceed the energy
+          that entered. A ratio above 1 proves ``input_energy`` is not a total
+          energy. For a coronagraph the honest value is far below 1, since
+          the stop discards most of the starlight and the stored grid is a
+          crop of the focal plane.
+        - **Degenerate contrast scale** (heuristic, needs ``telescope_peak``).
+          If ``normalization / telescope_peak`` is exactly 1, then
+          ``input_energy`` was almost certainly obtained as
+          ``telescope_peak * pixel_scale_lod**2`` rather than measured. That
+          reproduces peak-referenced contrast out of :meth:`realize`, which
+          silently breaks any consumer expecting a flux fraction.
+
+        Args:
+            telescope_peak: Peak intensity density of the unocculted
+                telescope PSF on this field's grid, from
+                :func:`telescope_peak`. Enables ``contrast_scale`` and the
+                second guard.
+            unity_tol: Relative tolerance for the degenerate-scale check.
+
+        Returns:
+            A :class:`Photometry` report; ``warnings`` is empty when both
+            checks pass.
+        """
+        du2 = self.pixel_scale_lod**2
+        e_energy = jnp.sum(jnp.abs(self.e_nom) ** 2, axis=(-2, -1)) * du2
+        flux_fraction = e_energy / self.input_energy
+        contrast_scale = (
+            None if telescope_peak is None else self.normalization / telescope_peak
+        )
+
+        warnings: list[str] = []
+        worst = float(jnp.max(flux_fraction))
+        if worst > 1.0:
+            warnings.append(
+                f"the nominal field already carries {worst:.3g}x the stated "
+                "input_energy, which is not physically possible: input_energy "
+                "must be the TOTAL energy of the field entering the "
+                "coronagraph (Linearization.input_energy), not a peak intensity"
+            )
+        if contrast_scale is not None and bool(
+            jnp.all(jnp.abs(contrast_scale - 1.0) <= unity_tol)
+        ):
+            warnings.append(
+                "normalization / telescope_peak is 1, so input_energy looks "
+                "like telescope_peak * pixel_scale_lod**2 rather than a "
+                "measured energy; realize() would then return peak-referenced "
+                "contrast while its consumers expect a flux fraction. Pass the "
+                "real input energy and use peak_contrast(telescope_peak=...) "
+                "wherever contrast is wanted"
+            )
+
+        return Photometry(
+            input_energy=self.input_energy,
+            pixel_scale_lod=self.pixel_scale_lod,
+            normalization=self.normalization,
+            e_nom_flux_fraction=flux_fraction,
+            contrast_scale=contrast_scale,
+            warnings=tuple(warnings),
+        )
 
     def moments(self, *, mask=None, renormalized=False) -> "SpeckleMoments":
         """Closed-form ensemble moments of the delta ``realize`` returns.

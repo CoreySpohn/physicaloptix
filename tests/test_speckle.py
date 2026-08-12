@@ -1608,3 +1608,145 @@ class TestLambdaScalingENom:
             rtol=1e-15,
             atol=0,
         )
+
+
+class TestSingleBandImpropriety:
+    """``SpeckleMoments.impropriety``: eta = |P| / Gamma, the mono counterpart."""
+
+    @staticmethod
+    def _mono(g, rms=1.0, e_nom=None):
+        ny, nx = g.shape[-2:]
+        if e_nom is None:
+            e_nom = jnp.zeros((ny, nx), dtype=complex)
+        return SpeckleProcess(e_nom, g, rms, 1e-3, input_energy=_e_in(1.0))
+
+    def test_matches_kernels(self):
+        key = jax.random.PRNGKey(0)
+        g = jax.random.normal(key, (4, 3, 5, 2)) @ jnp.array([1.0, 1j])
+        mom = self._mono(g).moments()
+        eta = np.asarray(mom.impropriety())
+        gamma = np.asarray(mom.gamma_map)
+        expected = np.abs(np.asarray(mom.p_map)) / gamma
+        np.testing.assert_allclose(eta, expected, rtol=1e-12, atol=0)
+
+    def test_one_mode_basis_is_exactly_one(self):
+        """A single real-coefficient mode confines the field to a line."""
+        key = jax.random.PRNGKey(0)
+        g = jax.random.normal(key, (1, 4, 4, 2)) @ jnp.array([1.0, 1j])
+        eta = np.asarray(self._mono(g).moments().impropriety())
+        np.testing.assert_allclose(eta, 1.0, rtol=0, atol=1e-12)
+
+    def test_quadrature_pair_is_exactly_zero(self):
+        """g and i*g at equal rms cancel P: the homogeneity criterion."""
+        key = jax.random.PRNGKey(0)
+        g0 = jax.random.normal(key, (4, 4, 2)) @ jnp.array([1.0, 1j])
+        g = jnp.stack([g0, 1j * g0])
+        eta = np.asarray(self._mono(g).moments().impropriety())
+        np.testing.assert_allclose(eta, 0.0, rtol=0, atol=1e-12)
+
+    def test_bounded_by_one(self):
+        key = jax.random.PRNGKey(0)
+        g = jax.random.normal(key, (6, 5, 5, 2)) @ jnp.array([1.0, 1j])
+        rms = jnp.asarray([1.0, 0.4, 2.0, 0.1, 0.7, 1.3])
+        eta = np.asarray(self._mono(g, rms=rms).moments().impropriety())
+        assert np.all(eta <= 1.0 + 1e-12)
+        assert np.all(eta >= 0.0)
+
+    def test_unresponsive_pixels_are_zero_not_nan(self):
+        """Gamma == 0 outside the modal footprint must not produce NaN."""
+        g = jnp.zeros((2, 3, 3), dtype=complex).at[:, 1, 1].set(1.0 + 0.0j)
+        eta = np.asarray(self._mono(g).moments().impropriety())
+        assert np.isfinite(eta).all()
+        assert eta[0, 0] == 0.0
+        np.testing.assert_allclose(eta[1, 1], 1.0, rtol=0, atol=1e-12)
+
+    def test_gradient_is_finite_through_dead_pixels(self):
+        """The double-where guard keeps grad NaN-free where Gamma == 0."""
+        g = jnp.zeros((2, 3, 3), dtype=complex).at[:, 1, 1].set(1.0 + 0.0j)
+
+        def total(rms):
+            return jnp.sum(self._mono(g, rms=rms).moments().impropriety())
+
+        assert np.isfinite(float(jax.grad(total)(1.0)))
+
+    def test_jit_compatible(self):
+        key = jax.random.PRNGKey(0)
+        g = jax.random.normal(key, (3, 4, 4, 2)) @ jnp.array([1.0, 1j])
+        proc = self._mono(g)
+        got = jax.jit(lambda p: p.moments().impropriety())(proc)
+        np.testing.assert_allclose(
+            np.asarray(got), np.asarray(proc.moments().impropriety()), rtol=0, atol=0
+        )
+
+
+class TestPhotometryReport:
+    """``SpeckleProcess.photometry``: the primitives, the derived divisor, guards."""
+
+    @staticmethod
+    def _proc(e_nom=None, input_energy=None, du=0.25, ny=4, nx=4):
+        key = jax.random.PRNGKey(0)
+        g = jax.random.normal(key, (2, ny, nx, 2)) @ jnp.array([1.0, 1j])
+        if e_nom is None:
+            e_nom = jnp.zeros((ny, nx), dtype=complex)
+        if input_energy is None:
+            input_energy = 1.0
+        return SpeckleProcess(
+            e_nom, g, 1.0, 1e-3, input_energy=input_energy, pixel_scale_lod=du
+        )
+
+    def test_reports_the_primitives_and_the_derived_divisor(self):
+        rep = self._proc(input_energy=0.5, du=0.25).photometry()
+        assert float(rep.input_energy) == 0.5
+        assert rep.pixel_scale_lod == 0.25
+        np.testing.assert_allclose(float(rep.normalization), 0.5 / 0.25**2, rtol=1e-12)
+        assert rep.contrast_scale is None
+        assert rep.warnings == ()
+
+    def test_contrast_scale_converts_flux_fraction_to_peak_contrast(self):
+        proc = self._proc(input_energy=0.5, du=0.25)
+        rep = proc.photometry(telescope_peak=2.0)
+        np.testing.assert_allclose(
+            float(rep.contrast_scale), float(proc.normalization) / 2.0, rtol=1e-12
+        )
+
+    def test_e_nom_flux_fraction_matches_parseval(self):
+        e_nom = jnp.full((4, 4), 0.1 + 0.0j)
+        rep = self._proc(e_nom=e_nom, input_energy=1.0, du=0.25).photometry()
+        expected = float(jnp.sum(jnp.abs(e_nom) ** 2) * 0.25**2 / 1.0)
+        np.testing.assert_allclose(float(rep.e_nom_flux_fraction), expected, rtol=1e-12)
+
+    def test_warns_when_nominal_field_exceeds_the_input_energy(self):
+        """More energy out than in is unphysical: input_energy is not an energy."""
+        e_nom = jnp.full((4, 4), 5.0 + 0.0j)
+        rep = self._proc(e_nom=e_nom, input_energy=1e-6).photometry()
+        assert any("input_energy" in w for w in rep.warnings)
+
+    def test_warns_when_contrast_scale_is_unity(self):
+        """input_energy == telescope_peak * du^2 means a peak was passed as energy."""
+        peak = 3.0
+        du = 0.25
+        rep = self._proc(input_energy=peak * du**2, du=du).photometry(
+            telescope_peak=peak
+        )
+        assert any("telescope_peak" in w for w in rep.warnings)
+
+    def test_clean_setup_reports_no_warnings(self):
+        rep = self._proc(input_energy=1.0, du=0.25).photometry(telescope_peak=0.04)
+        assert rep.warnings == ()
+
+    def test_chromatic_reports_per_band(self):
+        wls = jnp.array([500.0, 600.0])
+        e_stack = jnp.zeros((2, 4, 4), dtype=complex)
+        key = jax.random.PRNGKey(0)
+        g_stack = jax.random.normal(key, (2, 2, 4, 4, 2)) @ jnp.array([1.0, 1j])
+        proc = SpeckleProcess(
+            e_stack,
+            g_stack,
+            1.0,
+            1e-3,
+            input_energy=jnp.array([1.0, 2.0]),
+            wavelengths_nm=wls,
+        )
+        rep = proc.photometry()
+        assert np.asarray(rep.input_energy).shape == (2,)
+        assert np.asarray(rep.e_nom_flux_fraction).shape == (2,)

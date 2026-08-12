@@ -240,6 +240,19 @@ contract: speckle constructors take `input_energy` (there is no raw
 `normalization` kwarg -- legacy call sites fail loudly), and npz/YIP exports
 record `input_energy` and `pixel_scale_lod` beside their maps.
 
+A legacy *call* fails loudly; a legacy *value* does not. Passing a peak
+intensity where a total energy belongs is type-correct, so the process builds
+and runs while every contrast it reports is wrong by the peak-pixel fraction
+(tens of times). {meth}`~physicaloptix.SpeckleProcess.photometry` is the
+one-line check for this: it prints the primitives and the derived divisor,
+and warns on two conditions -- a nominal field carrying more energy than
+`input_energy` claims entered (impossible, so `input_energy` is not an
+energy), and a `normalization / telescope_peak` of exactly 1 (which means
+`input_energy` was back-computed from a peak rather than measured, so
+`realize` would hand a flux-fraction consumer peak-referenced contrast).
+Call it once when wiring a process up; it is a host-side diagnostic and is
+not jit-compatible.
+
 ## Wavefront error
 
 Wavefront error is an {term}`optical path difference` in **nanometers**, the

@@ -79,6 +79,7 @@ from physicaloptix.sources import broadcast_to_spectrum, point_source
 from physicaloptix.speckle import (
     AnalyticSpeckleField,
     CrossBandMoments,
+    Photometry,
     SpeckleMoments,
     SpeckleProcess,
     lambda_scaled_channels,
@@ -117,6 +118,7 @@ __all__ = [
     "OpticalSystem",
     "PathCoronagraph",
     "PhaseScreen",
+    "Photometry",
     "PlaneKind",
     "QuadratureAudit",
     "SampledOptic",
