@@ -600,6 +600,25 @@ def plot_field(
     return ep.MosaicResult(axes=axes_arr, artists=artists, update=update)
 
 
+def _ring_color():
+    """A hwostyle color for `draw_dark_zone`'s rings, resolved at call time.
+
+    ``hwostyle.palette`` carries only per-family named hues -- no
+    registered family (cyberpunk, spectral, biosignature, barbie, tol)
+    defines a universal "neutral"/"primary" swatch every other family
+    also has. A fixed attribute name is therefore not safe: concretely,
+    ``hwostyle.use("paper")`` (the ordinary way this repo makes
+    publication figures) defaults to the "tol" family, and "tol" has no
+    "cyan" key, so a bare ``hwostyle.palette.cyan`` raises AttributeError
+    there (and under "spectral"/"biosignature"/"barbie" too). Falling
+    back to the family's own first color (``Palette.as_list``, guaranteed
+    non-empty by every registry entry) keeps this resolved fresh on every
+    call -- never bound at import -- while degrading gracefully instead
+    of crashing under a non-default family.
+    """
+    return getattr(hwostyle.palette, "cyan", hwostyle.palette.as_list[0])
+
+
 def draw_dark_zone(ax, iwa_lod, owa_lod, *, line_kw=None):
     """Ring the inner and outer working angles on a 2D map.
 
@@ -613,7 +632,16 @@ def draw_dark_zone(ax, iwa_lod, owa_lod, *, line_kw=None):
     non-data-color idiom eyepiece intends for a working-angle marker,
     carried over as a single hwostyle palette color (its private neutral
     tone is not part of eyepiece's public surface) rather than a color
-    that could be mistaken for a plotted curve.
+    that could be mistaken for a plotted curve. See ``_ring_color`` for
+    why that color is not a fixed attribute name.
+
+    The circles are centered on ``(0, 0)`` in ``ax``'s data coordinates --
+    the optical axis. That coincides with the image drawn by
+    ``contrast_row`` for a Field input (its native extent is always
+    zero-centered) but NOT, in general, with a bare array's default
+    pixel-index extent (which starts at ``-0.5``, not centered on the
+    array unless the caller has arranged it that way); see
+    ``contrast_row``'s docstring for that caveat.
 
     Args:
         ax: Axes to draw into, in the map's native coordinates centered
@@ -630,7 +658,7 @@ def draw_dark_zone(ax, iwa_lod, owa_lod, *, line_kw=None):
     kw = {
         "fill": False,
         "linestyle": "--",
-        "color": hwostyle.palette.cyan,
+        "color": _ring_color(),
         **(line_kw or {}),
     }
     iwa_circle = Circle((0.0, 0.0), iwa_lod, **kw)
@@ -659,15 +687,28 @@ def contrast_row(
     Each entry of ``fields_or_maps`` is normalized through ``_resolve``
     (the same path ``plot_field`` uses) and, for a Field, reduced to
     intensity exactly as ``plot_field(kind="intensity")`` does; a bare
-    array passes through unchanged. ``telescope_peak``, when given,
-    divides every map before plotting, turning intensity into contrast
-    (I / telescope peak). The conventional pinned window for a contrast
-    colorbar is 1e-13 to 1e-8 -- pass that range as ``vmin``/``vmax`` to
-    compare maps against an absolute, paper-fixed scale. Pinning both
-    ends neutralizes ``norm_policy`` by construction: "shared" already
-    forces one norm built from the pinned bounds, and "independent"
-    builds each panel's norm from the same pinned bounds too, so the two
-    policies draw identically once both `vmin` and `vmax` are fixed.
+    array passes through unchanged. A Field also carries ``_resolve``'s
+    native-unit extent (always zero-centered on the optical axis, per its
+    grid), which is threaded through to ``compare_row``/``imshow_log`` so
+    every panel renders in that same coordinate system -- exactly the
+    system ``draw_dark_zone``'s rings are centered in, so `annulus`
+    circles land on the true optical axis, not on the geometric center of
+    the pixel array. A bare array carries no extent, so its panel falls
+    back to ``imshow``'s own pixel-index coordinates (origin at the
+    array's corner, not its center); `annulus` circles are still centered
+    on data-coordinate ``(0, 0)`` in that same pixel-index space, so they
+    only land on the array's actual center when the caller has arranged
+    the array that way. Passing Fields, not bare arrays, is the only way
+    ``annulus`` is guaranteed physically meaningful without extra setup
+    on the caller's part. ``telescope_peak``, when given, divides every
+    map before plotting, turning intensity into contrast (I / telescope
+    peak). The conventional pinned window for a contrast colorbar is
+    1e-13 to 1e-8 -- pass that range as ``vmin``/``vmax`` to compare maps
+    against an absolute, paper-fixed scale. Pinning both ends neutralizes
+    ``norm_policy`` by construction: "shared" already forces one norm
+    built from the pinned bounds, and "independent" builds each panel's
+    norm from the same pinned bounds too, so the two policies draw
+    identically once both `vmin` and `vmax` are fixed.
 
     ``norm_policy="shared"`` delegates to ``eyepiece.compare_row``, which
     builds one norm object from the min/max across all maps (or the
@@ -704,18 +745,29 @@ def contrast_row(
         list of one `draw_dark_zone` result dict per panel.
 
     Raises:
-        ValueError: `axes` is given with a shape other than `(n,)`, or
+        ValueError: `axes` is given with a shape other than `(n,)`;
+            `fields_or_maps` mixes Fields on different grid extents; or
             `norm_policy` is not "shared" or "independent".
     """
     ep = _require.eyepiece()
 
     maps = []
+    item_extents = []
     for item in fields_or_maps:
-        data, _, _ = _resolve(item, None, "intensity")
+        data, item_extent, _ = _resolve(item, None, "intensity")
         intensity = _intensity_from(data)
         if telescope_peak is not None:
             intensity = intensity / telescope_peak
         maps.append(intensity)
+        item_extents.append(item_extent)
+
+    distinct_extents = {e for e in item_extents if e is not None}
+    if len(distinct_extents) > 1:
+        msg = (
+            f"contrast_row: fields_or_maps have mismatched extents: {distinct_extents}"
+        )
+        raise ValueError(msg)
+    extent = next(iter(distinct_extents), None)
 
     n = len(maps)
     if axes is not None:
@@ -730,6 +782,7 @@ def contrast_row(
             titles,
             axes=axes,
             norm="log",
+            extent=extent,
             vmin=vmin,
             vmax=vmax,
             cbar_label=cbar_label,
@@ -746,6 +799,7 @@ def contrast_row(
             panel = ep.imshow_log(
                 m,
                 ax=axes[i],
+                extent=extent,
                 vmin=vmin,
                 vmax=vmax,
                 cbar_label=cbar_label,

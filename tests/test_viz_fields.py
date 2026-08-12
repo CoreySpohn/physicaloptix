@@ -325,3 +325,59 @@ def test_draw_dark_zone_two_dashed_rings():
     assert set(arts) == {"iwa", "owa"}
     assert arts["iwa"].get_linestyle() in ("--", "dashed")
     plt.close(fig)
+
+
+def test_contrast_row_field_input_extent_matches_annulus_coordinates():
+    from physicaloptix.viz import contrast_row
+
+    field = _mono()
+    half = float(field.grid.extent)
+    res = contrast_row([field], annulus=(0.2, 0.7))
+
+    extent = tuple(res.artists["image"][0].get_extent())
+    assert extent == (-half, half, -half, half)
+
+    ring = res.artists["annulus"][0]["iwa"]
+    assert ring.center == (0.0, 0.0)
+    assert extent[0] <= ring.center[0] <= extent[1]
+    assert extent[2] <= ring.center[1] <= extent[3]
+    plt.close(res.fig)
+
+
+def test_contrast_row_annulus_on_bare_arrays():
+    from physicaloptix.viz import contrast_row
+
+    maps = [np.random.default_rng(k).uniform(1e-12, 1e-7, (8, 8)) for k in range(2)]
+    res = contrast_row(maps, annulus=(1.0, 3.0))
+    rings = res.artists["annulus"]
+    assert len(rings) == 2
+    for ring in rings:
+        assert set(ring) == {"iwa", "owa"}
+        assert ring["iwa"].radius == pytest.approx(1.0)
+        assert ring["owa"].radius == pytest.approx(3.0)
+    plt.close(res.fig)
+
+
+def test_draw_dark_zone_resolves_under_every_hwostyle_family():
+    import hwostyle
+
+    from physicaloptix.viz import draw_dark_zone
+
+    prev_mode = hwostyle.current_mode()
+    families = [
+        ("dark", None),
+        ("light", None),
+        ("paper", None),  # defaults to the "tol" family, which has no "cyan" key
+        ("barbie", None),
+        ("dark", "spectral"),
+        ("light", "biosignature"),
+    ]
+    try:
+        for mode, family in families:
+            hwostyle.use(mode, family)
+            fig, ax = plt.subplots()
+            arts = draw_dark_zone(ax, 3.0, 25.0)
+            assert arts["iwa"].get_edgecolor() is not None
+            plt.close(fig)
+    finally:
+        hwostyle.use(prev_mode or "dark")
