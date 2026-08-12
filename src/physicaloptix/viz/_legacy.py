@@ -121,6 +121,17 @@ def render_path(
 ):
     """Propagate with every stage tapped and render the rail + panels.
 
+    Migrating to ``plot_path``:
+        title: Call ``res.fig.suptitle(title)`` on the returned
+            ``MosaicResult`` instead of passing it in.
+        figwidth: Pass ``fig=`` with a pre-sized ``Figure`` instead;
+            ``plot_path`` has no ``figwidth`` parameter of its own.
+        panel_norm: No direct equivalent. ``render_path`` took a single
+            matplotlib ``Norm`` instance applied to every panel;
+            ``plot_path``'s ``panel_norms`` instead takes a sequence of
+            ``(vmin, vmax)`` pairs, one per panel, and builds each
+            panel's ``LogNorm`` internally.
+
     Args:
         path: The ``OpticalPath`` to visualize.
         field: The input field.

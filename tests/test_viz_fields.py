@@ -147,8 +147,26 @@ def test_cut_caller_axes_path_uses_exact_axes_no_inset():
 
 def test_cut_caller_axes_wrong_length_raises():
     fig, axes = plt.subplots(1, 3)
-    with pytest.raises(ValueError, match="expected 2 axes"):
+    with pytest.raises(ValueError, match=r"expected axes shape \(2,\), got \(3,\)"):
         plot_field(_mono(), cut="x", axes=axes)
+    plt.close(fig)
+
+
+def test_cut_caller_axes_2x2_array_raises():
+    # A (2, 2) array has len() == 2, which a len()-based guard would wrongly
+    # accept -- it must be rejected by shape, not length.
+    fig, axes = plt.subplots(2, 2)
+    with pytest.raises(ValueError, match=r"expected axes shape \(2,\), got \(2, 2\)"):
+        plot_field(_mono(), cut="x", axes=axes)
+    plt.close(fig)
+
+
+def test_cut_caller_axes_bare_axes_raises():
+    # A bare Axes has no len() at all -- a len()-based guard raises TypeError
+    # instead of the intended ValueError.
+    fig, ax = plt.subplots()
+    with pytest.raises(ValueError, match=r"expected axes shape \(2,\), got \(\)"):
+        plot_field(_mono(), cut="x", axes=ax)
     plt.close(fig)
 
 
@@ -343,6 +361,31 @@ def test_contrast_row_axes_shape_contract():
     with pytest.raises(ValueError, match="expected"):
         contrast_row([np.ones((4, 4))], axes=axes)  # 1 map, 3 axes
     plt.close(fig)
+
+
+def test_contrast_row_mismatched_extents_raises_naming_both():
+    from physicaloptix.viz import contrast_row
+
+    grid_a = Grid.focal(8, pixel_scale_lod=4.0)
+    grid_b = Grid.focal(8, pixel_scale_lod=5.0)
+    rng = np.random.default_rng(0)
+    field_a = Field(
+        data=jnp.asarray(rng.uniform(1e-12, 1e-7, (8, 8)) + 0j),
+        grid=grid_a,
+        plane=PlaneKind.FOCAL,
+    )
+    field_b = Field(
+        data=jnp.asarray(rng.uniform(1e-12, 1e-7, (8, 8)) + 0j),
+        grid=grid_b,
+        plane=PlaneKind.FOCAL,
+    )
+    extent_a = (-16.0, 16.0, -16.0, 16.0)
+    extent_b = (-20.0, 20.0, -20.0, 20.0)
+    with pytest.raises(ValueError, match="mismatched extents") as excinfo:
+        contrast_row([field_a, field_b])
+    message = str(excinfo.value)
+    assert str(extent_a) in message
+    assert str(extent_b) in message
 
 
 def test_draw_dark_zone_two_dashed_rings():

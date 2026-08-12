@@ -584,9 +584,15 @@ def plot_path(
             ``1e-10`` of each panel's peak intensity (the phase is
             undefined where there is no light).
         panel_norms: Optional sequence of ``(vmin, vmax)`` pairs, one per
-            intensity panel in the same order as the panels. ``None`` (or a
-            shorter sequence) falls back to the default per-panel log floor
-            at ``peak * 1e-8``; within a given pair, either entry may
+            intensity panel column. For an ``OpticalPath``, column order is
+            the panel order (input first, then each tapped stage). For an
+            ``OpticalSystem``, ``_draw_block`` indexes this same sequence
+            by column in every branch row -- column ``i`` is the same
+            trunk stage in every branch, so ``panel_norms`` is NOT
+            re-consumed per branch; entries past the widest branch's stage
+            count are simply never indexed. ``None`` (or a shorter
+            sequence) falls back to the default per-panel log floor at
+            ``peak * 1e-8``; within a given pair, either entry may
             individually be ``None`` to fall back just that bound (the
             floor for ``vmin``, the panel's own peak for ``vmax``).
         panel_height_in: Height, in inches, of one panel row (also the

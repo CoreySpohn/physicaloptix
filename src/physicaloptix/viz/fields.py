@@ -459,9 +459,11 @@ def _validate_call(kind, cut, ax, axes, fig):
             "ax=, or leave ax=None to let plot_field own the figure"
         )
         raise ValueError(msg)
-    if axes is not None and len(axes) != 2:
-        msg = f"plot_field: cut= expected 2 axes [image, cut], got {len(axes)}"
-        raise ValueError(msg)
+    if axes is not None:
+        shape = np.asarray(axes).shape
+        if shape != (2,):
+            msg = f"plot_field: cut= expected axes shape (2,), got {shape}"
+            raise ValueError(msg)
 
 
 def plot_field(
@@ -544,15 +546,23 @@ def plot_field(
         cut: None, "x", or "y" -- append a declared 1D cut through the
             image center along that axis. Not supported with
             ``kind="complex"``.
-        cmap: Colormap override.
+        cmap: Colormap override. Ignored for ``kind="complex"`` (delegates
+            to ``eyepiece.show_field``, which has no ``cmap`` parameter).
         vmin: Norm lower bound (``kind="intensity"`` only).
         vmax: Norm upper bound (``kind="intensity"`` only).
         floor: Log-floor clip, used for ``kind="intensity"`` and for the
             cut curve when ``kind="intensity"``.
-        colorbar: Whether to attach a colorbar.
-        cbar_label: Colorbar label.
+        colorbar: Whether to attach a colorbar. Ignored for
+            ``kind="complex"`` (``eyepiece.show_field`` always draws its
+            own colorbars).
+        cbar_label: Colorbar label. Ignored for ``kind="complex"``
+            (``eyepiece.show_field`` has no ``cbar_label`` parameter).
         imshow_kw: Extra kwargs passed to the underlying ``imshow`` call.
-        cbar_kw: Extra kwargs passed to the colorbar.
+            Ignored for ``kind="complex"`` (``eyepiece.show_field`` has no
+            ``imshow_kw`` parameter).
+        cbar_kw: Extra kwargs passed to the colorbar. Ignored for
+            ``kind="complex"`` (``eyepiece.show_field`` has no ``cbar_kw``
+            parameter).
 
     Returns:
         A ``PlotResult`` for ``kind="intensity"``/``"phase"`` without
@@ -808,13 +818,24 @@ def contrast_row(
         maps.append(intensity)
         item_extents.append(item_extent)
 
-    distinct_extents = {e for e in item_extents if e is not None}
-    if len(distinct_extents) > 1:
+    baseline_idx = next((i for i, e in enumerate(item_extents) if e is not None), None)
+    baseline_extent = item_extents[baseline_idx] if baseline_idx is not None else None
+    mismatch_idx = next(
+        (
+            i
+            for i, e in enumerate(item_extents)
+            if e is not None and e != baseline_extent
+        ),
+        None,
+    )
+    if mismatch_idx is not None:
         msg = (
-            f"contrast_row: fields_or_maps have mismatched extents: {distinct_extents}"
+            "contrast_row: fields_or_maps have mismatched extents: "
+            f"index {baseline_idx} has extent {baseline_extent}, index "
+            f"{mismatch_idx} has extent {item_extents[mismatch_idx]}"
         )
         raise ValueError(msg)
-    extent = next(iter(distinct_extents), None)
+    extent = baseline_extent
 
     n = len(maps)
     if axes is not None:
