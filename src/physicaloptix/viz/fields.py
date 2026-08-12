@@ -12,6 +12,7 @@ channel selection), and where to hang eyepiece's own unit-labeling helpers.
 import hwostyle
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.patches import Circle
 
 from physicaloptix.core import Field
 from physicaloptix.viz import _require
@@ -303,3 +304,178 @@ def plot_field(
     artists["line"] = line
     axes = np.array([result.ax, ax_cut], dtype=object)
     return ep.MosaicResult(axes=axes, artists=artists)
+
+
+def draw_dark_zone(ax, iwa_lod, owa_lod, *, line_kw=None):
+    """Ring the inner and outer working angles on a 2D map.
+
+    eyepiece's ``plot_contrast_curve`` marks the same two working angles
+    on a 1D contrast curve as shaded spans (a neutral tone blended from
+    the axes' own facecolor/text color, drawn once per axes and tracked
+    so a second call does not duplicate it -- see that function's
+    docstring). A shaded span has no 2D equivalent that would not either
+    obscure the map or double as a second definition of the same
+    quantity, so this draws rings instead: the same restrained,
+    non-data-color idiom eyepiece intends for a working-angle marker,
+    carried over as a single hwostyle palette color (its private neutral
+    tone is not part of eyepiece's public surface) rather than a color
+    that could be mistaken for a plotted curve.
+
+    Args:
+        ax: Axes to draw into, in the map's native coordinates centered
+            on the optical axis (typically lambda/D).
+        iwa_lod: Inner working angle radius, in the same units as `ax`.
+        owa_lod: Outer working angle radius, in the same units as `ax`.
+        line_kw: Extra kwargs passed to both `Circle` constructors,
+            applied last.
+
+    Returns:
+        A dict with keys "iwa" and "owa", each the `Circle` patch added
+        to `ax`.
+    """
+    kw = {
+        "fill": False,
+        "linestyle": "--",
+        "color": hwostyle.palette.cyan,
+        **(line_kw or {}),
+    }
+    iwa_circle = Circle((0.0, 0.0), iwa_lod, **kw)
+    owa_circle = Circle((0.0, 0.0), owa_lod, **kw)
+    ax.add_patch(iwa_circle)
+    ax.add_patch(owa_circle)
+    return {"iwa": iwa_circle, "owa": owa_circle}
+
+
+def contrast_row(
+    fields_or_maps,
+    *,
+    telescope_peak=None,
+    titles=None,
+    axes=None,
+    norm_policy="shared",
+    vmin=None,
+    vmax=None,
+    cbar_label="contrast (I / telescope peak)",
+    annulus=None,
+    imshow_kw=None,
+    cbar_kw=None,
+):
+    """Draw a row of contrast maps, comparable or independently scaled.
+
+    Each entry of ``fields_or_maps`` is normalized through ``_resolve``
+    (the same path ``plot_field`` uses) and, for a Field, reduced to
+    intensity exactly as ``plot_field(kind="intensity")`` does; a bare
+    array passes through unchanged. ``telescope_peak``, when given,
+    divides every map before plotting, turning intensity into contrast
+    (I / telescope peak). The conventional pinned window for a contrast
+    colorbar is 1e-13 to 1e-8 -- pass that range as ``vmin``/``vmax`` to
+    compare maps against an absolute, paper-fixed scale. Pinning both
+    ends neutralizes ``norm_policy`` by construction: "shared" already
+    forces one norm built from the pinned bounds, and "independent"
+    builds each panel's norm from the same pinned bounds too, so the two
+    policies draw identically once both `vmin` and `vmax` are fixed.
+
+    ``norm_policy="shared"`` delegates to ``eyepiece.compare_row``, which
+    builds one norm object from the min/max across all maps (or the
+    pinned ``vmin``/``vmax``) and hands it to every panel by identity --
+    panels are then directly, pixel-for-pixel comparable, not merely
+    rescaled to look alike. ``norm_policy="independent"`` instead calls
+    ``eyepiece.imshow_log`` once per panel, so each map gets its own norm
+    derived from its own data (or the same pinned bounds, if given).
+
+    Args:
+        fields_or_maps: Sequence of ``physicaloptix.core.Field``
+            instances or bare 2D array-likes, one per panel.
+        telescope_peak: Divides every map before plotting. None leaves
+            the maps as given.
+        titles: Optional sequence of per-panel titles, same length as
+            `fields_or_maps`.
+        axes: Axes to draw into, one per panel; shape must be `(n,)` for
+            `n = len(fields_or_maps)`. None creates a new row of panels.
+        norm_policy: "shared" (default) or "independent"; see above.
+        vmin: Norm lower bound. None derives it from the data.
+        vmax: Norm upper bound. None derives it from the data.
+        cbar_label: Label for the colorbar(s).
+        annulus: Optional `(iwa_lod, owa_lod)` pair; when given,
+            `draw_dark_zone` is called on every panel.
+        imshow_kw: Extra kwargs passed to each panel's `imshow` call.
+        cbar_kw: Extra kwargs passed to each colorbar.
+
+    Returns:
+        A `MosaicResult` with `axes` shape `(n,)`. `artists["image"]` is
+        a list of `AxesImage`, one per panel. `artists["cbar"]` is the
+        single shared `Colorbar` for `norm_policy="shared"`, or a list of
+        one `Colorbar` per panel for `norm_policy="independent"`.
+        `artists["annulus"]`, present only when `annulus` is given, is a
+        list of one `draw_dark_zone` result dict per panel.
+
+    Raises:
+        ValueError: `axes` is given with a shape other than `(n,)`, or
+            `norm_policy` is not "shared" or "independent".
+    """
+    ep = _require.eyepiece()
+
+    maps = []
+    for item in fields_or_maps:
+        data, _, _ = _resolve(item, None, "intensity")
+        intensity = _intensity_from(data)
+        if telescope_peak is not None:
+            intensity = intensity / telescope_peak
+        maps.append(intensity)
+
+    n = len(maps)
+    if axes is not None:
+        axes = np.atleast_1d(axes)
+        if axes.shape != (n,):
+            msg = f"contrast_row: expected axes shape ({n},), got {axes.shape}"
+            raise ValueError(msg)
+
+    if norm_policy == "shared":
+        result = ep.compare_row(
+            maps,
+            titles,
+            axes=axes,
+            norm="log",
+            vmin=vmin,
+            vmax=vmax,
+            cbar_label=cbar_label,
+            imshow_kw=imshow_kw,
+            cbar_kw=cbar_kw,
+        )
+    elif norm_policy == "independent":
+        if axes is None:
+            _, panel_axes = plt.subplots(1, n, layout="constrained", squeeze=False)
+            axes = panel_axes[0]
+        ims = []
+        cbars = []
+        for i, m in enumerate(maps):
+            panel = ep.imshow_log(
+                m,
+                ax=axes[i],
+                vmin=vmin,
+                vmax=vmax,
+                cbar_label=cbar_label,
+                imshow_kw=imshow_kw,
+                cbar_kw=cbar_kw,
+            )
+            if titles is not None:
+                axes[i].set_title(titles[i])
+            ims.append(panel.artists["image"])
+            if "cbar" in panel.artists:
+                cbars.append(panel.artists["cbar"])
+        artists = {"image": ims}
+        if cbars:
+            artists["cbar"] = cbars
+        result = ep.MosaicResult(axes=axes, artists=artists)
+    else:
+        msg = f"unknown norm_policy: {norm_policy!r}; use 'shared' or 'independent'"
+        raise ValueError(msg)
+
+    if annulus is None:
+        return result
+
+    iwa_lod, owa_lod = annulus
+    rings = [draw_dark_zone(panel_ax, iwa_lod, owa_lod) for panel_ax in result.axes]
+    artists = dict(result.artists)
+    artists["annulus"] = rings
+    return ep.MosaicResult(axes=result.axes, artists=artists)

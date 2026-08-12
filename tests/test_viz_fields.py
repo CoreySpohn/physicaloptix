@@ -93,3 +93,54 @@ def test_phase_masks_below_floor_and_labels_focal():
     phase = res.artists["image"].get_array()
     assert np.ma.is_masked(phase[0, 0]) or np.isnan(phase[0, 0])
     plt.close(res.fig)
+
+
+def test_contrast_row_shared_single_norm():
+    from physicaloptix.viz import contrast_row
+
+    maps = [np.random.default_rng(k).uniform(1e-12, 1e-7, (8, 8)) for k in range(3)]
+    res = contrast_row(maps, titles=["a", "b", "c"])
+    ims = res.artists["image"]
+    assert ims[0].norm is ims[1].norm is ims[2].norm
+    plt.close(res.fig)
+
+
+def test_contrast_row_independent_norms_and_bars():
+    from physicaloptix.viz import contrast_row
+
+    maps = [np.random.default_rng(k).uniform(1e-12, 1e-7, (8, 8)) for k in range(2)]
+    res = contrast_row(maps, norm_policy="independent")
+    ims = res.artists["image"]
+    assert ims[0].norm is not ims[1].norm
+    assert len(res.artists["cbar"]) == 2
+    plt.close(res.fig)
+
+
+def test_contrast_row_telescope_peak_scales():
+    from physicaloptix.viz import contrast_row
+
+    m = np.full((4, 4), 2.0)
+    res = contrast_row([m], telescope_peak=4.0)
+    assert float(
+        np.asarray(res.artists["image"][0].get_array()).max()
+    ) == pytest.approx(0.5)
+    plt.close(res.fig)
+
+
+def test_contrast_row_axes_shape_contract():
+    from physicaloptix.viz import contrast_row
+
+    fig, axes = plt.subplots(1, 3)
+    with pytest.raises(ValueError, match="expected"):
+        contrast_row([np.ones((4, 4))], axes=axes)  # 1 map, 3 axes
+    plt.close(fig)
+
+
+def test_draw_dark_zone_two_dashed_rings():
+    from physicaloptix.viz import draw_dark_zone
+
+    fig, ax = plt.subplots()
+    arts = draw_dark_zone(ax, 3.0, 25.0)
+    assert set(arts) == {"iwa", "owa"}
+    assert arts["iwa"].get_linestyle() in ("--", "dashed")
+    plt.close(fig)
