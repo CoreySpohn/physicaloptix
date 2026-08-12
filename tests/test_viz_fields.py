@@ -443,12 +443,13 @@ def test_draw_dark_zone_resolves_under_every_hwostyle_family():
         ("dark", "spectral"),
         ("light", "biosignature"),
     ]
-    try:
-        for mode, family in families:
-            hwostyle.use(mode, family)
-            fig, ax = plt.subplots()
-            arts = draw_dark_zone(ax, 3.0, 25.0)
-            assert arts["iwa"].get_edgecolor() is not None
-            plt.close(fig)
-    finally:
-        hwostyle.use(prev_mode or "dark")
+    with matplotlib.rc_context():
+        try:
+            for mode, family in families:
+                hwostyle.use(mode, family)
+                fig, ax = plt.subplots()
+                arts = draw_dark_zone(ax, 3.0, 25.0)
+                assert arts["iwa"].get_edgecolor() is not None
+                plt.close(fig)
+        finally:
+            hwostyle.use(prev_mode or "dark")
