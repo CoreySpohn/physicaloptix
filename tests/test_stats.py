@@ -127,9 +127,29 @@ def _delta_grid(n=20000):
     return np.linspace(lo, hi, n)
 
 
+def _pixel_pdf_chunked(x_grid, i_c_p, gamma_p, p_p, phi_c_p, norm, n_theta, chunk):
+    """pixel_pdf over many points without one large (len(x_grid), n_theta) array.
+
+    pixel_pdf has no chunk parameter (test-only need, not public API).
+    It is row-independent in x_grid -- x enters only through the per-row
+    x_int/r quantities, and the reduction is dens.mean(axis=1) -- so
+    chunking over x_grid is bitwise identical to an unchunked call, not
+    merely close.
+    """
+    out = np.empty_like(x_grid)
+    for lo in range(0, len(x_grid), chunk):
+        hi = min(lo + chunk, len(x_grid))
+        out[lo:hi] = pixel_pdf(
+            x_grid[lo:hi], i_c_p, gamma_p, p_p, phi_c_p, norm, n_theta=n_theta
+        )
+    return out
+
+
 def test_pixel_pdf_normalizes():
     x = _delta_grid()
-    p = pixel_pdf(x, I_C, GAMMA, P_STRONG, PHI_C, NORM)
+    p = _pixel_pdf_chunked(
+        x, I_C, GAMMA, P_STRONG, PHI_C, NORM, n_theta=4096, chunk=1000
+    )
     assert np.trapezoid(p, x) == pytest.approx(1.0, abs=2e-3)
 
 
@@ -137,7 +157,9 @@ def test_pixel_pdf_rician_limit():
     # p -> 0 must recover the modified Rician after the delta change of
     # variables: p_delta(d) = norm * p_I(i_c + d * norm; Ic=i_c, Is=gamma).
     x = _delta_grid()
-    p_beck = pixel_pdf(x, I_C, GAMMA, 1e-16 * GAMMA, PHI_C, NORM, n_theta=8192)
+    p_beck = _pixel_pdf_chunked(
+        x, I_C, GAMMA, 1e-16 * GAMMA, PHI_C, NORM, n_theta=8192, chunk=1000
+    )
     total_i = I_C + x * NORM
     p_ric = NORM * np.asarray(modified_rician_pdf(total_i, I_C, GAMMA))
     core = p_ric > p_ric.max() * 1e-6
@@ -146,7 +168,9 @@ def test_pixel_pdf_rician_limit():
 
 def test_pixel_sf_matches_pdf_tail_integral():
     x = _delta_grid()
-    p = pixel_pdf(x, I_C, GAMMA, P_STRONG, PHI_C, NORM)
+    p = _pixel_pdf_chunked(
+        x, I_C, GAMMA, P_STRONG, PHI_C, NORM, n_theta=4096, chunk=1000
+    )
     thresholds = np.array([x[2000], x[6000], x[12000]])
     sf = pixel_sf(
         thresholds,
@@ -266,15 +290,15 @@ def _genchi2_pdf_tail_gl(
 
 
 def test_genchi2_sf_matches_pdf_tail_integral():
-    # Evidence hierarchy for the tolerances below (see the report for the
-    # full sweep): genchi2_sf's own accuracy is established independently
-    # of this test, by test_genchi2_sf_exact_single_chisquare (an exact
-    # closed form, not a numerical integral). A separate out-of-band
-    # 2e8-draw Monte Carlo cross-check of this same 3-term case agrees with
-    # genchi2_sf within its own statistical error (~4.2e-6 at the deepest
-    # point) -- enough to rule out a gross error, but ~60x coarser than the
-    # ~7e-8 gap this test adjudicates, so the Monte Carlo does not carry
-    # that argument; the closed-form evidence does. This test instead
+    # Evidence hierarchy for the tolerances below: genchi2_sf's own accuracy
+    # is established independently of this test, by
+    # test_genchi2_sf_exact_single_chisquare (an exact closed form, not a
+    # numerical integral). A 2e8-draw Monte Carlo estimate of this same
+    # 3-term case agrees with genchi2_sf within its own statistical error
+    # (~4.2e-6 at the deepest point) -- enough to rule out a gross error, but
+    # ~60x coarser than the ~7e-8 gap this test adjudicates, so the Monte
+    # Carlo does not carry that argument; the closed-form evidence does.
+    # This test instead
     # bounds genchi2_sf against a numerically integrated genchi2_pdf
     # reference -- and that reference, even independently re-converged at
     # 2x its own resolution (n_u, u_max_sigmas, and Gauss-Legendre node

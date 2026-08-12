@@ -156,7 +156,9 @@ def genchi2_sf(x_grid, lam, beta, n_u=100000, u_max_sigmas=20000.0, chunk=8):
     Gil-Pelaez inversion in survival form,
     ``sf(x) = 1/2 + (1/pi) int_0^inf Im[phi(u) exp(-i u x)] / u du``,
     on the same characteristic-function grid as :func:`genchi2_pdf` (same
-    ``scale``, ``u`` grid, ``log_phi``). The 1/u envelope makes this integral
+    ``scale``, ``u`` grid, ``log_phi``), except for the lower endpoint, which
+    differs deliberately (see the comment at that line). The 1/u envelope
+    makes this integral
     converge far more slowly than :func:`genchi2_pdf`'s: resolving
     ``exp(-i u x)`` needs ``du`` fine relative to the largest ``|x|``
     plotted, and truncating the oscillatory tail at ``u_max`` has a
@@ -168,7 +170,7 @@ def genchi2_sf(x_grid, lam, beta, n_u=100000, u_max_sigmas=20000.0, chunk=8):
     isolated lucky point.
 
     This function's accuracy is fundamentally absolute in character, not
-    relative -- state it that way, not as a single rtol. At ``(n_u=100000,
+    relative. At ``(n_u=100000,
     u_max_sigmas=20000.0)`` it matches the exact single-term closed form
     (Q = lam z^2, beta = 0) to an absolute error of about 7e-7 or better
     across x in [0.5, 25] (the tested range). The worst-point *relative*
