@@ -177,6 +177,21 @@ def test_plot_path_phase_chromatic_defaults_to_mid_band_channel():
     plt.close(res_ch0.fig)
 
 
+def test_plot_path_phase_channel_out_of_range_raises_named_error():
+    # B3: an out-of-range channel= used to raise a bare IndexError from deep
+    # inside fields._resolve, naming neither plot_path nor channel.
+    grid = Grid.pupil(8)
+    spec = Spectrum(
+        wavelengths_nm=jnp.array([500.0, 550.0, 600.0]),
+        weights=jnp.array([0.2, 0.3, 0.5]),
+    )
+    data = jnp.stack([jnp.full((8, 8), 1.0 + 0j) for _ in range(3)])
+    field = Field(data=data, grid=grid, plane=PlaneKind.PUPIL, spectrum=spec)
+    path = OpticalPath(stages=())
+    with pytest.raises(ValueError, match="channel"):
+        plot_path(path, field, show_phase=True, channel=9)
+
+
 def test_plot_path_rectangular_grid_extents_differ_per_panel():
     """Non-square npix + differing pupil/focal extents: each panel's extent
     must come from its OWN Field, not a copy-pasted square-fixture value."""
@@ -219,9 +234,26 @@ def test_plot_path_panel_norms_none_entry_falls_back():
 def test_plot_path_kinds_override_passes_through_known_eyepiece_glyph():
     # M7: a kinds= value already spelled in eyepiece's own glyph vocabulary
     # (not physicaloptix's legacy vocabulary) must not raise a bare KeyError.
+    # B4: assert the drawn glyph itself, not just that nothing raised --
+    # len(res.axes) == 3 holds whether or not the override actually reached
+    # eyepiece.rail.
+    from matplotlib.patches import Polygon
+
     path, field = _setup()
+    res_default = plot_path(path, field)  # "cam" infers to "detector" (no Polygon)
+    default_polygons = [
+        p for p in res_default.axes[0].patches if isinstance(p, Polygon)
+    ]
+    assert default_polygons == []
+    plt.close(res_default.fig)
+
     res = plot_path(path, field, kinds={"cam": "focal"})
     assert len(res.axes) == 3
+    # the "focal" glyph is drawn as a two-Polygon bowtie (schematic.py's
+    # _draw_glyph); "detector" (the un-overridden default) draws a
+    # Rectangle instead, so this is a positive signature of the override.
+    polygons = [p for p in res.axes[0].patches if isinstance(p, Polygon)]
+    assert len(polygons) == 2
     plt.close(res.fig)
 
 
@@ -298,7 +330,17 @@ def test_plot_path_rail_glyphs_align_with_panel_columns():
         glyph_x_fig_frac = rail_bbox.x0 + glyph_x_axes_frac * rail_bbox.width
         panel_bbox = panel_ax.get_position()
         panel_center_fig_frac = panel_bbox.x0 + panel_bbox.width / 2
-        assert glyph_x_fig_frac == pytest.approx(panel_center_fig_frac, abs=0.02)
+        # Relative to the panel's own width, not a fixed figure-fraction
+        # tolerance: the true residual (~0.0176 at n=2, ~0.05x panel width)
+        # comes from constrained_layout inset-ing each panel asymmetrically
+        # within its cell (the rail axes has no such inset), not from
+        # gridspec column spacing, so it scales with panel width rather
+        # than staying a fixed figure-fraction constant. 0.15x panel width
+        # gives ~2.9x headroom over the true residual here, vs. 1.14x for a
+        # fixed abs=0.02; the old linspace(0.10, 0.90, n) bug measures
+        # 0.284x panel width by this same metric (confirmed by mutation).
+        offset = abs(glyph_x_fig_frac - panel_center_fig_frac)
+        assert offset < 0.15 * panel_bbox.width
     assert n == 2
     plt.close(res.fig)
 
@@ -308,10 +350,42 @@ def test_native_dpi():
 
 
 def test_plot_path_system_full_taps_renders_all_branches():
+    import eyepiece as ep
+
     system, field = _system_setup()
     res = plot_path(system, field)
     # per branch: rail + [input, stop, <branch stage>] = 1 + 3 = 4; x2 branches
     assert len(res.axes) == 8
+    # B2: a test asserting only shape (axis counts) cannot see whether
+    # highlight= ever reached eyepiece.rail -- mutating the C1 fix's
+    # `highlight = split_name if split_name in present else None` to a flat
+    # `highlight = None` still passes every len()-only assertion. "stop" is
+    # the split stage, present in both branches' own stage lists for full
+    # taps, so it must actually be drawn in the accent color eyepiece.rail
+    # uses when no accent= override is given.
+    accent = ep._style.color(1, None)
+    for branch_name in ("sci", "wfs"):
+        rail_artists = res.artists["rail"][branch_name]
+        stop_idx = 1  # stages = [input, stop, <branch's own stage>]
+        assert rail_artists["lines"][stop_idx].get_color() == accent
+        assert rail_artists["text"][stop_idx].get_color() == accent
+        assert (
+            rail_artists["lines"][0].get_color() != accent
+        )  # "input": not highlighted
+    plt.close(res.fig)
+
+
+def test_plot_path_system_rail_false_still_labels_branches():
+    # B1: the C2 fix replaced the per-branch SubFigure (whose .suptitle()
+    # labelled unconditionally) with a nested gridspec on the shared owned
+    # Figure; the branch label was re-anchored to the rail axes' title,
+    # which does not exist when rail=False -- silently losing every branch
+    # label on that (supported) flag combination.
+    system, field = _system_setup()
+    res = plot_path(system, field, rail=False)
+    assert len(res.axes) == 6  # 2 branches x [input, stop, <own stage>], no rail
+    assert res.axes[0].get_title(loc="left") == "sci"
+    assert res.axes[3].get_title(loc="left") == "wfs"
     plt.close(res.fig)
 
 

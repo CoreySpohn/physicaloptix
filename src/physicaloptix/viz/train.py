@@ -199,11 +199,26 @@ def _phase_channel(item, channel):
     needed for the phase row, and the intensity row already gets the
     physically meaningful chromatic answer (the weight-summed intensity)
     for free. A caller who wants a specific band passes ``channel=``.
+
+    Raises:
+        ValueError: ``channel`` is out of range for this Field's band
+            count -- named and range-listing, rather than the bare
+            ``IndexError`` a raw ``data[channel]`` would raise deeper
+            inside ``fields._resolve``.
     """
     data = np.asarray(item.data)
     if data.ndim != 3:
         return None
-    return data.shape[0] // 2 if channel is None else channel
+    nlam = data.shape[0]
+    if channel is None:
+        return nlam // 2
+    if not (0 <= channel < nlam):
+        msg = (
+            f"plot_path: channel={channel} out of range for a "
+            f"{nlam}-band chromatic Field; valid range is 0..{nlam - 1}"
+        )
+        raise ValueError(msg)
+    return channel
 
 
 def _draw_stage_panel(ep, ax, item, kind_of_panel, override, imshow_kw, channel=None):
@@ -313,9 +328,13 @@ def _draw_block(
             per-branch ``SubFigure`` (whose axes would (a) make
             ``MosaicResult.fig`` unreachable as the actual owned figure
             and (b) have no ``savefig`` of their own).
-        label: Optional text set as the rail axes' title (e.g. a branch
-            name), so a multi-block figure can tell its blocks apart
-            without a per-block ``SubFigure``. Ignored when ``rail=False``.
+        label: Optional text identifying this block (e.g. a branch name),
+            so a multi-block figure can tell its blocks apart without a
+            per-block ``SubFigure``. Always applied -- as the rail axes'
+            title when ``rail=True``, or the first panel's title when
+            ``rail=False`` (there is then no rail axes to carry it), so a
+            ``rail=False`` ``OpticalSystem`` render does not lose branch
+            labels entirely.
 
     Returns:
         An ``ep.MosaicResult`` with flat ``axes`` ``[rail?, panel_0, ...,
@@ -331,13 +350,13 @@ def _draw_block(
     axes = []
     artists = {}
     row = 0
+    label_ax = None
     if rail:
         rail_ax, rail_artists = _draw_rail(ep, target, gs, stages, rail_kw, highlight)
-        if label is not None:
-            rail_ax.set_title(label, fontsize=9, loc="left")
         axes.append(rail_ax)
         artists["rail"] = rail_artists
         row = 1
+        label_ax = rail_ax
 
     panel_norms = panel_norms or ()
     images = []
@@ -348,6 +367,14 @@ def _draw_block(
         images.append(_draw_stage_panel(ep, ax, item, "intensity", override, imshow_kw))
         panel_axes.append(ax)
     axes.extend(panel_axes)
+
+    if label is not None:
+        # No rail axes to carry the label when rail=False -- fall back to
+        # the block's first panel so an OpticalSystem render never loses
+        # branch identity just because rail was turned off.
+        (label_ax if label_ax is not None else panel_axes[0]).set_title(
+            label, fontsize=9, loc="left"
+        )
 
     if show_phase:
         phase_axes = []
