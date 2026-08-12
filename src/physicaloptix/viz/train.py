@@ -40,7 +40,11 @@ _GLYPH_FOR_KIND = {
 }
 
 _LOG_FLOOR_RATIO = 1e-8
-_PHASE_FLOOR = 1e-20  # unused by the phase branch of _draw_panel; kept explicit
+# Passed as the floor= positional arg on the phase path too, but _draw_panel's
+# phase branch (-> fields._plot_phase) never reads it -- only the intensity
+# branch does. Kept as an explicit placeholder rather than None so the call
+# signature stays uniform across both kinds.
+_PHASE_FLOOR = 1e-20
 _FIG_WIDTH_PER_PANEL_IN = 2.2  # matches the legacy render_path default (2.2 * n)
 _RAIL_HEIGHT_RATIO = 0.6
 _MINIMAP_CHIP_ALPHA = 0.55  # translucent watermark chip behind the rail
@@ -74,9 +78,14 @@ def _planes_for_stages(name_kind_pairs):
     The one place the legacy-kind -> eyepiece-glyph mapping
     (``_GLYPH_FOR_KIND``) is applied, shared by ``plot_path``'s
     ``_draw_rail`` and ``minimap`` so the two never build a second,
-    divergent path from stages to rail entries.
+    divergent path from stages to rail entries. A ``kind`` not in
+    ``_GLYPH_FOR_KIND`` (e.g. a ``kinds=`` override already spelled in
+    eyepiece's own glyph vocabulary, such as ``"focal"`` or ``"pupil"``)
+    passes through unchanged rather than raising a bare ``KeyError`` here;
+    ``eyepiece.rail`` itself validates the final glyph name and raises a
+    ``ValueError`` naming the accepted set for anything still unknown.
     """
-    return [(name, _GLYPH_FOR_KIND[kind]) for name, kind in name_kind_pairs]
+    return [(name, _GLYPH_FOR_KIND.get(kind, kind)) for name, kind in name_kind_pairs]
 
 
 def _stage_kinds(path, kinds=None):
@@ -144,12 +153,20 @@ def _owned_figsize(n_cols, height_ratios):
 
 
 def _rail_positions(n, rail_kw):
-    """X positions for ``n`` rail planes; caller-supplied ``positions`` wins."""
+    """X positions for ``n`` rail planes; caller-supplied ``positions`` wins.
+
+    The rail axes spans the SAME gridspec width as the ``n`` panel columns
+    below it (``gs[0, :]`` over the same ``n``-column row), so its [0, 1]
+    axes-fraction coordinate maps linearly onto that combined width. The
+    default is therefore each column's own center, ``(i + 0.5) / n`` -- the
+    legacy ``render_path`` recipe (``_legacy.py``'s ``xs = (np.arange(n) +
+    0.5) / n``) -- so every glyph sits directly above its panel; anything
+    else (e.g. an even ``linspace`` padded away from the edges) drifts off
+    by a growing fraction of a panel width as ``n`` shrinks.
+    """
     if rail_kw and "positions" in rail_kw:
         return list(rail_kw["positions"])
-    if n == 1:
-        return [0.5]
-    return list(np.linspace(0.10, 0.90, n))
+    return list((np.arange(n) + 0.5) / n)
 
 
 def _draw_rail(ep, target, gs, stages, rail_kw, highlight):
@@ -174,7 +191,22 @@ def _draw_rail(ep, target, gs, stages, rail_kw, highlight):
     return rail_ax, rail_result.artists
 
 
-def _draw_stage_panel(ep, ax, item, kind_of_panel, override, imshow_kw):
+def _phase_channel(item, channel):
+    """The chromatic channel index a phase panel draws, or None for mono.
+
+    ``channel=None`` (the default) auto-selects the middle band -- a
+    chromatic Field has no single phase, so *some* deterministic choice is
+    needed for the phase row, and the intensity row already gets the
+    physically meaningful chromatic answer (the weight-summed intensity)
+    for free. A caller who wants a specific band passes ``channel=``.
+    """
+    data = np.asarray(item.data)
+    if data.ndim != 3:
+        return None
+    return data.shape[0] // 2 if channel is None else channel
+
+
+def _draw_stage_panel(ep, ax, item, kind_of_panel, override, imshow_kw, channel=None):
     """Draw one panel (intensity or phase) for a tapped Field, via fields.py.
 
     Args:
@@ -183,22 +215,34 @@ def _draw_stage_panel(ep, ax, item, kind_of_panel, override, imshow_kw):
         item: The tapped ``Field``.
         kind_of_panel: "intensity" or "phase".
         override: An optional ``(vmin, vmax)`` pair overriding the default
-            per-panel log floor (intensity only; ignored for phase).
+            per-panel log floor (intensity only; ignored for phase). Either
+            entry may be ``None`` to fall back individually: the floor for
+            ``vmin``, the panel's own peak for ``vmax``.
         imshow_kw: Extra kwargs forwarded to the underlying ``imshow``.
+        channel: Wavelength index for a chromatic Field's phase row
+            (ignored for intensity, which always shows the weight-summed
+            answer, and for a mono Field). ``None`` auto-selects the middle
+            band; see ``_phase_channel``.
 
     Returns:
         The drawn image artist.
     """
-    data, extent, plane = _resolve(item, None, kind_of_panel)
+    is_phase = kind_of_panel == "phase"
+    resolve_channel = _phase_channel(item, channel) if is_phase else None
+    data, extent, plane = _resolve(item, resolve_channel, kind_of_panel)
     vmin = vmax = None
     floor = _PHASE_FLOOR
     if kind_of_panel == "intensity":
         peak = float(_intensity_from(data).max())
+        default_floor = peak * _LOG_FLOOR_RATIO
         if override is not None:
-            vmin, vmax = override
+            ov_vmin, ov_vmax = override
+            vmin = default_floor if ov_vmin is None else ov_vmin
+            # ov_vmax=None passes through: imshow_log then derives it itself.
+            vmax = ov_vmax
             floor = vmin
         else:
-            floor = peak * _LOG_FLOOR_RATIO
+            floor = default_floor
     result, _, _ = _draw_panel(
         ep,
         ax,
@@ -232,8 +276,46 @@ def _draw_block(
     imshow_kw,
     panel_height_in,
     highlight=None,
+    channel=None,
+    gs=None,
+    label=None,
 ):
     """Draw one rail+panels block (a whole ``OpticalPath``, or one branch row).
+
+    Every axes this draws is added directly to ``target`` (via
+    ``target.add_subplot``), so ``axes.figure is target`` for every one of
+    them regardless of whether ``target`` is the top-level owned ``Figure``
+    or a caller-supplied ``SubFigure`` -- see ``gs``.
+
+    Args:
+        ep: The eyepiece module.
+        target: The Figure or SubFigure every axes is added to.
+        stages: ``(name, kind, Field)`` triples, input first, in draw order.
+        rail: Whether to draw the schematic rail spanning the top row.
+        show_phase: Whether to append a row of phase panels.
+        panel_norms: Optional sequence of ``(vmin, vmax)`` overrides, one
+            per intensity panel; see ``plot_path``.
+        rail_kw: Extra kwargs forwarded to ``eyepiece.rail``.
+        imshow_kw: Extra kwargs forwarded to every panel's ``imshow``.
+        panel_height_in: Height, in inches, of one panel row.
+        highlight: Plane label to draw in the accent color on the rail, or
+            None. Must be one of ``stages``' own names -- ``eyepiece.rail``
+            raises if it is not.
+        channel: Wavelength index for a chromatic Field's phase row; see
+            ``plot_path``.
+        gs: A pre-built gridspec (or ``SubplotSpec`` gridspec, from
+            ``outer_gs[row, 0].subgridspec(...)``) sized ``(rows, len(stages))``
+            to draw this block's cells into. ``None`` (the ``OpticalPath``
+            case) builds one fresh via ``target.add_gridspec(...)``; an
+            ``OpticalSystem`` branch row instead passes its own nested
+            subgridspec so every branch's axes still resolve to the ONE
+            owned/caller-supplied Figure or SubFigure, never a
+            per-branch ``SubFigure`` (whose axes would (a) make
+            ``MosaicResult.fig`` unreachable as the actual owned figure
+            and (b) have no ``savefig`` of their own).
+        label: Optional text set as the rail axes' title (e.g. a branch
+            name), so a multi-block figure can tell its blocks apart
+            without a per-block ``SubFigure``. Ignored when ``rail=False``.
 
     Returns:
         An ``ep.MosaicResult`` with flat ``axes`` ``[rail?, panel_0, ...,
@@ -243,13 +325,16 @@ def _draw_block(
     """
     n = len(stages)
     rows, height_ratios = _row_layout(rail, show_phase, panel_height_in)
-    gs = target.add_gridspec(rows, n, height_ratios=height_ratios)
+    if gs is None:
+        gs = target.add_gridspec(rows, n, height_ratios=height_ratios)
 
     axes = []
     artists = {}
     row = 0
     if rail:
         rail_ax, rail_artists = _draw_rail(ep, target, gs, stages, rail_kw, highlight)
+        if label is not None:
+            rail_ax.set_title(label, fontsize=9, loc="left")
         axes.append(rail_ax)
         artists["rail"] = rail_artists
         row = 1
@@ -268,7 +353,9 @@ def _draw_block(
         phase_axes = []
         for col, (_, _, item) in enumerate(stages):
             ax = target.add_subplot(gs[row + 1, col])
-            images.append(_draw_stage_panel(ep, ax, item, "phase", None, imshow_kw))
+            images.append(
+                _draw_stage_panel(ep, ax, item, "phase", None, imshow_kw, channel)
+            )
             phase_axes.append(ax)
         axes.extend(phase_axes)
 
@@ -358,12 +445,21 @@ def _plot_system(
     kinds,
     rail_kw,
     imshow_kw,
+    channel,
 ):
-    """One rail+panel block per branch, stacked as rows of subfigures."""
-    per_branch, split_highlight = _collect_system_stages(system, field, taps, kinds)
+    """One rail+panel block per branch, stacked as nested-gridspec rows.
+
+    Every branch's axes are added directly to ``fig`` (via nested
+    ``SubplotSpec.subgridspec`` cells, never ``fig.add_subfigure(...)``),
+    so ``MosaicResult.fig`` (``axes.flat[0].figure``) resolves to the real
+    owned/caller-supplied ``fig`` -- a ``SubFigure`` has no ``savefig`` and
+    is not accepted by ``plt.close``, so a per-branch ``SubFigure`` would
+    make the returned figure unusable for either.
+    """
+    per_branch, split_name = _collect_system_stages(system, field, taps, kinds)
     branch_names = [branch.name for branch in system.branches]
     n_cols = max(len(per_branch[name]) for name in branch_names)
-    _, height_ratios = _row_layout(rail, show_phase, panel_height_in)
+    rows, height_ratios = _row_layout(rail, show_phase, panel_height_in)
 
     if fig is None:
         width, block_height = _owned_figsize(n_cols, height_ratios)
@@ -376,19 +472,31 @@ def _plot_system(
     images = []
     rails = {}
     for row_idx, name in enumerate(branch_names):
-        sub = fig.add_subfigure(outer_gs[row_idx, 0])
-        sub.suptitle(name, fontsize=9)
+        stages = per_branch[name]
+        # split_name is a candidate (the last REQUESTED trunk stage overall)
+        # that this particular branch's own stage list may not contain --
+        # e.g. taps= omits it, or omits this branch's downstream taps
+        # entirely. eyepiece.rail validates highlight against the planes it
+        # is actually given, so passing a name this block never drew raises.
+        present = {stage_name for stage_name, _, _ in stages}
+        highlight = split_name if split_name in present else None
+        inner_gs = outer_gs[row_idx, 0].subgridspec(
+            rows, max(len(stages), 1), height_ratios=height_ratios
+        )
         block = _draw_block(
             ep,
-            sub,
-            per_branch[name],
+            fig,
+            stages,
             rail=rail,
             show_phase=show_phase,
             panel_norms=panel_norms,
             rail_kw=rail_kw,
             imshow_kw=imshow_kw,
             panel_height_in=panel_height_in,
-            highlight=split_highlight,
+            highlight=highlight,
+            channel=channel,
+            gs=inner_gs,
+            label=name,
         )
         axes.extend(block.axes.tolist())
         images.extend(block.artists["image"])
@@ -412,17 +520,19 @@ def plot_path(
     panel_norms=None,
     panel_height_in=1.6,
     kinds=None,
+    channel=None,
     rail_kw=None,
     imshow_kw=None,
 ):
     """Propagate with the requested stages tapped and draw the rail + panels.
 
     Consumes an ``OpticalPath`` (a single rail+panel block) or an
-    ``OpticalSystem`` (one rail+panel block per branch, stacked as
-    subfigure rows -- taps are namespaced ``"trunk/<stage>"`` /
-    ``"<branch>/<stage>"``). Every panel goes through ``fields._resolve``,
-    so a chromatic ``Field`` renders its weight-summed intensity instead of
-    crashing (the bug ``_legacy.render_path`` is frozen with).
+    ``OpticalSystem`` (one rail+panel block per branch, stacked as nested
+    gridspec rows -- taps are namespaced ``"trunk/<stage>"`` /
+    ``"<branch>/<stage>"``). Every intensity panel goes through
+    ``fields._resolve``, so a chromatic ``Field`` renders its weight-summed
+    intensity instead of crashing (the bug ``_legacy.render_path`` is
+    frozen with).
 
     The returned axes are flat, in this fixed order: the rail (if
     ``rail=True``), then one intensity panel per stage (input first, then
@@ -447,15 +557,26 @@ def plot_path(
             ``1e-10`` of each panel's peak intensity (the phase is
             undefined where there is no light).
         panel_norms: Optional sequence of ``(vmin, vmax)`` pairs, one per
-            intensity panel in the same order as the panels (``None``
-            entries, or a shorter sequence, fall back to the default
-            per-panel log floor at ``peak * 1e-8``).
+            intensity panel in the same order as the panels. ``None`` (or a
+            shorter sequence) falls back to the default per-panel log floor
+            at ``peak * 1e-8``; within a given pair, either entry may
+            individually be ``None`` to fall back just that bound (the
+            floor for ``vmin``, the panel's own peak for ``vmax``).
         panel_height_in: Height, in inches, of one panel row (also the
             gridspec height ratio unit; the rail row is a fixed ``0.6``).
         kinds: Optional ``{stage_name: glyph_kind}`` overrides (namespaced
             for an ``OpticalSystem``); kinds are otherwise inferred from
             the stage's element type (source, pupil_mask, apodizer, fpm,
-            lyot_stop, detector) via the ported legacy ``_infer_kind``.
+            lyot_stop, detector) via the ported legacy ``_infer_kind``. A
+            value already spelled in eyepiece's own glyph vocabulary (e.g.
+            ``"focal"``) passes through unchanged.
+        channel: Wavelength index selecting which band's phase to draw for
+            a chromatic Field's phase row (``show_phase=True`` only; a mono
+            Field, or the intensity row of any Field, ignores it -- the
+            intensity row always shows the physically meaningful
+            weight-summed answer). ``None`` (the default) auto-selects the
+            middle band, so ``show_phase=True`` never raises on a chromatic
+            Field.
         rail_kw: Extra kwargs forwarded to ``eyepiece.rail`` (e.g.
             ``positions``, ``accent``, ``cap``).
         imshow_kw: Extra kwargs forwarded to every panel's underlying
@@ -467,6 +588,8 @@ def plot_path(
         the same order as the (non-rail) axes. ``artists["rail"]`` is the
         rail's own artists dict (``OpticalPath``), or a ``{branch_name:
         artists}`` dict (``OpticalSystem``); absent when ``rail=False``.
+        ``.fig`` is always the real owned or caller-supplied ``Figure``/
+        ``SubFigure`` -- never a per-branch wrapper -- for both input kinds.
 
     Raises:
         TypeError: ``fig`` is neither ``None`` nor a ``Figure``/``SubFigure``.
@@ -488,6 +611,7 @@ def plot_path(
             kinds=kinds,
             rail_kw=rail_kw,
             imshow_kw=imshow_kw,
+            channel=channel,
         )
 
     stages = _collect_path_stages(path_or_system, field, taps, kinds)
@@ -506,6 +630,7 @@ def plot_path(
         rail_kw=rail_kw,
         imshow_kw=imshow_kw,
         panel_height_in=panel_height_in,
+        channel=channel,
     )
 
 
