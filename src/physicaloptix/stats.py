@@ -167,17 +167,26 @@ def genchi2_sf(x_grid, lam, beta, n_u=100000, u_max_sigmas=20000.0, chunk=8):
     (whose defaults stay frozen for existing figures) and not picked from an
     isolated lucky point.
 
-    At ``(n_u=100000, u_max_sigmas=20000.0)`` this matches the exact
-    single-term closed form (Q = lam z^2, beta = 0) with about 2.8x margin
-    on ``rtol=1e-5``, and that margin is stable across a wide neighborhood
-    (``n_u`` from ~60000 to 200000-plus at this ``u_max_sigmas`` all sit
-    within about 0.32-0.39 of the threshold -- a converged plateau, not a
-    fragile resonance). A caller needing deeper-tail precision (e.g. to
-    match a numerically integrated pdf reference to better than ~1e-7
-    absolute) should raise both ``n_u`` and ``u_max_sigmas`` together,
-    preserving their ratio, well past this default -- see
-    :func:`genchi2_pdf`'s own docstring convergence note for the analogous
-    pattern.
+    This function's accuracy is fundamentally absolute in character, not
+    relative -- state it that way, not as a single rtol. At ``(n_u=100000,
+    u_max_sigmas=20000.0)`` it matches the exact single-term closed form
+    (Q = lam z^2, beta = 0) to an absolute error of about 7e-7 or better
+    across x in [0.5, 25] (the tested range). The worst-point *relative*
+    error there is 1.5e-6 -- a 6.9x margin on a pure ``rtol=1e-5`` gate --
+    and that margin is stable, not fragile: doubling ``n_u`` alone leaves
+    it at 5.9x (flat, a converged plateau, not still climbing), and
+    doubling both ``n_u`` and ``u_max_sigmas`` together improves it to
+    11.0x by extending the truncation reach. But relative accuracy
+    degrades in the deep tail as a matter of course: it is small only
+    while ``sf`` itself is not small, and grows unboundedly once ``sf``
+    drops toward or below the absolute floor above -- e.g. at x=100 for
+    this same single-term case, sf ~= 2.5e-10 and the relative error
+    exceeds 100. A caller reading a survival curve on a log axis, where the
+    deep tail is the interesting part, should budget for this function's
+    absolute accuracy, not assume a fixed relative one, and raise both
+    ``n_u`` and ``u_max_sigmas`` together, preserving their ratio, for
+    deeper-tail precision -- see :func:`genchi2_pdf`'s own docstring
+    convergence note for the analogous pattern.
 
     ``chunk`` loops over ``x_grid`` (in ``pixel_sf``'s idiom) so peak memory
     is ``chunk * n_u`` complex128 elements regardless of how many points are
@@ -186,7 +195,8 @@ def genchi2_sf(x_grid, lam, beta, n_u=100000, u_max_sigmas=20000.0, chunk=8):
     (chunked, so memory does not grow with the number of points).
 
     Args:
-        x_grid: Points at which to evaluate the survival function.
+        x_grid: Points at which to evaluate the survival function. A scalar
+            is accepted and returns a scalar.
         lam: Per-mode quadratic-form eigenvalues.
         beta: Per-mode linear-term coefficients (same shape as ``lam``).
         n_u: Number of quadrature points along the characteristic-function
@@ -197,12 +207,21 @@ def genchi2_sf(x_grid, lam, beta, n_u=100000, u_max_sigmas=20000.0, chunk=8):
             memory to ``chunk * n_u`` complex128 elements.
 
     Returns:
-        The survival probability ``P(Q > x)`` at each point in ``x_grid``,
-        clipped to ``[0, 1]``.
+        The survival probability ``P(Q > x)`` at each point in ``x_grid``
+        (or a scalar if ``x_grid`` was a scalar), clipped to ``[0, 1]``.
     """
     x_grid = np.asarray(x_grid, dtype=np.float64)
+    scalar_input = x_grid.ndim == 0
+    x_grid = np.atleast_1d(x_grid)
     scale = np.sqrt(np.sum(2.0 * lam**2 + beta**2))
-    u = np.linspace(1e-9, u_max_sigmas / scale, n_u)
+    # Lower endpoint 1e-14, not genchi2_pdf's 1e-9: the omitted [0, endpoint)
+    # sliver biases the integral by endpoint * (integrand's u -> 0 limit) /
+    # pi. For genchi2_pdf that limit is 1 (x-independent, negligible at
+    # 1e-9). For this survival-form integral it is (k1 - x), so the same
+    # 1e-9 endpoint biases sf by a term growing linearly with |x - k1| --
+    # worst exactly where a survival function is read. 1e-14 keeps that
+    # bias below the quadrature's own floor at the chosen defaults.
+    u = np.linspace(1e-14, u_max_sigmas / scale, n_u)
     denom = 1.0 - 2j * lam[:, None] * u[None, :]
     log_phi = (-0.5 * np.log(denom)).sum(axis=0) - 0.5 * np.sum(
         beta[:, None] ** 2 * u[None, :] ** 2 / denom, axis=0
@@ -216,7 +235,8 @@ def genchi2_sf(x_grid, lam, beta, n_u=100000, u_max_sigmas=20000.0, chunk=8):
             np.imag(phi[None, :] * np.exp(-1j * u[None, :] * xg[:, None])) / u[None, :]
         )
         sf[lo:hi] = 0.5 + np.trapezoid(integrand, u, axis=1) / np.pi
-    return np.clip(sf, 0.0, 1.0)
+    sf = np.clip(sf, 0.0, 1.0)
+    return sf[0] if scalar_input else sf
 
 
 def pixel_sf(thresholds, i_c, gamma, p_kernel, phi_c, norm, chunk=4096, gl_nodes=96):

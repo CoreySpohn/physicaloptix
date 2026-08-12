@@ -193,7 +193,12 @@ def test_genchi2_cumulants_match_integrated_moments():
     # brings the error to ~3e-4; doubling again holds it there, confirming
     # convergence rather than a tuned pass. The library defaults stay put:
     # they are load-bearing for existing published figures.
-    p = genchi2_pdf(x, lam, beta, n_u=8000, u_max_sigmas=120.0)
+    # A single unchunked genchi2_pdf(x, ..., n_u=8000) call here builds a
+    # 40000 x 8000 complex128 temporary (2.56 GB) and peaks several times
+    # that with the exp/multiply chain's other live temporaries -- routed
+    # through _genchi2_pdf_chunked (defined below) to keep this well under
+    # a few hundred MB; same values, chunking does not change the result.
+    p = _genchi2_pdf_chunked(x, lam, beta, n_u=8000, u_max_sigmas=120.0, chunk=781)
     assert np.trapezoid(p, x) == pytest.approx(1.0, abs=1e-3)
     assert np.trapezoid(x * p, x) == pytest.approx(k1, rel=1e-3)
     assert np.trapezoid((x - k1) ** 2 * p, x) == pytest.approx(k2, rel=1e-3)
@@ -202,11 +207,13 @@ def test_genchi2_cumulants_match_integrated_moments():
 def _genchi2_pdf_chunked(x_pts, lam, beta, n_u, u_max_sigmas, chunk):
     """genchi2_pdf over many points without an unbounded allocation.
 
-    genchi2_pdf itself has no chunk parameter (its defaults and signature
-    stay frozen for existing figure scripts, Ruling 4), so a caller needing
-    many points at a large n_u chunks at the call site: ``len(x_pts) * n_u``
-    complex128 must never approach the ~1 GB test-allocation ceiling
-    (Ruling 1) the way the plan's original 200000 x 8000 reference did.
+    genchi2_pdf itself has no chunk parameter (its signature and defaults
+    are frozen -- existing figure scripts depend on them), so a caller
+    needing many points at a large n_u chunks at the call site instead:
+    ``len(x_pts) * n_u`` complex128 must stay well under a modest
+    allocation ceiling, unlike an earlier draft of this test's reference
+    computation, which called genchi2_pdf on a 200000-point grid at
+    n_u=8000 in one shot (~25.6 GB).
     """
     out = np.empty_like(x_pts)
     for lo in range(0, len(x_pts), chunk):
@@ -222,25 +229,33 @@ def _genchi2_pdf_tail_gl(
 ):
     """Converged pdf-tail reference via Gauss-Legendre, not a giant grid.
 
-    A single wide trapezoid grid spanning the whole plotted range (the
-    plan's original approach) forces ``len(grid) * n_u`` memory -- 200000 x
-    8000 complex128 is ~25.6 GB, the defect Ruling 1 requires fixing -- and
-    even chunked, plain-trapezoid convergence over that outer range is only
-    O(1/n): closing a 1e-6 relative gap needs an impractically large grid.
-    Gauss-Legendre over the smooth pdf converges far faster (near-spectral
-    for an analytic integrand), needing only a few hundred nodes, provided
-    no single panel straddles the density's peak -- so ``mode_side`` picks
-    the peak-free half: ``P(Q > x0) = integral(x0, x_max)`` when the peak is
-    at or before ``x0`` (the panel only covers the smooth falling tail), or
-    ``1 - integral(x_min, x0)`` when the peak is beyond ``x0`` (the
-    complement panel is a smooth *rising* tail with no peak in it either).
-    Peak location is a per-call judgment (see the caller), not automatic.
-    The ``genchi2_pdf`` evaluation itself is chunked (Ruling 1): even a few
-    hundred GL nodes at a several-million-point ``n_u`` would otherwise
-    allocate tens of GB in one call.
+    A single wide trapezoid grid spanning the whole plotted range (an
+    earlier draft of this test) forces ``len(grid) * n_u`` memory -- 200000
+    x 8000 complex128 is ~25.6 GB, an allocation no test in this module may
+    make -- and even chunked, plain-trapezoid convergence over that outer
+    range is only O(1/n): closing a 1e-6 relative gap needs an impractically
+    large grid. Gauss-Legendre over the smooth pdf converges far faster
+    (near-spectral for an analytic integrand), needing only a few hundred
+    nodes, provided no single panel straddles the density's peak -- so
+    ``mode_side`` picks the peak-free half: ``P(Q > x0) = integral(x0,
+    x_max)`` when the peak is at or before ``x0`` (the panel only covers the
+    smooth falling tail), or ``1 - integral(x_min, x0)`` when the peak is
+    beyond ``x0`` (the complement panel is a smooth *rising* tail with no
+    peak in it either). Peak location is a per-call judgment (see the
+    caller), not automatic. The ``genchi2_pdf`` evaluation itself is chunked
+    for the same reason: even a few hundred GL nodes at a several-million-
+    point ``n_u`` would otherwise allocate tens of GB in one call.
     """
     nodes, weights = np.polynomial.legendre.leggauss(n_nodes)
-    node_chunk = max(1, int(4e8 / (n_u * 16)))
+    # Sized for the ``chunk * n_u`` integrand array alone, but genchi2_pdf's
+    # per-call characteristic-function setup (u, denom, log_phi, phi) is
+    # itself O(n_u) and re-built on every chunk, plus the exp/multiply
+    # chain holds 2-3 same-size complex128 temporaries live at once -- so
+    # the realized peak is several times this array's nominal size, not
+    # equal to it. Measured ~393 MB at n_u=2048000 (this test's setting)
+    # with the budget below; do not assume it stays under 1 GB at a much
+    # larger n_u without re-measuring.
+    node_chunk = max(1, int(1e8 / (n_u * 16)))
     if mode_side == "before":
         xg = 0.5 * (x_max - x0) * nodes + 0.5 * (x_max + x0)
         p = _genchi2_pdf_chunked(xg, lam, beta, n_u, u_max_sigmas, node_chunk)
@@ -254,24 +269,29 @@ def test_genchi2_sf_matches_pdf_tail_integral():
     # Evidence hierarchy for the tolerances below (see the report for the
     # full sweep): genchi2_sf's own accuracy is established independently
     # of this test, by test_genchi2_sf_exact_single_chisquare (an exact
-    # closed form, not a numerical integral) and by an out-of-band
-    # 2e8-draw Monte Carlo cross-check of this same 3-term case (both
-    # within their stated margins). This test instead bounds genchi2_sf
-    # against a numerically integrated genchi2_pdf reference -- and that
-    # reference, even independently re-converged at 2x its own resolution
-    # (n_u, u_max_sigmas, and Gauss-Legendre node count all doubled), still
-    # disagrees with genchi2_sf by a flat ~7e-8 absolute at every point,
-    # unmoved by the doubling. That is the reference's own precision floor
-    # for a characteristic-function-inversion integral, not genchi2_sf's
-    # error: no correct implementation could pass an assertion tighter than
-    # what the reference itself can resolve. rel=1e-6 is kept unweakened at
-    # the two larger-magnitude points (k1 - 2 sigma, k1), where it is well
-    # above that floor and so still the binding, meaningful constraint. The
-    # two smaller-magnitude points (k1 + 2 sigma, k1 + 5 sigma) get an
-    # explicit abs floor of 5e-7 -- about 7x headroom over the measured
-    # ~7e-8 gap, not rounded down to a bare pass -- because rel=1e-6 there
-    # would demand better than 1e-7 absolute from a reference that cannot
-    # deliver it.
+    # closed form, not a numerical integral). A separate out-of-band
+    # 2e8-draw Monte Carlo cross-check of this same 3-term case agrees with
+    # genchi2_sf within its own statistical error (~4.2e-6 at the deepest
+    # point) -- enough to rule out a gross error, but ~60x coarser than the
+    # ~7e-8 gap this test adjudicates, so the Monte Carlo does not carry
+    # that argument; the closed-form evidence does. This test instead
+    # bounds genchi2_sf against a numerically integrated genchi2_pdf
+    # reference -- and that reference, even independently re-converged at
+    # 2x its own resolution (n_u, u_max_sigmas, and Gauss-Legendre node
+    # count all doubled), still disagrees with genchi2_sf by a flat ~7e-8
+    # absolute at every point, unmoved by the doubling. genchi2_sf's own
+    # absolute error at these settings is itself of the same order (~6e-8
+    # at x=k1), so this ~7e-8 is the COMBINED floor of two independently
+    # converged characteristic-function-inversion integrals, not solely
+    # the reference's error: no implementation, correct or not, could pass
+    # an assertion tighter than what both paths together resolve. rel=1e-6
+    # is kept unweakened at the two larger-magnitude points (k1 - 2 sigma,
+    # k1), where it is well above that combined floor and so still the
+    # binding, meaningful constraint. The two smaller-magnitude points
+    # (k1 + 2 sigma, k1 + 5 sigma) get an explicit abs floor of 5e-7 --
+    # about 7x headroom over the measured ~7e-8 gap, not rounded down to a
+    # bare pass -- because rel=1e-6 there would demand better than 1e-7
+    # absolute from a combined floor that cannot deliver it.
     lam = np.array([3.0, -1.0, 0.5])
     beta = np.array([0.7, 0.2, 0.0])
     k1, k2, _, _ = genchi2_cumulants(lam, beta)
@@ -298,10 +318,15 @@ def test_genchi2_sf_exact_single_chisquare():
     # This is the authoritative accuracy gate: the reference is closed-form
     # (via _ndtr), not a numerical integral, so there is nothing to be
     # under-converged on the reference side. genchi2_sf's own defaults
-    # (n_u=4096000, u_max_sigmas=61440.0) are sized for this gate; doubling
-    # both (n_u=8192000, u_max_sigmas=122880.0) moves the worst-point margin
-    # from ~3x to ~4x rather than continuing to close in on the boundary,
-    # which is the convergence signature this test relies on.
+    # (n_u=100000, u_max_sigmas=20000.0) give a worst-point relative error
+    # of 1.45e-6 here, a 6.9x margin on a pure rtol=1e-5 gate (np.allclose's
+    # default atol=1e-8 widens that further at the deepest point, but the
+    # margin above already holds without relying on it). Doubling n_u alone
+    # (200000) leaves the margin at 5.9x -- flat, a converged plateau, not
+    # still climbing -- while doubling both n_u and u_max_sigmas together
+    # (200000, 40000.0) improves it to 11.0x by extending the truncation
+    # reach; that stability across the doubling is the convergence
+    # signature this test relies on.
     lam = np.array([2.5])
     beta = np.array([0.0])
     xs = np.array([0.5, 2.5, 10.0, 25.0])
@@ -313,6 +338,9 @@ def test_genchi2_sf_exact_single_chisquare():
 
 
 def test_genchi2_sf_bounded():
+    # The np.clip at the end of genchi2_sf makes this range assertion
+    # unfailable as written -- it is a refactor guard (catches a future
+    # edit that drops the clip), not an accuracy check.
     lam = np.array([1.0, 0.3])
     beta = np.array([0.4, 0.0])
     sf = genchi2_sf(np.linspace(-20.0, 60.0, 500), lam, beta)
