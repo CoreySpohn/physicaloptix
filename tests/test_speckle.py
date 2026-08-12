@@ -1750,3 +1750,63 @@ class TestPhotometryReport:
         rep = proc.photometry()
         assert np.asarray(rep.input_energy).shape == (2,)
         assert np.asarray(rep.e_nom_flux_fraction).shape == (2,)
+
+
+class TestDeltaE:
+    """The public complex-increment accessor."""
+
+    def test_is_the_complex_increment_realize_squares(self):
+        """Incoherent realize is |delta_e|^2 over the normalization."""
+        field = _field()
+        de = field.delta_e(wavelength_nm=500.0, time_s=123.0)
+        got = field.realize(wavelength_nm=500.0, time_s=123.0)
+        want = jnp.abs(de) ** 2 / field.normalization
+        assert jnp.allclose(got, want)
+
+    def test_coherent_realize_uses_the_same_increment(self):
+        """Coherent realize is the cross term plus |delta_e|^2."""
+        field = _field(coherent=True)
+        de = field.delta_e(wavelength_nm=500.0, time_s=7.0)
+        got = field.realize(wavelength_nm=500.0, time_s=7.0)
+        want = (
+            2.0 * jnp.real(jnp.conj(field.e_nom) * de) + jnp.abs(de) ** 2
+        ) / field.normalization
+        assert jnp.allclose(got, want)
+
+    def test_is_complex_and_shaped_like_the_nominal_field(self):
+        """The increment lives in the focal plane beside e_nom."""
+        field = _field()
+        de = field.delta_e(wavelength_nm=500.0)
+        assert jnp.iscomplexobj(de)
+        assert de.shape == field.e_nom.shape
+
+    def test_is_not_normalized(self):
+        """The increment is in field units; realize applies the divisor."""
+        field = _field()
+        de = field.delta_e(wavelength_nm=500.0, time_s=3.0)
+        eps = field._eps(3.0)
+        assert jnp.allclose(de, jnp.tensordot(eps, field.G, axes=1))
+
+    def test_tracks_time(self):
+        """A different time gives a different increment."""
+        field = _field()
+        early = field.delta_e(wavelength_nm=500.0, time_s=0.0)
+        late = field.delta_e(wavelength_nm=500.0, time_s=250.0)
+        assert not jnp.allclose(early, late)
+
+    def test_chromatic_selects_the_nearest_channel(self):
+        """A chromatic field returns the requested channel's increment."""
+        chrom = _field().broadened(
+            reference_wavelength_nm=1000.0, wavelengths_nm=[500.0, 1000.0]
+        )
+        de = chrom.delta_e(wavelength_nm=1000.0, time_s=11.0)
+        eps = chrom._eps(11.0)
+        assert jnp.allclose(de, jnp.tensordot(eps, chrom.G[1], axes=1))
+        other = chrom.delta_e(wavelength_nm=500.0, time_s=11.0)
+        assert not jnp.allclose(de, other)
+
+    def test_jit_compatible(self):
+        """The accessor traces cleanly under jit."""
+        field = _field()
+        fn = jax.jit(lambda t: field.delta_e(wavelength_nm=500.0, time_s=t))
+        assert jnp.allclose(fn(5.0), field.delta_e(wavelength_nm=500.0, time_s=5.0))

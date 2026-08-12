@@ -258,12 +258,36 @@ class AnalyticSpeckleField(AbstractSpeckleField):
         phase = 2.0 * jnp.pi * self.frequencies_hz * t + self.phases
         return jnp.sum(self.amplitudes * jnp.cos(phase), axis=-1)
 
-    def realize(self, *, wavelength_nm, time_s=0.0):
-        """Per-pixel flux-fraction delta at ``time_s`` (see class docstring)."""
-        e_nom, g, normalization = _select_channel(
+    def delta_e(self, *, wavelength_nm, time_s=0.0):
+        """Complex field increment ``G eps(t)`` added to ``E_nom``.
+
+        The complex counterpart of :meth:`realize`, which squares this
+        increment into an intensity delta. Consumers that need the field in
+        the complex plane -- an impropriety ellipse, a draw cloud, a modal
+        decomposition -- take it from here rather than reaching for the
+        private ``_eps``.
+
+        Args:
+            wavelength_nm: Wavelength in nanometers (chromatic fields select
+                the nearest channel, as in :meth:`realize`).
+            time_s: Time since ``epoch_jd`` in seconds.
+
+        Returns:
+            Complex 2D array, shape ``(y, x)``, in the same field units as
+            ``e_nom``. It is NOT normalized: :meth:`realize` applies the
+            flux-fraction divisor after squaring.
+        """
+        _, g, _ = _select_channel(
             self.e_nom, self.G, self.normalization, self.wavelengths_nm, wavelength_nm
         )
-        g_eps = jnp.tensordot(self._eps(time_s), g, axes=1)
+        return jnp.tensordot(self._eps(time_s), g, axes=1)
+
+    def realize(self, *, wavelength_nm, time_s=0.0):
+        """Per-pixel flux-fraction delta at ``time_s`` (see class docstring)."""
+        e_nom, _, normalization = _select_channel(
+            self.e_nom, self.G, self.normalization, self.wavelengths_nm, wavelength_nm
+        )
+        g_eps = self.delta_e(wavelength_nm=wavelength_nm, time_s=time_s)
         if self.coherent:
             # The stable form of |E_nom + g_eps|^2 - |E_nom|^2: computing the
             # cross term directly avoids subtracting two floor-magnitude numbers
