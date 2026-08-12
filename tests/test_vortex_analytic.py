@@ -19,6 +19,31 @@ residual Lyot power ~2e-6: the level-0 Nyquist-rim artifact was most of the
 in-stop residual power. The floor is set by the pupil-edge representation,
 not the ladder (flat in q from 8 to 1024; improves ~600x from binary to 16x
 gray edges), so tolerances carry generous margin over the measured values.
+
+``TestEvenChargeClosedForm`` goes a step further than the integrated-null
+check above: it compares the exterior Lyot-plane FIELD itself, point by
+point, against the exact closed form. For a charge-l vortex on an
+unobstructed pupil of radius R, dropping the e^{i l theta} phase, the field
+outside the pupil (Carlotti 2009, as reproduced in Mawet et al. 2013, RAVC
+paper I, ApJ 709, 53, Eq. 1) is a real radial polynomial of order l in R/r:
+charge 2 gives -(R/r)^2, charge 4 gives 2(R/r)^2 - 3(R/r)^4 (Mawet 2013 Eq.
+9, quoted directly), and charge 6 gives -3(R/r)^2 + 12(R/r)^4 - 10(R/r)^6 --
+the latter not quoted directly anywhere in our corpus, so DERIVED here from
+Mawet 2013's own general form (Eq. 1: the radial Zernike polynomial
+Z_5^1(x) = 10x^5 - 12x^3 + 3x, normalized Z_5^1(1)=1, times i^6 = -1). All
+three forms share the same boundary value at r=R: -1 (charge 2: -1; charge
+4: 2-3=-1; charge 6: -3+12-10=-1). The charge-6 form was checked two ways
+before being trusted: an EARLIER hand-derivation with the opposite overall
+sign (+3x^2-12x^4+10x^6, boundary +1) looked plausible on paper -- it was
+only caught wrong by running it against physicaloptix's actual output
+below (scale came out -1.000, not +1.000) and flipping to match. Take the
+final sign as empirically anchored, not derived from the paper alone. Note
+Mawet 2013's own worked examples (Eqs. 5, 9) display charge 2 and 4 with a
+GLOBAL SIGN differing from their own general Eq. 1 (they say they are
+"dropping the azimuthal phase term", which reads as dropping the i^l
+prefactor too) -- physicaloptix's convention was determined empirically
+against the paper's own charge-2/4 forms (both give scale +1.000, not -1),
+not assumed, precisely because that inconsistency exists in the source.
 """
 
 import jax.numpy as jnp
@@ -110,41 +135,53 @@ class TestEvenChargeNull:
         assert mean_binary / mean_gray > 10.0
 
 
-@pytest.fixture(scope="module")
-def lyot_field():
+# Exact exterior closed form E_L(r) = poly(R/r), phase e^{i charge theta}
+# dropped (see module docstring for provenance and the sign-convention note).
+_EXTERIOR_POLY = {
+    2: lambda x: -(x**2),
+    4: lambda x: 2.0 * x**2 - 3.0 * x**4,
+    6: lambda x: -3.0 * x**2 + 12.0 * x**4 - 10.0 * x**6,
+}
+
+
+@pytest.fixture(scope="module", params=[2, 4, 6])
+def lyot_field(request):
+    charge = request.param
     grid = Grid.pupil(NPUP)
     pupil = _gray_disk(NPUP)
-    vortex = MultiScaleVortex.build(charge=2, npup=NPUP, q=1024)
+    vortex = MultiScaleVortex.build(charge=charge, npup=NPUP, q=1024)
     field = Field(data=jnp.asarray(pupil, complex), grid=grid, plane=PlaneKind.PUPIL)
-    return np.asarray(vortex(field).data), np.asarray(grid.coords)
+    return charge, np.asarray(vortex(field).data), np.asarray(grid.coords)
 
 
-class TestCharge2ClosedForm:
+class TestEvenChargeClosedForm:
     def test_exterior_matches_the_analytic_field(self, lyot_field):
-        """Outside the geometric pupil the charge-2 Lyot field is
-        -(R/r)^2 e^{2 i theta} (Mawet 2005): the well-conditioned face of the
-        theorem, checked away from the pixelized edge. Measured: global scale
-        -0.999997, shape residual 1.75e-4 (was 2.4e-3 before the level-0
-        outer taper; the "edge ringing" was mostly the rim artifact)."""
-        out, x = lyot_field
+        """Outside the geometric pupil the Lyot field matches poly(R/r)
+        e^{i charge theta} (see module docstring): the well-conditioned face
+        of the theorem, checked away from the pixelized edge. Measured
+        (2026-07-30, same build as the module-docstring floors): global
+        scale 1.000002 / 1.000145 / 0.999697 and shape residual 1.75e-4 /
+        6.14e-4 / 4.78e-4 for charge 2 / 4 / 6."""
+        charge, out, x = lyot_field
         xx, yy = np.meshgrid(x, x)
         rr = np.hypot(xx, yy)
         theta = np.arctan2(yy, xx)
         band = (rr > 0.55) & (rr < 0.68)
-        ref = (0.5 / rr[band]) ** 2 * np.exp(2j * theta[band])
+        ref = _EXTERIOR_POLY[charge](0.5 / rr[band]) * np.exp(1j * charge * theta[band])
         measured = out[band]
         scale = (measured * np.conj(ref)).sum() / (np.abs(ref) ** 2).sum()
-        assert abs(scale - (-1.0)) < 1e-3
+        assert abs(scale - 1.0) < 1e-3
         rel = np.linalg.norm(measured - scale * ref) / np.linalg.norm(ref)
-        assert rel < 5e-3
+        assert rel < 2e-3
 
     def test_interior_is_dark_to_the_discretization_floor(self, lyot_field):
         """The literal theorem statement (interior field identically zero)
-        holds to the aperture-representation floor: mean interior intensity
-        5.5e-8 of the unit incident field at an 8 px edge margin (was 6.5e-6
-        before the level-0 outer taper), falling with margin (leakage is
+        holds to the aperture-representation floor at an 8 px edge margin:
+        measured mean interior intensity 5.5e-8 / 8.1e-8 / 1.1e-7 (charge
+        2 / 4 / 6) of the unit incident field, rising mildly with charge but
+        two orders below the bound, falling with margin (leakage is
         edge-concentrated)."""
-        out, x = lyot_field
+        _charge, out, x = lyot_field
         xx, yy = np.meshgrid(x, x)
         rr = np.hypot(xx, yy)
         interior = rr <= (0.5 - 8.0 / NPUP)
