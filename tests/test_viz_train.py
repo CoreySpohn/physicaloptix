@@ -11,6 +11,10 @@ import numpy as np
 import pytest
 from matplotlib.colors import LogNorm
 
+# The base install is deliberately eyepiece-free, so this module is only
+# collectible when the viz extra is present.
+pytest.importorskip("eyepiece")
+
 from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
 from physicaloptix.elements import MultiScaleVortex, SampledOptic
 from physicaloptix.path import OpticalPath, Stage

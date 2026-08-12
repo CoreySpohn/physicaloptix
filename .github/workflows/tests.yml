@@ -26,8 +26,10 @@ jobs:
     - name: Create venv
       run: uv venv .venv --python ${{ matrix.python-version }}
 
+    # The viz extra is required: the viz test modules importorskip on eyepiece,
+    # so installing without it turns the whole viz suite into silent skips.
     - name: Install package with test dependencies
-      run: uv pip install -e ".[test]"
+      run: uv pip install -e ".[test,viz]"
       env:
         VIRTUAL_ENV: ${{ github.workspace }}/.venv
 
@@ -39,7 +41,7 @@ jobs:
         VIRTUAL_ENV: ${{ github.workspace }}/.venv
 
     - name: Diag imports
-      run: .venv/bin/python -c "import jax, physicaloptix; from optixstuff import AbstractSpeckleField; print('jax', jax.__version__)"
+      run: .venv/bin/python -c "import jax, physicaloptix, eyepiece; from optixstuff import AbstractSpeckleField; print('jax', jax.__version__, 'eyepiece', eyepiece.__version__)"
 
     - name: Run tests
       run: .venv/bin/pytest tests/ -v --tb=short

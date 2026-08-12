@@ -8,6 +8,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 
+# The base install is deliberately eyepiece-free, so this module is only
+# collectible when the viz extra is present.
+pytest.importorskip("eyepiece")
+
 from physicaloptix import Field, Grid, PlaneKind, Spectrum
 from physicaloptix.viz import plot_field
 
