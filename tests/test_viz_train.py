@@ -17,7 +17,7 @@ from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.system import BeamSplitter, Branch, OpticalSystem
 from physicaloptix.transforms import Fraunhofer
 from physicaloptix.viz import native_dpi, plot_path
-from physicaloptix.viz.train import _GLYPH_FOR_KIND, _infer_kind
+from physicaloptix.viz.train import _GLYPH_FOR_KIND, _infer_kind, _minimap_accent
 
 
 def _setup():
@@ -395,4 +395,23 @@ def test_minimap_mutes_non_active_planes():
     assert res.artists["text"][cam_idx].get_alpha() in (None, 1.0)
     assert res.artists["text"][input_idx].get_alpha() < 1.0
     assert res.artists["lines"][input_idx].get_alpha() < 1.0
+    plt.close(res.fig)
+
+
+def test_minimap_accents_the_active_plane():
+    # The mute loop above only proves alpha behavior, which is minimap's OWN
+    # logic and would pass even if `active=` never reached eyepiece.rail's
+    # highlight= at all. This pins the actual accent color -- the active
+    # plane's marker and label must be drawn in it, and a non-active plane's
+    # must not.
+    from physicaloptix.viz import minimap
+
+    path, _ = _setup()
+    res = minimap(path, active="cam")
+    input_idx, cam_idx = 0, 1
+    accent = _minimap_accent()
+    assert res.artists["lines"][cam_idx].get_color() == accent
+    assert res.artists["text"][cam_idx].get_color() == accent
+    assert res.artists["lines"][input_idx].get_color() != accent
+    assert res.artists["text"][input_idx].get_color() != accent
     plt.close(res.fig)
