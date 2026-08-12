@@ -5,6 +5,8 @@ propagation directly: a schematic rail of element glyphs on top and, aligned
 under each element, the intensity (and optionally phase) of the field just
 after it, in plane-native extents. Requires matplotlib (a plotting extra,
 not a core dependency).
+
+Deprecated module: use plot_path. Kept frozen; matplotlib stays lazy in-body.
 """
 
 import numpy as np

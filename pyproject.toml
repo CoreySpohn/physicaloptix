@@ -38,8 +38,11 @@ docs = [
     "sphinxcontrib-mermaid",
     "ipython",
     "matplotlib",
+    "eyepiece",
+    "imageio-ffmpeg",
 ]
 test = ["matplotlib", "nox", "pytest", "hypothesis", "pytest-cov", "scipy"]
+viz = ["eyepiece"]
 
 [project.urls]
 Homepage = "https://github.com/CoreySpohn/physicaloptix"
