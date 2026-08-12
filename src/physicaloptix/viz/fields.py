@@ -111,6 +111,26 @@ def _panel_array(data, kind):
     return _masked_phase(data) if kind == "phase" else _intensity_from(data)
 
 
+def _panel_update_input(new_data, kind):
+    """The exact representation each panel's own ``result.update(...)`` wants.
+
+    The two panel primitives disagree about this, and that disagreement
+    is exactly the bug this function exists to make impossible to
+    reintroduce: ``eyepiece.imshow_log``'s own ``update`` (kind=
+    "intensity") wants the ALREADY-COMPUTED intensity array -- the same
+    thing ``_panel_array`` returns. Our own ``_plot_phase``'s ``update``
+    (kind="phase") wants RAW data -- it reapplies ``_masked_phase``
+    itself. Feeding it an already-masked array (i.e. calling
+    ``_panel_array`` first, as the intensity path correctly does) masks
+    it a SECOND time: the once-masked array is real-valued, so
+    ``_intensity_from`` passes it through unsquared, ``np.angle`` of a
+    real number is 0 or pi, and the peak-relative threshold silently
+    discards most of the image. Always route through this function
+    before calling ``result.update``; never call ``_panel_array`` first.
+    """
+    return new_data if kind == "phase" else _intensity_from(new_data)
+
+
 def _resolved_phase_cmap(cmap, ax):
     """A phase Colormap for `ax`, masked (NaN) pixels painted its facecolor.
 
@@ -298,9 +318,21 @@ def _draw_cut_curve(cut_ax, coords, profile, cut, floor, semilog):
 
 
 def _owned_cut_figsize(cut):
-    """Figure size reserving canvas room for the cut panel in its direction."""
+    """Figure size reserving canvas room for the cut panel in its direction.
+
+    ``constrained`` layout excludes insets from its margin solve, so the
+    multiplier has to clear the panel's own reach plus its rect origin by
+    hand, not just "give it 1.5x room". Measured empirically (canvas
+    pixels, panel right edge vs. figure right edge, including the image's
+    own colorbar inset): a 1.5x width for ``cut="y"``'s
+    ``_CUT_RECT_RIGHT`` (origin 1.15, width 0.35 -> reaches 1.50) clips
+    the panel's right spine by ~16 px; 1.7x clears it with margin
+    (~-4 px, i.e. no overflow). ``cut="x"``'s below-image panel has no
+    such reach past the image's own right edge, so 1.5x height stays
+    correct.
+    """
     width = plt.rcParams["figure.figsize"][0]
-    return (width, width * 1.5) if cut == "x" else (width * 1.5, width)
+    return (width, width * 1.5) if cut == "x" else (width * 1.7, width)
 
 
 def _owned_cut_axes(image_ax, cut):
@@ -338,7 +370,10 @@ def _make_cut_update(result, cut, extent, floor, semilog, mark_line, line, kind)
     Args:
         result: The image panel's own ``PlotResult`` (its ``.update`` does
             the panel-specific redraw: floor-reclip for intensity,
-            re-mask for phase).
+            re-mask for phase). Fed through ``_panel_update_input``, NOT
+            ``_panel_array`` directly -- the two panel primitives expect
+            different representations and conflating them silently
+            corrupts the phase image (see ``_panel_update_input``).
         cut: "x" or "y".
         extent: The image's extent, for re-deriving coordinates.
         floor: Log-floor clip, reapplied to the cut curve when ``semilog``.
@@ -356,8 +391,8 @@ def _make_cut_update(result, cut, extent, floor, semilog, mark_line, line, kind)
     """
 
     def update(new_data):
+        result.update(_panel_update_input(new_data, kind))
         new_image_data = _panel_array(new_data, kind)
-        result.update(new_image_data)
         coords, profile, mark = _cut_profile(np.asarray(new_image_data), cut, extent)
         value = np.clip(profile, floor, None) if semilog else profile
         if cut == "x":
@@ -468,10 +503,17 @@ def plot_field(
     (shares y; the panel is transposed -- coordinate on its own y axis --
     since a "y" cut's coordinate is not the same physical axis as the
     image's x). To place the two panels yourself, reserve them and pass
-    ``axes=(image_ax, cut_ax)``::
+    ``axes=(image_ax, cut_ax)`` -- below the image for ``cut="x"``::
 
         fig, (image_ax, cut_ax) = plt.subplots(2, 1, figsize=(4, 6))
         plot_field(field, axes=(image_ax, cut_ax), cut="x")
+
+    or beside it for ``cut="y"`` (a caller who copies the ``cut="x"``
+    recipe unchanged gets a transposed curve squeezed into a below-image
+    panel)::
+
+        fig, (image_ax, cut_ax) = plt.subplots(1, 2, figsize=(7, 4))
+        plot_field(field, axes=(image_ax, cut_ax), cut="y")
 
     ``plot_field`` never carves the cut axes out of a single caller-owned
     ``ax``: pass ``ax=`` and ``cut=`` together and it raises, naming
@@ -516,8 +558,13 @@ def plot_field(
         A ``PlotResult`` for ``kind="intensity"``/``"phase"`` without
         ``cut``. A ``MosaicResult`` with flat ``axes`` ``[image, cut]``
         (image first) when ``cut`` is given, whose ``.update(new_data)``
-        refreshes the image, the cut-mark, and the cut curve together. A
-        ``MosaicResult`` with ``(2, 2)`` axes for ``kind="complex"``.
+        refreshes the image, the cut-mark, and the cut curve together;
+        ``artists["line"]`` is the cut curve -- coordinate on x, value on
+        y for ``cut="x"``, but TRANSPOSED for ``cut="y"`` (value on x,
+        coordinate on y, matching the panel's own transposed orientation;
+        see the ``axes=`` recipes above), which is not guessable from the
+        return type alone. A ``MosaicResult`` with ``(2, 2)`` axes for
+        ``kind="complex"``.
 
     Raises:
         ValueError: An unknown ``kind`` or ``cut``; ``cut`` given with

@@ -228,6 +228,34 @@ def test_cut_update_refreshes_image_mark_and_curve():
     plt.close(res.fig)
 
 
+def test_cut_update_phase_kind_does_not_double_mask():
+    # Regression for the N1 bug: _plot_phase's own update wants RAW data
+    # (it reapplies _masked_phase itself), while imshow_log's update wants
+    # the already-computed intensity array. Passing the already-masked
+    # phase array into _plot_phase's update masks it a SECOND time: real
+    # input skips the squaring in _intensity_from, np.angle() of a real
+    # number collapses to 0 or pi, and the peak-relative threshold then
+    # discards most of the image.
+    field = _mono()
+    res = plot_field(field, kind="phase", cut="x")
+    before = np.ma.filled(np.asarray(res.artists["image"].get_array()), np.nan)
+    before_finite = np.isfinite(before)
+    assert before_finite.sum() > 0
+
+    # A positive real rescale changes neither the phase nor which pixels
+    # clear the intensity-mask threshold, so the finite footprint and
+    # value spread must be unchanged after a correct update.
+    new_data = field.data * 3.0
+    res.update(new_data)
+
+    after = np.ma.filled(np.asarray(res.artists["image"].get_array()), np.nan)
+    after_finite = np.isfinite(after)
+    assert after_finite.sum() == before_finite.sum()
+    assert after[after_finite].min() < -0.5
+    assert after[after_finite].max() > 0.5
+    plt.close(res.fig)
+
+
 # --- Critical-bug regression: rectangular array, asymmetric extent -------
 #
 # Every other fixture in this file is a square array on a symmetric
@@ -263,7 +291,7 @@ def test_cut_y_direction_on_rectangular_asymmetric_extent():
     image_ax = res.axes[0]
     (mark_line,) = [a for a in image_ax.get_lines() if a.get_linestyle() == "--"]
     mark_x = mark_line.get_xdata()[0]
-    assert -4.0 <= mark_x <= 4.0
+    assert mark_x == pytest.approx(0.25)  # reviewer's reference value
     plt.close(res.fig)
 
 
