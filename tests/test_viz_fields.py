@@ -21,22 +21,21 @@ def _mono(npix=16):
     return Field(data=data, grid=grid, plane=PlaneKind.FOCAL)
 
 
-def _chromatic(npix=16, nlam=3):
+def _chromatic(npix=16, nlam=3, weights=None):
     grid = Grid(npix=npix, dx=2.0 / npix)
     rng = np.random.default_rng(1)
     data = jnp.asarray(
         rng.normal(size=(nlam, npix, npix)) + 1j * rng.normal(size=(nlam, npix, npix))
     )
-    spec = Spectrum(
-        wavelengths_nm=jnp.linspace(500.0, 600.0, nlam),
-        weights=jnp.full((nlam,), 1.0 / nlam),
-    )
+    w = jnp.full((nlam,), 1.0 / nlam) if weights is None else jnp.asarray(weights)
+    spec = Spectrum(wavelengths_nm=jnp.linspace(500.0, 600.0, nlam), weights=w)
     return Field(data=data, grid=grid, plane=PlaneKind.FOCAL, spectrum=spec)
 
 
 def test_intensity_from_mono_field_labels_and_extent():
-    res = plot_field(_mono())
-    e = _mono().grid.extent
+    field = _mono()
+    res = plot_field(field)
+    e = field.grid.extent
     assert tuple(res.artists["image"].get_extent()) == (-e, e, -e, e)
     assert "lambda" in res.ax.get_xlabel() or r"\lambda" in res.ax.get_xlabel()
     plt.close(res.fig)
@@ -54,6 +53,17 @@ def test_chromatic_intensity_sums_and_channel_selects():
     plt.close(single.fig)
 
 
+def test_chromatic_intensity_pins_to_field_own_weighted_sum():
+    # Non-uniform weights: a weighted sum and a plain mean would diverge
+    # here, unlike the uniform-1/nlam fixture above, so this actually pins
+    # plot_field to Field.intensity() rather than any average.
+    f = _chromatic(weights=[0.1, 0.3, 0.6])
+    res = plot_field(f)
+    expected = np.clip(np.asarray(f.intensity()), 1e-20, None)
+    assert np.allclose(res.artists["image"].get_array(), expected)
+    plt.close(res.fig)
+
+
 def test_chromatic_complex_requires_channel():
     with pytest.raises(ValueError, match="channel"):
         plot_field(_chromatic(), kind="complex")
@@ -65,6 +75,35 @@ def test_complex_delegates_to_2x2():
     plt.close(res.fig)
 
 
+def test_complex_with_ax_raises():
+    fig, ax = plt.subplots()
+    with pytest.raises(ValueError, match="axes="):
+        plot_field(_mono(), kind="complex", ax=ax)
+    plt.close(fig)
+
+
+def test_complex_axes_shape_mismatch_raises_naming_expected_and_received():
+    fig, axes = plt.subplots(2, 3)
+    with pytest.raises(ValueError, match=r"expected axes shape \(2, 2\), got \(2, 3\)"):
+        plot_field(_mono(), kind="complex", axes=axes)
+    plt.close(fig)
+
+
+def test_complex_axes_passthrough_draws_into_callers_figure():
+    fig, axes = plt.subplots(2, 2)
+    res = plot_field(_mono(), kind="complex", axes=axes)
+    assert res.fig is fig
+    assert res.axes is axes or np.array_equal(res.axes, axes)
+    plt.close(fig)
+
+
+def test_complex_fig_passthrough():
+    fig = plt.figure()
+    res = plot_field(_mono(), kind="complex", fig=fig)
+    assert res.fig is fig
+    plt.close(fig)
+
+
 def test_cut_returns_image_and_cut_pair():
     res = plot_field(_mono(), cut="x")
     assert len(res.axes) == 2  # flat [image, cut]
@@ -72,9 +111,45 @@ def test_cut_returns_image_and_cut_pair():
     plt.close(res.fig)
 
 
+def test_cut_axes_order_is_image_then_cut():
+    res = plot_field(_mono(), cut="x")
+    assert len(res.axes[0].images) > 0
+    assert len(res.axes[1].lines) > 0
+    plt.close(res.fig)
+
+
 def test_cut_invalid_for_complex():
     with pytest.raises(ValueError, match="cut"):
         plot_field(_mono(), kind="complex", cut="x")
+
+
+def test_cut_with_ax_raises_and_points_to_axes():
+    fig, ax = plt.subplots()
+    with pytest.raises(ValueError, match="axes="):
+        plot_field(_mono(), cut="x", ax=ax)
+    plt.close(fig)
+
+
+def test_cut_caller_axes_path_uses_exact_axes_no_inset():
+    fig, (image_ax, cut_ax) = plt.subplots(2, 1)
+    res = plot_field(_mono(), cut="x", axes=(image_ax, cut_ax))
+    assert res.axes[0] is image_ax
+    assert res.axes[1] is cut_ax
+    assert res.fig is fig
+    # cut_ax carries the profile curve directly -- no inset carved inside it
+    # (only image_ax's own in-slot colorbar inset exists, which imshow_log
+    # always draws regardless of cut=)
+    assert len(cut_ax.child_axes) == 0
+    assert len(image_ax.child_axes) == 1  # the colorbar inset, not a cut inset
+    assert cut_ax.get_xlim() == image_ax.get_xlim()
+    plt.close(fig)
+
+
+def test_cut_caller_axes_wrong_length_raises():
+    fig, axes = plt.subplots(1, 3)
+    with pytest.raises(ValueError, match="expected 2 axes"):
+        plot_field(_mono(), cut="x", axes=axes)
+    plt.close(fig)
 
 
 def test_bare_array_needs_no_field():
@@ -86,12 +161,119 @@ def test_bare_array_needs_no_field():
 
 def test_phase_masks_below_floor_and_labels_focal():
     field = _mono()
-    dark_data = field.data.at[:2, :2].set(0.0 + 0.0j)  # exactly zero: below any floor
+    amp = np.abs(np.asarray(field.data))
+    peak_amp = float(amp.max())
+    # A pixel at 1e-6 of peak AMPLITUDE has intensity ~1e-12 of peak
+    # intensity -- well below the 1e-10-of-peak-INTENSITY mask threshold,
+    # so this distinguishes an intensity threshold from an (incorrect)
+    # amplitude one; an exact zero cannot.
+    dim_value = (1e-6 * peak_amp) + 0.0j
+    dark_data = field.data.at[0, 0].set(dim_value)
     field = Field(data=dark_data, grid=field.grid, plane=field.plane)
     res = plot_field(field, kind="phase")
     assert "lambda" in res.ax.get_xlabel() or r"\lambda" in res.ax.get_xlabel()
     phase = res.artists["image"].get_array()
     assert np.ma.is_masked(phase[0, 0]) or np.isnan(phase[0, 0])
+    plt.close(res.fig)
+
+
+def test_pupil_plane_gets_distinct_x_y_labels():
+    grid = Grid(npix=8, dx=1.0 / 8)
+    data = jnp.ones((8, 8), dtype=complex)
+    field = Field(data=data, grid=grid, plane=PlaneKind.PUPIL)
+    res = plot_field(field)
+    assert res.ax.get_xlabel() != res.ax.get_ylabel()
+    assert "[D]" in res.ax.get_xlabel()
+    assert "[D]" in res.ax.get_ylabel()
+    plt.close(res.fig)
+
+
+def test_label_plane_delegates_to_eyepiece_label_lod(monkeypatch):
+    import eyepiece as ep
+
+    calls = []
+    monkeypatch.setattr(ep, "label_lod", lambda ax: calls.append(ax))
+    res = plot_field(_mono())
+    assert len(calls) == 1
+    assert calls[0] is res.ax
+    plt.close(res.fig)
+
+
+def test_unknown_kind_validated_before_any_figure_is_created():
+    plt.close("all")
+    before = len(plt.get_fignums())
+    with pytest.raises(ValueError, match="kind"):
+        plot_field(np.zeros((8, 8)), kind="bogus", cut="x")
+    assert len(plt.get_fignums()) == before
+
+
+def test_unknown_kind_on_chromatic_field_names_kind_not_channel():
+    with pytest.raises(ValueError, match="kind"):
+        plot_field(_chromatic(), kind="bogus")
+
+
+def test_cut_update_refreshes_image_mark_and_curve():
+    field = _mono()
+    res = plot_field(field, cut="x")
+    line = res.artists["line"]
+    old_ydata = np.array(line.get_ydata(), copy=True)
+
+    new_data = field.data * 3.0
+    res.update(new_data)
+
+    new_ydata = np.array(line.get_ydata())
+    assert not np.allclose(old_ydata, new_ydata)
+    expected_image = np.clip(np.abs(np.asarray(new_data)) ** 2, 1e-20, None)
+    assert np.allclose(res.artists["image"].get_array(), expected_image)
+    plt.close(res.fig)
+
+
+# --- Critical-bug regression: rectangular array, asymmetric extent -------
+#
+# Every other fixture in this file is a square array on a symmetric
+# extent, which cannot distinguish a correct per-direction coordinate
+# derivation from one that always reads extent[0:2] (the x range) no
+# matter the cut direction -- the bug the reviewer found.
+
+
+def test_cut_x_direction_on_rectangular_asymmetric_extent():
+    img = np.zeros((16, 16))
+    res = plot_field(img, extent=(-4, 4, -1, 1), cut="x")
+    line = res.artists["line"]
+    xdata = np.asarray(line.get_xdata())
+    assert xdata.min() >= -4.0
+    assert xdata.max() <= 4.0
+    assert xdata.min() < -1.0  # would fail if the abscissa were clamped to y
+
+    image_ax = res.axes[0]
+    (mark_line,) = [a for a in image_ax.get_lines() if a.get_linestyle() == "--"]
+    mark_y = mark_line.get_ydata()[0]
+    assert mark_y == pytest.approx(0.0625)  # reviewer's reference value
+    plt.close(res.fig)
+
+
+def test_cut_y_direction_on_rectangular_asymmetric_extent():
+    img = np.zeros((16, 16))
+    res = plot_field(img, extent=(-4, 4, -1, 1), cut="y")
+    line = res.artists["line"]
+    coord_data = np.asarray(line.get_ydata())  # transposed: coordinate on y
+    assert coord_data.min() >= -1.0
+    assert coord_data.max() <= 1.0
+
+    image_ax = res.axes[0]
+    (mark_line,) = [a for a in image_ax.get_lines() if a.get_linestyle() == "--"]
+    mark_x = mark_line.get_xdata()[0]
+    assert -4.0 <= mark_x <= 4.0
+    plt.close(res.fig)
+
+
+def test_cut_x_mark_stays_within_axes_on_nonsquare_array():
+    img = np.zeros((8, 16))  # 8 rows (y), 16 cols (x)
+    res = plot_field(img, extent=(-4, 4, -1, 1), cut="x")
+    image_ax = res.axes[0]
+    (mark_line,) = [a for a in image_ax.get_lines() if a.get_linestyle() == "--"]
+    mark_y = mark_line.get_ydata()[0]
+    assert -1.0 <= mark_y <= 1.0  # was -1.75 (outside the axes) before the fix
     plt.close(res.fig)
 
 
@@ -121,9 +303,8 @@ def test_contrast_row_telescope_peak_scales():
 
     m = np.full((4, 4), 2.0)
     res = contrast_row([m], telescope_peak=4.0)
-    assert float(
-        np.asarray(res.artists["image"][0].get_array()).max()
-    ) == pytest.approx(0.5)
+    array = np.asarray(res.artists["image"][0].get_array())
+    assert float(array.max()) == pytest.approx(0.5)
     plt.close(res.fig)
 
 
