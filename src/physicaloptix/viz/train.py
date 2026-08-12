@@ -12,6 +12,7 @@ panel's pixels 1:1 at a given inch height) that used to be copy-pasted in an
 analysis script.
 """
 
+import hwostyle
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure, SubFigure
@@ -42,6 +43,8 @@ _LOG_FLOOR_RATIO = 1e-8
 _PHASE_FLOOR = 1e-20  # unused by the phase branch of _draw_panel; kept explicit
 _FIG_WIDTH_PER_PANEL_IN = 2.2  # matches the legacy render_path default (2.2 * n)
 _RAIL_HEIGHT_RATIO = 0.6
+_MINIMAP_CHIP_ALPHA = 0.55  # translucent watermark chip behind the rail
+_MINIMAP_MUTE_ALPHA = 0.35  # extra fade on every plane but the active one
 
 
 def _infer_kind(op, name):
@@ -63,6 +66,33 @@ def _infer_kind(op, name):
             return "apodizer"
         return "pupil_mask"
     return "pupil_mask"
+
+
+def _planes_for_stages(name_kind_pairs):
+    """``(name, glyph)`` rail entries from ``(name, kind)`` pairs.
+
+    The one place the legacy-kind -> eyepiece-glyph mapping
+    (``_GLYPH_FOR_KIND``) is applied, shared by ``plot_path``'s
+    ``_draw_rail`` and ``minimap`` so the two never build a second,
+    divergent path from stages to rail entries.
+    """
+    return [(name, _GLYPH_FOR_KIND[kind]) for name, kind in name_kind_pairs]
+
+
+def _stage_kinds(path, kinds=None):
+    """``(name, kind)`` pairs for every stage of ``path``, input first.
+
+    The same traversal ``_collect_path_stages`` uses to build the
+    ``(name, kind, Field)`` rows ``plot_path`` taps into, minus the field
+    propagation -- ``minimap`` only needs labels and glyphs for the rail,
+    never a field to draw a panel from.
+    """
+    overrides = kinds or {}
+    pairs = [("input", "source")]
+    for stage in path.stages:
+        kind = overrides.get(stage.name, _infer_kind(stage.op, stage.name))
+        pairs.append((stage.name, kind))
+    return pairs
 
 
 def native_dpi(n_pix, panel_height_in=1.6):
@@ -135,7 +165,7 @@ def _draw_rail(ep, target, gs, stages, rail_kw, highlight):
     rail_kwargs["positions"] = positions
     if highlight is not None:
         rail_kwargs.setdefault("highlight", highlight)
-    planes = [(name, _GLYPH_FOR_KIND[kind]) for name, kind, _ in stages]
+    planes = _planes_for_stages([(name, kind) for name, kind, _ in stages])
     rail_result = ep.rail(planes, ax=rail_ax, **rail_kwargs)
     for x, (_, _, item) in zip(positions, stages, strict=True):
         rail_ax.text(
@@ -477,3 +507,72 @@ def plot_path(
         imshow_kw=imshow_kw,
         panel_height_in=panel_height_in,
     )
+
+
+def _minimap_accent():
+    """The color ``minimap`` highlights ``active`` in, resolved fresh.
+
+    Mirrors ``fields._ring_color``: ``hwostyle.palette`` carries only
+    per-family named hues -- no registered family (cyberpunk, spectral,
+    biosignature, tol, barbie) defines a universal "primary" swatch every
+    other family also has. A fixed attribute name is therefore not safe:
+    ``hwostyle.use("paper")`` (the ordinary way this repo makes
+    publication figures) defaults to the "tol" family, and "tol" has no
+    "cyan" key, so a bare ``hwostyle.palette.cyan`` raises ``AttributeError``
+    there. Falling back to the family's own first color
+    (``Palette.as_list``, guaranteed non-empty by every registry entry)
+    keeps this resolved fresh on every call -- never bound at import --
+    instead of crashing under a non-default family.
+    """
+    return getattr(hwostyle.palette, "cyan", hwostyle.palette.as_list[0])
+
+
+def minimap(path, *, ax=None, active=None):
+    """A greyed "you are here" rail over ``path``'s planes.
+
+    Draws the same ``(name, glyph)`` planes ``plot_path``'s rail draws --
+    the input first, then every stage of ``path`` in order -- with
+    ``active`` picked out in the accent color by ``eyepiece.rail`` and
+    every other plane's marker and label further muted, plus a translucent
+    chip behind the whole rail. The result reads as a small "you are here"
+    orientation strip, not a standalone figure.
+
+    This function never carves an inset out of a host axes -- the caller
+    reserves the slot. Two ways to do that: give the block its own small
+    gridspec cell sized for a rail (``fig.add_gridspec(...)[row, -1]``,
+    ``height_ratios``/``width_ratios`` pinning it thin), or carve the inset
+    yourself over a quiet margin of an existing axes (e.g.
+    ``host_ax.inset_axes([...])``) and pass the result in as ``ax=``.
+
+    Args:
+        path: An ``OpticalPath``; its stages become rail planes in order.
+        ax: Axes to draw into. None creates and owns a new Figure.
+        active: The "you are here" stage name (or ``"input"``), matched
+            case-insensitively against the plane labels. None leaves every
+            plane in the muted color.
+
+    Returns:
+        A ``PlotResult`` with the same ``artists`` keys as
+        ``eyepiece.rail`` ("fill", "lines", "text").
+
+    Raises:
+        ValueError: ``active`` is not one of the plane names.
+    """
+    ep = _require.eyepiece()
+    planes = _planes_for_stages(_stage_kinds(path))
+
+    result = ep.rail(planes, ax=ax, highlight=active, accent=_minimap_accent())
+
+    active_key = active.lower() if active is not None else None
+    for (name, _), line, text in zip(
+        planes, result.artists["lines"], result.artists["text"], strict=True
+    ):
+        if active_key is not None and name.lower() == active_key:
+            continue
+        line.set_alpha(_MINIMAP_MUTE_ALPHA)
+        text.set_alpha(_MINIMAP_MUTE_ALPHA)
+
+    result.ax.patch.set_alpha(_MINIMAP_CHIP_ALPHA)
+    result.ax.axis("off")
+
+    return result

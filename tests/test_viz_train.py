@@ -130,3 +130,47 @@ def test_plot_path_panel_norms_override_floor():
 
 def test_native_dpi():
     assert native_dpi(2048, panel_height_in=1.6) == int(np.ceil(2048 / 1.6))
+
+
+def test_minimap_draws_into_reserved_ax_and_greys():
+    from physicaloptix.viz import minimap
+
+    path, _ = _setup()
+    fig, (_main, slot) = plt.subplots(1, 2, width_ratios=[4, 1])
+    res = minimap(path, ax=slot, active="cam")
+    assert res.ax is slot
+    assert not slot.axison  # axis off, watermark styling
+    plt.close(fig)
+
+
+def test_minimap_owned_figure():
+    from physicaloptix.viz import minimap
+
+    path, _ = _setup()
+    res = minimap(path)
+    assert res.fig is not None
+    plt.close(res.fig)
+
+
+def test_minimap_no_inset_on_caller_ax():
+    """minimap must never carve an inset out of a caller-supplied ax -- the
+    caller reserves the slot; a sibling function shipped this exact defect."""
+    from physicaloptix.viz import minimap
+
+    path, _ = _setup()
+    fig, ax = plt.subplots()
+    minimap(path, ax=ax)
+    assert ax.child_axes == []
+    plt.close(fig)
+
+
+def test_minimap_mutes_non_active_planes():
+    from physicaloptix.viz import minimap
+
+    path, _ = _setup()
+    res = minimap(path, active="cam")
+    input_idx, cam_idx = 0, 1
+    assert res.artists["text"][cam_idx].get_alpha() in (None, 1.0)
+    assert res.artists["text"][input_idx].get_alpha() < 1.0
+    assert res.artists["lines"][input_idx].get_alpha() < 1.0
+    plt.close(res.fig)
