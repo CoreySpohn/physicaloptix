@@ -42,7 +42,7 @@ docs = [
     "imageio-ffmpeg",
 ]
 test = ["matplotlib", "nox", "pytest", "hypothesis", "pytest-cov", "scipy"]
-viz = ["eyepiece"]
+viz = ["eyepiece>=0.1.0"]
 
 [project.urls]
 Homepage = "https://github.com/CoreySpohn/physicaloptix"

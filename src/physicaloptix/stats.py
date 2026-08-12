@@ -274,11 +274,12 @@ def pixel_sf(thresholds, i_c, gamma, p_kernel, phi_c, norm, chunk=4096, gl_nodes
     :func:`_ndtr`, which raises ``RuntimeError`` otherwise).
 
     Returns an (npix, nthresh) array. The rotated frame diagonalizes the
-    quadrature covariance: sigma1^2 = (Gamma + |P|)/2 along P's principal
-    axis, sigma2^2 = (Gamma - |P|)/2 across it, static offset (mu1, mu2).
-    The survival probability is the |W1| > sqrt(x) Gaussian mass plus the
-    inside-strip integral of the W2 tail masses -- every term positive, so
-    the deep tail keeps relative accuracy (a 1 - cdf form would not).
+    quadrature covariance: ``sigma1^2 = (Gamma + |P|)/2`` along P's
+    principal axis, ``sigma2^2 = (Gamma - |P|)/2`` across it, static
+    offset (mu1, mu2). The survival probability is the
+    ``|W1| > sqrt(x)`` Gaussian mass plus the inside-strip integral of
+    the W2 tail masses -- every term positive, so the deep tail keeps
+    relative accuracy (a 1 - cdf form would not).
 
     ``i_c``, ``gamma``, ``p_kernel``, ``phi_c`` are VECTOR per-pixel
     parameters, shape ``(npix,)``; ``thresholds`` and the returned delta
