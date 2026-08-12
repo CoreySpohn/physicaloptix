@@ -295,7 +295,10 @@ def pixel_sf(thresholds, i_c, gamma, p_kernel, phi_c, norm, chunk=4096, gl_nodes
         norm: Flux-fraction divisor relating a contrast delta to total
             intensity, ``I = i_c + thresholds * norm``.
         chunk: Number of pixels processed per pass, bounding peak memory to
-            ``chunk * thresholds.shape[0]`` elements per intermediate array.
+            ``chunk * thresholds.shape[0] * gl_nodes`` elements per
+            intermediate array -- the ``u``, ``half``, ``tails``, and
+            ``dens`` buffers inside the loop each carry the Gauss-Legendre
+            axis alongside the pixel and threshold axes.
         gl_nodes: Number of Gauss-Legendre nodes for the inside-strip
             integral; controls the accuracy of the W2 tail-mass term.
 
