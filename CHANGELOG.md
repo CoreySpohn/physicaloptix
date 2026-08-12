@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.2.0](https://github.com/CoreySpohn/physicaloptix/compare/v1.1.0...v1.2.0) (2026-08-12)
+
+
+### Features
+
+* **diagnostics:** quadrature audit for the paired-quadrature eta bound ([ecc3b13](https://github.com/CoreySpohn/physicaloptix/commit/ecc3b131a43b765456f0f1e87a65d2a4f3ac7f44))
+* **speckle:** Photometry audit of the normalization primitives and derived divisor ([542637b](https://github.com/CoreySpohn/physicaloptix/commit/542637bfcbdebdffe0d2238997aed78cc4c8c4fb))
+* **speckle:** public delta_e complex-increment accessor ([8c69f97](https://github.com/CoreySpohn/physicaloptix/commit/8c69f97bd96e74f92a103404fb12f52ec982ea8a))
+
 ## [1.1.0](https://github.com/CoreySpohn/physicaloptix/compare/v1.0.1...v1.1.0) (2026-08-12)
 
 
