@@ -91,14 +91,14 @@ class TestRenderPath:
         assert fig is not None
         matplotlib.pyplot.close(fig)
 
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="render_path drops the chromatic axis by design (frozen); "
-    "chromatic Fields are supported only by plot_path (R2)",
-)
-def test_render_path_rejects_chromatic_field(small_path, chromatic_field):
-    # _panel passes field.data straight through with no wavelength
-    # reduction, so the (nlam, y, x) chromatic data reaches imshow, which
-    # rejects the extra axis.
-    render_path(small_path, chromatic_field)
+    @pytest.mark.xfail(
+        strict=True,
+        reason="render_path drops the chromatic axis by design (frozen); "
+        "it reduces each tap to a single 2D panel and does not accept a "
+        "chromatic (nlam, y, x) Field",
+    )
+    def test_render_path_rejects_chromatic_field(self, small_path, chromatic_field):
+        # _panel passes field.data straight through with no wavelength
+        # reduction, so the (nlam, y, x) chromatic data reaches imshow, which
+        # rejects the extra axis.
+        render_path(small_path, chromatic_field)

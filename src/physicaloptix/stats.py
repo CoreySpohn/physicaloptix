@@ -7,19 +7,31 @@ and the pointwise intensity follows the modified Rician distribution with
 mean ``Ic + Is``. Everything here is a plain function of arrays, usable on
 live propagations and frozen exports alike.
 
-The ``pixel_*`` and ``genchi2_*`` laws below are HOST-SIDE numpy float64
-overlay and validation code, deliberately not jit-safe: they parameterize
-the per-pixel intensity law in DELTA-REFERENCED form -- ``x`` is the
-flux-fraction contrast delta, total intensity ``I = i_c + x * norm`` --
-with ``(i_c, gamma, p, phi_c, norm)`` = (coherent intensity, halo Gamma,
-pseudo-covariance P, coherent phase, flux-fraction divisor). The modified
+The ``pixel_*`` and ``genchi2_*`` laws below are all HOST-SIDE numpy
+float64 overlay and validation code, deliberately not jit-safe, but they
+cover two different contracts.
+
+The ``genchi2_*`` family (``genchi2_pdf``, ``genchi2_sf``,
+``genchi2_cumulants``) is the generic law of a quadratic form in
+independent standard normals, ``Q = sum_i lam_i z_i^2 + beta_i z_i``,
+parameterized by the per-mode eigenvalues ``lam`` and linear coefficients
+``beta``. Its ``x`` is a raw value of ``Q``, not a pixel quantity.
+
+The ``pixel_*`` family (``pixel_pdf``, ``pixel_sf``) is the per-pixel
+intensity law in DELTA-REFERENCED form -- ``x`` is the flux-fraction
+contrast delta, total intensity ``I = i_c + x * norm`` -- with
+``(i_c, gamma, p_kernel/p_p, phi_c, norm)`` = (coherent intensity, halo
+Gamma, pseudo-covariance P, coherent phase, flux-fraction divisor); see
+each function's docstring for its exact parameter names. The modified
 Rician above is the ``p -> 0`` special case in raw-intensity form.
 """
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 from hwoutils.radial import radial_distance
 from jax.scipy.special import i0e
+from jax.scipy.special import ndtr as _jndtr
 
 
 def dark_zone_mask(grid, *, iwa_lod, owa_lod):
@@ -86,18 +98,17 @@ def _ndtr(x):
     Keeps the library scipy-free. Requires x64 (the deep-tail values these
     laws live on underflow in float32).
     """
-    import jax
-
     if not jax.config.jax_enable_x64:
         msg = "physicaloptix.stats tail laws need x64: call hwoutils.enable_x64() first"
         raise RuntimeError(msg)
-    from jax.scipy.special import ndtr as _jndtr
 
     return np.asarray(_jndtr(jnp.asarray(x, dtype=jnp.float64)))
 
 
 def genchi2_pdf(x_grid, lam, beta, n_u=4000, u_max_sigmas=60.0):
     """Density of a noncentral generalized chi-square, by CF inversion.
+
+    Host-side numpy float64; not jit-safe.
 
     The pdf of ``sum_i lam_i z_i^2 + beta_i z_i`` for iid standard normal
     ``z``, obtained by Gil-Pelaez inversion of the characteristic function
@@ -136,6 +147,8 @@ def genchi2_pdf(x_grid, lam, beta, n_u=4000, u_max_sigmas=60.0):
 def genchi2_cumulants(lam, beta):
     """Closed-form cumulants k1..k4 of a noncentral generalized chi-square.
 
+    Host-side numpy float64; not jit-safe.
+
     Args:
         lam: Per-mode quadratic-form eigenvalues.
         beta: Per-mode linear-term coefficients (same shape as ``lam``).
@@ -152,6 +165,8 @@ def genchi2_cumulants(lam, beta):
 
 def genchi2_sf(x_grid, lam, beta, n_u=100000, u_max_sigmas=20000.0, chunk=8):
     """P(Q > x) for Q = sum_i lam_i z_i^2 + beta_i z_i, z standard normal.
+
+    Host-side numpy float64; not jit-safe.
 
     Gil-Pelaez inversion in survival form,
     ``sf(x) = 1/2 + (1/pi) int_0^inf Im[phi(u) exp(-i u x)] / u du``,
@@ -190,11 +205,18 @@ def genchi2_sf(x_grid, lam, beta, n_u=100000, u_max_sigmas=20000.0, chunk=8):
     deeper-tail precision -- see :func:`genchi2_pdf`'s own docstring
     convergence note for the analogous pattern.
 
-    ``chunk`` loops over ``x_grid`` (in ``pixel_sf``'s idiom) so peak memory
-    is ``chunk * n_u`` complex128 elements regardless of how many points are
-    evaluated. At the defaults, 300 points take about 0.4 s and peak at
-    about 38 MB; 1000 points take about 1.4 s at the same peak memory
-    (chunked, so memory does not grow with the number of points).
+    ``chunk`` loops over ``x_grid`` (in ``pixel_sf``'s idiom), so the
+    per-chunk integrand buffer does not grow with the number of points
+    evaluated -- 300 points take about 0.4 s, 1000 points about 1.4 s, at
+    comparable per-chunk memory. But ``denom`` and ``log_phi``'s
+    intermediate temporaries, shape ``(len(lam), n_u)``, are built once
+    outside the chunk loop, before ``x_grid`` is touched, so ``chunk`` does
+    NOT bound the mode axis: true peak memory scales as
+    ``max(chunk, len(lam)) * n_u`` complex128 elements, not ``chunk *
+    n_u``. Measured with ``tracemalloc`` at ``len(lam)=64``, 2 evaluation
+    points, and the defaults below (``chunk=8``, ``n_u=100000``): peak is
+    about 258 MB, versus the roughly 13 MB a ``chunk * n_u`` estimate would
+    suggest. At a few hundred speckle modes this is multiple GB.
 
     Args:
         x_grid: Points at which to evaluate the survival function. A scalar
@@ -205,8 +227,12 @@ def genchi2_sf(x_grid, lam, beta, n_u=100000, u_max_sigmas=20000.0, chunk=8):
             frequency axis.
         u_max_sigmas: Frequency-axis cutoff, in units of standard deviations
             of the distribution (``1 / scale``).
-        chunk: Number of ``x_grid`` points processed per pass, bounding peak
-            memory to ``chunk * n_u`` complex128 elements.
+        chunk: Number of ``x_grid`` points processed per pass. Bounds only
+            the per-chunk integrand buffer, not the ``(len(lam), n_u)``
+            characteristic-function setup built once outside the loop; true
+            peak memory scales as ``max(chunk, len(lam)) * n_u`` complex128
+            elements, so ``chunk`` alone does not bound memory at a large
+            mode count.
 
     Returns:
         The survival probability ``P(Q > x)`` at each point in ``x_grid``
@@ -242,7 +268,10 @@ def genchi2_sf(x_grid, lam, beta, n_u=100000, u_max_sigmas=20000.0, chunk=8):
 
 
 def pixel_sf(thresholds, i_c, gamma, p_kernel, phi_c, norm, chunk=4096, gl_nodes=96):
-    """P(delta_p > x) per pixel and threshold, in an all-positive form.
+    """P(delta > x) per pixel and threshold, in an all-positive form.
+
+    Host-side numpy float64; not jit-safe. Requires x64 to be enabled (calls
+    :func:`_ndtr`, which raises ``RuntimeError`` otherwise).
 
     Returns an (npix, nthresh) array. The rotated frame diagonalizes the
     quadrature covariance: sigma1^2 = (Gamma + |P|)/2 along P's principal
@@ -254,6 +283,25 @@ def pixel_sf(thresholds, i_c, gamma, p_kernel, phi_c, norm, chunk=4096, gl_nodes
     ``i_c``, ``gamma``, ``p_kernel``, ``phi_c`` are VECTOR per-pixel
     parameters, shape ``(npix,)``; ``thresholds`` and the returned delta
     axis are in contrast-delta units, total intensity ``I = i_c + x * norm``.
+
+    Args:
+        thresholds: Contrast-delta thresholds at which to evaluate the
+            survival function, shape ``(nthresh,)``.
+        i_c: Per-pixel coherent intensity, shape ``(npix,)``.
+        gamma: Per-pixel halo Gamma (incoherent intensity), shape
+            ``(npix,)``.
+        p_kernel: Per-pixel complex pseudo-covariance P, shape ``(npix,)``.
+        phi_c: Per-pixel coherent phase, shape ``(npix,)``.
+        norm: Flux-fraction divisor relating a contrast delta to total
+            intensity, ``I = i_c + thresholds * norm``.
+        chunk: Number of pixels processed per pass, bounding peak memory to
+            ``chunk * thresholds.shape[0]`` elements per intermediate array.
+        gl_nodes: Number of Gauss-Legendre nodes for the inside-strip
+            integral; controls the accuracy of the W2 tail-mass term.
+
+    Returns:
+        The survival probability ``P(delta > x)``, shape
+        ``(npix, nthresh)``.
     """
     nodes, weights = np.polynomial.legendre.leggauss(gl_nodes)
     npix = gamma.shape[0]
@@ -290,6 +338,8 @@ def pixel_sf(thresholds, i_c, gamma, p_kernel, phi_c, norm, chunk=4096, gl_nodes
 def pixel_pdf(x_grid, i_c_p, gamma_p, p_p, phi_c_p, norm, n_theta=4096):
     """Exact per-pixel contrast pdf via the polar-angle integral (rank 2).
 
+    Host-side numpy float64; not jit-safe.
+
     p_I(x) = (1/2) int_0^{2pi} f_W(sqrt(x) cos t, sqrt(x) sin t) dt over the
     rotated-frame 2D Gaussian; smooth, positive, and free of the ringing a
     truncated characteristic-function inversion shows in the tails. n_theta
@@ -300,6 +350,27 @@ def pixel_pdf(x_grid, i_c_p, gamma_p, p_p, phi_c_p, norm, n_theta=4096):
     parameters; ``x_grid`` is a vector of contrast deltas, total intensity
     ``I = i_c_p + x_grid * norm``. Returns the density in delta units -- the
     ``norm *`` prefactor is exactly the change-of-variables Jacobian.
+
+    ``x_grid`` must satisfy ``x >= -i_c_p / norm`` (total intensity ``I``
+    non-negative). Below that bound the total-intensity radius is clamped
+    rather than zeroed, so the returned value is a nonzero plateau, not a
+    density; callers must restrict ``x_grid`` themselves.
+
+    Args:
+        x_grid: Contrast-delta points at which to evaluate the density,
+            shape ``(n,)``. Must satisfy ``x_grid >= -i_c_p / norm``; see
+            above.
+        i_c_p: Scalar per-pixel coherent intensity.
+        gamma_p: Scalar per-pixel halo Gamma (incoherent intensity).
+        p_p: Scalar per-pixel complex pseudo-covariance P.
+        phi_c_p: Scalar per-pixel coherent phase.
+        norm: Flux-fraction divisor relating a contrast delta to total
+            intensity, ``I = i_c_p + x_grid * norm``.
+        n_theta: Number of polar-angle quadrature points.
+
+    Returns:
+        The probability density at each point in ``x_grid``, in delta
+        units, shape ``(n,)``.
     """
     alpha = 0.5 * np.angle(p_p)
     s1 = np.sqrt((gamma_p + abs(p_p)) / 2.0)

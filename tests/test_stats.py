@@ -289,6 +289,7 @@ def _genchi2_pdf_tail_gl(
     return 1.0 - 0.5 * (x0 - x_min) * np.sum(weights * p)
 
 
+@pytest.mark.slow
 def test_genchi2_sf_matches_pdf_tail_integral():
     # Evidence hierarchy for the tolerances below: genchi2_sf's own accuracy
     # is established independently of this test, by
