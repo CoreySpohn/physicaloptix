@@ -135,6 +135,15 @@ def render_path(
     Returns:
         The matplotlib figure.
     """
+    import warnings
+
+    warnings.warn(
+        "render_path is deprecated; use physicaloptix.viz.plot_path "
+        "(render_path is frozen and will be removed in 2.0)",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
     patches = _matplotlib()
     plt, log_norm, fancy_arrow = patches[0], patches[1], patches[2]
 

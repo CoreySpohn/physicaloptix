@@ -3,6 +3,10 @@
 import subprocess
 import sys
 
+import matplotlib
+
+matplotlib.use("Agg")
+
 
 def test_base_install_survives_without_eyepiece(tmp_path):
     code = (
@@ -47,3 +51,17 @@ def test_render_path_unchanged():
     from physicaloptix.viz._legacy import render_path as legacy
 
     assert render_path is legacy
+
+
+def test_render_path_warns_deprecation(small_path, mono_field):
+    import warnings
+
+    from physicaloptix.viz import render_path
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        render_path(small_path, mono_field)
+    assert any(
+        issubclass(w.category, DeprecationWarning) and "plot_path" in str(w.message)
+        for w in caught
+    )
