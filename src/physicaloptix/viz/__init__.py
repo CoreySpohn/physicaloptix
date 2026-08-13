@@ -14,6 +14,11 @@ _LAZY = {
     "plot_path": "train",
     "minimap": "train",
     "native_dpi": "train",
+    "plot_contrast_profile": "profiles",
+    "plot_mode_gallery": "modes",
+    "plot_field_ellipse": "speckle",
+    "plot_process": "speckle",
+    "plot_speckle_ensemble": "speckle",
 }
 
 __all__ = ["render_path", *sorted(_LAZY)]

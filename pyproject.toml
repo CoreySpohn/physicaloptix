@@ -42,7 +42,12 @@ docs = [
     "imageio-ffmpeg",
 ]
 test = ["matplotlib", "nox", "pytest", "hypothesis", "pytest-cov", "scipy"]
-viz = ["eyepiece>=0.1.0"]
+# hwostyle is a DIRECT import of viz/train.py and viz/modes.py (cmaps.opd,
+# palette, roles), so it is declared here rather than relied on transitively
+# through eyepiece -- whose own pin (hwostyle>=1.3.0) would legally resolve a
+# version with no cmaps.opd, turning plot_mode_gallery into a call-time
+# AttributeError with no install-time error.
+viz = ["eyepiece>=0.1.0", "hwostyle>=1.4.0"]
 
 [project.urls]
 Homepage = "https://github.com/CoreySpohn/physicaloptix"
