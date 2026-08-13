@@ -14,6 +14,8 @@ _LAZY = {
     "plot_path": "train",
     "minimap": "train",
     "native_dpi": "train",
+    "animate_speckles": "boiling",
+    "boiling_strip": "boiling",
     "plot_contrast_profile": "profiles",
     "plot_mode_gallery": "modes",
     "plot_field_ellipse": "speckle",
