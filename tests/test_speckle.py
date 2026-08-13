@@ -1787,6 +1787,32 @@ class TestDeltaE:
         eps = field._eps(3.0)
         assert jnp.allclose(de, jnp.tensordot(eps, field.G, axes=1))
 
+    def test_public_eps_is_the_private_one(self):
+        """``eps`` is the supported name for the coefficients themselves.
+
+        ``delta_e`` and ``realize`` have both already contracted against
+        ``G``, so a consumer that has to paint the coefficients back onto a
+        wavefront cannot recover them from either. Without a public
+        accessor that consumer reaches for ``_eps``; tiptilt's sibling
+        implementation of the same contract has carried a public ``eps``
+        all along, so this closes the asymmetry rather than inventing an
+        interface.
+        """
+        field = _field()
+        assert jnp.array_equal(field.eps(3.0), field._eps(3.0))
+
+    def test_public_eps_drives_the_increment(self):
+        """The two accessors describe one state: delta_e is G contracted eps."""
+        field = _field()
+        de = field.delta_e(wavelength_nm=500.0, time_s=11.0)
+        assert jnp.allclose(de, jnp.tensordot(field.eps(11.0), field.G, axes=1))
+
+    def test_public_eps_is_jit_traceable(self):
+        """It is on the differentiable hot path, like every other accessor."""
+        field = _field()
+        traced = jax.jit(lambda t: field.eps(t))(3.0)
+        assert jnp.allclose(traced, field.eps(3.0))
+
     def test_tracks_time(self):
         """A different time gives a different increment."""
         field = _field()

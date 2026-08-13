@@ -258,6 +258,26 @@ class AnalyticSpeckleField(AbstractSpeckleField):
         phase = 2.0 * jnp.pi * self.frequencies_hz * t + self.phases
         return jnp.sum(self.amplitudes * jnp.cos(phase), axis=-1)
 
+    def eps(self, time_s):
+        """The mode coefficients at an elapsed time, shape ``(m,)``.
+
+        The public accessor for the drifting coefficients themselves, as
+        distinct from :meth:`delta_e` (the complex field increment ``G
+        eps(t)`` those coefficients produce) and :meth:`realize` (its
+        intensity). A consumer that has to paint the coefficients back onto
+        a wavefront -- an animation showing the mirror drifting beside the
+        dark hole it feeds, a mode-by-mode budget -- needs the coefficients
+        and cannot get them from either of the other two, since both have
+        already contracted against ``G``.
+
+        Args:
+            time_s: Time since ``epoch_jd`` in seconds.
+
+        Returns:
+            The coefficients in the basis's own length unit.
+        """
+        return self._eps(time_s)
+
     def delta_e(self, *, wavelength_nm, time_s=0.0):
         """Complex field increment ``G eps(t)`` added to ``E_nom``.
 
