@@ -274,20 +274,21 @@ def _log_bounds(cube, vmin, vmax):
     return low, high
 
 
-_PANEL_WIDTH_IN = 3.2
-_PANEL_HEIGHT_IN = 3.6
+_PANEL_WIDTH_IN = 3.2  # compare_row's own panel_size default
+_PANEL_HEIGHT_IN = 3.2
 
 
 def _row_axes(axes, n):
     """Caller axes, or a row whose FIGURE is sized for ``n`` square panels.
 
-    An owned figure is built here rather than left to the drawing primitive
-    because a row of images knows something the primitive does not: the
-    panels are square and there are ``n`` of them, so the figure has to grow
-    with the panel count. Left at matplotlib's default figure size, a
-    four-epoch strip renders as four small squares stranded in a tall
-    figure beside a full-height colorbar -- the panels shrink to fit a
-    height nothing else needed.
+    Only the signed branch needs this. The unsigned branch hands its sizing
+    to ``eyepiece.compare_row``, which grows an owned figure with its panel
+    count as of eyepiece 0.2.0; the signed branch cannot use that primitive
+    at all, because it needs one symmetric norm across the strip and a
+    single colorbar on the last panel rather than compare_row's shared one.
+    The panel size deliberately matches compare_row's own default so the two
+    branches of ``boiling_strip`` return the same figure shape, rather than
+    changing size with the sign of the data.
     """
     if axes is not None:
         return axes
@@ -434,7 +435,8 @@ def boiling_strip(
         result = ep.compare_row(
             list(cube),
             panel_titles,
-            axes=_row_axes(axes, n),
+            axes=axes,
+            panel_size=_PANEL_WIDTH_IN,
             norm="log",
             extent=extent,
             vmin=low,
@@ -601,7 +603,8 @@ def animate_speckles(
             ax=image_ax,
             extent=extent,
             vlim=float(np.nanmax(np.abs(cube))),
-            colorbar=False,
+            colorbar="figure",
+            cbar_label=label,
         )
     else:
         low, high = _log_bounds(cube, None, None)
@@ -611,14 +614,14 @@ def animate_speckles(
             extent=extent,
             vmin=low,
             vmax=high,
-            colorbar=False,
+            colorbar="figure",
+            cbar_label=label,
         )
-    # The colorbar is attached here, not left to the image primitive: that one
-    # hangs it in an inset just outside the axes, and an inset is invisible to
-    # constrained layout, so its label lands off the canvas and the recorded
-    # frames carry the clipped version. A figure-level colorbar is placed by
-    # the layout engine, which reserves the room before the layout freezes.
-    fig.colorbar(panel.artists["image"], ax=image_ax, label=label)
+    # colorbar="figure" rather than the default inset: an inset is a child
+    # axes, so on a figure carrying no layout engine nothing reserves room for
+    # it and the label lands off the canvas, which a recording then bakes into
+    # every frame. Asking the primitive for a figure-level colorbar puts it
+    # where the layout engine can place it, before the layout freezes.
     if pixel_scale_lod is not None:
         ep.label_lod(image_ax)
 

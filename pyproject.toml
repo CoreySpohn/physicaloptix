@@ -47,7 +47,7 @@ test = ["matplotlib", "nox", "pytest", "hypothesis", "pytest-cov", "scipy"]
 # through eyepiece -- whose own pin (hwostyle>=1.3.0) would legally resolve a
 # version with no cmaps.opd, turning plot_mode_gallery into a call-time
 # AttributeError with no install-time error.
-viz = ["eyepiece>=0.1.0", "hwostyle>=1.4.0"]
+viz = ["eyepiece>=0.2.0", "hwostyle>=1.4.0"]
 
 [project.urls]
 Homepage = "https://github.com/CoreySpohn/physicaloptix"
