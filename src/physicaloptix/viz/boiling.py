@@ -12,9 +12,10 @@ enters through the same door, declaring ``sample_kind="instantaneous"`` and
 Both functions are conveniences over one pipeline: :func:`prepare_speckles`
 computes the frames, the floor, the shared display scale, and the trace
 once, and ``eyepiece.mpl`` draws the prepared sequence. Each call prepares
-its own input, so code that wants a strip AND a movie of one run should
-call ``prepare_speckles`` once and render ``sequence.strip(...)`` and
-``eyepiece.mpl.animate(sequence, ...)`` from it.
+its own raw input, so code that wants a strip AND a movie of one run should
+call ``prepare_speckles`` once, then pass that sequence to
+``boiling_strip(sequence, indices=...)`` and to
+``eyepiece.mpl.animate(sequence, ...)``.
 
 **One scale across time, always.** The display scale is resolved once from
 the whole time series and held for every panel and every frame; see
@@ -31,6 +32,7 @@ import numpy as np
 
 from physicaloptix.viz import _require
 from physicaloptix.viz._prepare import (
+    ANNULUS_ID,
     CLOCK_ID,
     IMAGE_ID,
     prepare_speckles,
@@ -64,8 +66,9 @@ def _pair_bounds(bounds, vmin, vmax):
 
 def boiling_strip(
     field,
-    times_s,
+    times_s=None,
     *,
+    indices=None,
     wavelength_nm=None,
     telescope_peak=None,
     include_floor=True,
@@ -76,6 +79,7 @@ def boiling_strip(
     vmax=None,
     sample_kind=None,
     quantity=None,
+    clock_fmt=None,
     axes=None,
     cast=None,
     profile=None,
@@ -86,16 +90,26 @@ def boiling_strip(
     belongs in a paper: a strip of epochs reads as boiling only because
     every panel shares one scale, built from the whole time series.
     Per-panel scales would make a stable dark hole and a degrading one look
-    the same. The frames are prepared by :func:`prepare_speckles` and drawn
-    as ``sequence.strip`` of every epoch through ``eyepiece.mpl.render``.
-    Each panel is labelled with its acquisition time. Because every panel
-    shares one extent and one scale, only the last panel shows a colorbar
-    and only the first labels its y axis.
+    the same.
+
+    ``field`` is either raw input, prepared here by :func:`prepare_speckles`,
+    or an already prepared ``Sequence``, drawn as is. Passing the sequence
+    is how one preparation serves both a movie and its strip. Either way
+    the selected epochs' image panels (``sequence.strip``) are drawn through
+    ``eyepiece.mpl.render``; a trace panel and the annulus outline belong to
+    the movie and are left out or hidden. Each panel is labelled with its
+    acquisition time. Because every panel shares one extent and one scale,
+    only the last panel shows a colorbar and only the first labels its y
+    axis.
 
     Args:
-        field: A speckle field, or a precomputed ``(n_t, y, x)`` cube; see
-            :func:`prepare_speckles`.
-        times_s: Epoch times in seconds, one per panel.
+        field: A prepared speckle ``Sequence`` (from
+            :func:`prepare_speckles`); a speckle field; or a precomputed
+            ``(n_t, y, x)`` cube.
+        times_s: Epoch times in seconds, one per frame of raw input. Not
+            used with a prepared sequence, which carries its own.
+        indices: Epochs to draw, one panel each, in order. None draws every
+            epoch. On raw input the scale still comes from the whole series.
         wavelength_nm: Wavelength passed to ``realize``.
         telescope_peak: Peak-reference the maps; see
             :func:`prepare_speckles`.
@@ -109,36 +123,58 @@ def boiling_strip(
         vmax: Older spelling of ``bounds[1]``; give it with ``vmin``.
         sample_kind: Required ``"instantaneous"`` for a bare cube.
         quantity: Required ``"total"`` or ``"delta"`` for a bare cube.
-        axes: Axes to draw into, shape ``(n,)`` for ``n = len(times_s)``.
-            None creates a figure sized for ``n`` square panels.
+        clock_fmt: Time-label format; see :func:`prepare_speckles`.
+        axes: Axes to draw into, one per panel. None creates a figure sized
+            for that many square panels.
         cast: ``eyepiece.style.SourceCast`` passed to the renderer.
         profile: ``eyepiece.style.RenderProfile`` passed to the renderer;
-            None snapshots the current style once.
+            None lets it snapshot the current style, sized from rcParams.
 
     Returns:
         An ``eyepiece.mpl.MplResult`` of the strip. Panel ``k``'s image is
         ``parts["k/image"]`` and its time label ``parts["k/time"]``.
 
     Raises:
-        ValueError: ``axes`` of the wrong shape (naming both), or any
-            condition :func:`prepare_speckles` refuses.
+        ValueError: ``axes`` of the wrong shape (naming both); preparation
+            arguments given with a prepared sequence; or any condition
+            :func:`prepare_speckles` refuses.
     """
     _require.eyepiece()
     import eyepiece.mpl as mpl
+    from eyepiece.prepared import PanelGroup, Sequence, find_element
 
-    sequence = prepare_speckles(
-        field,
-        times_s=times_s,
-        wavelength_nm=wavelength_nm,
-        telescope_peak=telescope_peak,
-        include_floor=include_floor,
-        floor=floor,
-        pixscale_lod=pixscale_lod,
-        bounds=_pair_bounds(bounds, vmin, vmax),
-        sample_kind=sample_kind,
-        quantity=quantity,
-    )
-    n = len(sequence.times)
+    if isinstance(field, Sequence):
+        _check_prepared_only(
+            times_s=times_s,
+            wavelength_nm=wavelength_nm,
+            telescope_peak=telescope_peak,
+            include_floor=None if include_floor is True else include_floor,
+            floor=floor,
+            pixscale_lod=pixscale_lod,
+            bounds=bounds,
+            vmin=vmin,
+            vmax=vmax,
+            sample_kind=sample_kind,
+            quantity=quantity,
+            clock_fmt=clock_fmt,
+        )
+        sequence = field
+    else:
+        sequence = prepare_speckles(
+            field,
+            times_s=times_s,
+            wavelength_nm=wavelength_nm,
+            telescope_peak=telescope_peak,
+            include_floor=include_floor,
+            floor=floor,
+            pixscale_lod=pixscale_lod,
+            bounds=_pair_bounds(bounds, vmin, vmax),
+            sample_kind=sample_kind,
+            quantity=quantity,
+            clock_fmt=clock_fmt,
+        )
+    indices = range(len(sequence.times)) if indices is None else list(indices)
+    n = len(indices)
     if axes is None:
         _, axes = plt.subplots(
             1,
@@ -152,18 +188,40 @@ def boiling_strip(
         msg = f"boiling_strip: expected axes shape ({n},), got {axes.shape}"
         raise ValueError(msg)
 
-    result = mpl.render(sequence.strip(range(n)), axes=axes, cast=cast, profile=profile)
+    strip = sequence.strip(indices)
+    panels = PanelGroup(
+        "strip", tuple(find_element(strip, f"{slot}/{IMAGE_ID}") for slot in range(n))
+    )
+    result = mpl.render(panels, axes=axes, cast=cast, profile=profile)
     # The strip adds its own per-panel time label, so each panel's clock
     # would say the same thing twice; one shared colorbar and one y label
     # serve every panel of a shared extent and scale.
     for slot, panel_ax in enumerate(axes):
         result.parts[f"{slot}/{CLOCK_ID}"].set_visible(False)
+        annulus = result.parts.get(f"{slot}/{ANNULUS_ID}")
+        if annulus is not None:
+            annulus.set_visible(False)
         if slot < n - 1:
             result.parts[f"{slot}/{IMAGE_ID}/colorbar"].ax.set_visible(False)
         if slot:
             panel_ax.set_ylabel("")
             panel_ax.tick_params(labelleft=False)
     return result
+
+
+def _check_prepared_only(**given):
+    """Refuse preparation arguments alongside an already prepared sequence.
+
+    Raises:
+        ValueError: Any argument in ``given`` is not None, naming them.
+    """
+    names = sorted(name for name, value in given.items() if value is not None)
+    if names:
+        msg = (
+            "boiling_strip: a prepared sequence already fixes its frames, "
+            f"times, and scale; drop {', '.join(names)}"
+        )
+        raise ValueError(msg)
 
 
 def animate_speckles(
@@ -179,6 +237,7 @@ def animate_speckles(
     bounds=None,
     sample_kind=None,
     quantity=None,
+    clock_fmt=None,
     fps=10,
     run_time=None,
     fig=None,
@@ -220,6 +279,7 @@ def animate_speckles(
         bounds: Display ``(vmin, vmax)``; see :func:`prepare_speckles`.
         sample_kind: Required ``"instantaneous"`` for a bare cube.
         quantity: Required ``"total"`` or ``"delta"`` for a bare cube.
+        clock_fmt: Time-label format; see :func:`prepare_speckles`.
         fps: Output frame rate.
         run_time: Presentation duration in seconds; None gives
             ``len(times_s) / fps``.
@@ -250,6 +310,7 @@ def animate_speckles(
         bounds=bounds,
         sample_kind=sample_kind,
         quantity=quantity,
+        clock_fmt=clock_fmt,
     )
     if run_time is None:
         run_time = len(sequence.times) / fps

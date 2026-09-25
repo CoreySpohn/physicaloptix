@@ -613,3 +613,37 @@ def test_manim_hides_a_missing_trace_datum_without_losing_handles(tmp_path):
         result.update(sequence.frame(2))
         assert list(result.parts["active"]) == markers
         assert all(m.has_points() for m in markers)
+
+
+# --- the clock format -------------------------------------------------------------
+
+
+def test_a_clock_format_labels_frames_and_strips_alike():
+    times_s = np.array([0.0, 86400.0, 3.2911 * 86400.0])
+    sequence = _bare(
+        np.ones((3, 3, 3)),
+        times_s,
+        bounds=(0.5, 2.0),
+        clock_fmt="t = {value:.2f} {unit}",
+    )
+    assert find_element(sequence.frame(0), "clock").text == "t = 0.00 d"
+    assert find_element(sequence.frame(2), "clock").text == "t = 3.29 d"
+    assert find_element(sequence.strip([2]), "0/time").text == "t = 3.29 d"
+
+
+def test_the_default_clock_format_is_eyepiece_compact_text():
+    sequence = _bare(np.ones((2, 3, 3)), np.array([0.0, 7.0]), bounds=(0.5, 2.0))
+    assert find_element(sequence.frame(0), "clock").text == "0 s"
+    assert find_element(sequence.frame(1), "clock").text == "7 s"
+
+
+def test_a_bad_clock_format_is_refused_before_any_evaluation(protocol_fake):
+    with pytest.raises(ValueError, match="fmt"):
+        prepare_speckles(
+            protocol_fake,
+            times_s=_times(3),
+            wavelength_nm=500.0,
+            include_floor=False,
+            clock_fmt="{epoch}",
+        )
+    assert protocol_fake.calls == 0

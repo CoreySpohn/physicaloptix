@@ -344,3 +344,55 @@ def test_the_animation_colorbar_label_stays_on_the_canvas(protocol_fake):
     assert box.x0 >= canvas.x0 and box.x1 <= canvas.x1
     assert box.y0 >= canvas.y0 and box.y1 <= canvas.y1
     plt.close("all")
+
+
+# --- a prepared sequence, stripped directly ----------------------------------------
+
+
+def test_strip_draws_selected_epochs_of_a_prepared_sequence(protocol_fake):
+    times = _times(5)
+    sequence = prepare_speckles(
+        protocol_fake,
+        times_s=times,
+        wavelength_nm=500.0,
+        include_floor=False,
+        trace=(0.5, 1.5),
+    )
+    result = boiling_strip(sequence, indices=[4, 0, 2])
+    assert protocol_fake.calls == len(times)  # no second preparation
+    assert len(result.axes) == 3
+    for slot, index in enumerate([4, 0, 2]):
+        panel = result.view.views[slot]
+        assert np.shares_memory(panel.data, sequence.frame(index).views[0].data)
+        assert panel.scale is sequence.frame(index).views[0].scale
+        assert not result.parts[f"{slot}/annulus"].get_visible()
+        assert not result.parts[f"{slot}/clock"].get_visible()
+    assert "trace" not in "".join(result.parts)  # image panels only
+    plt.close("all")
+
+
+def test_strip_of_a_prepared_sequence_refuses_preparation_arguments(protocol_fake):
+    sequence = prepare_speckles(
+        protocol_fake, times_s=_times(3), wavelength_nm=500.0, include_floor=False
+    )
+    with pytest.raises(ValueError, match="bounds, times_s"):
+        boiling_strip(sequence, _times(3), bounds=(-1.0, 1.0))
+
+
+def test_strip_indices_select_epochs_of_raw_input_on_the_whole_series_scale(
+    protocol_fake,
+):
+    times = _times(4)
+    full = prepare_speckles(
+        protocol_fake, times_s=times, wavelength_nm=500.0, include_floor=False
+    )
+    result = boiling_strip(
+        protocol_fake, times, indices=[3], wavelength_nm=500.0, include_floor=False
+    )
+    scale = result.view.views[0].scale
+    assert (scale.vmin, scale.vmax) == (
+        full.frame(0).scale.vmin,
+        full.frame(0).scale.vmax,
+    )
+    assert len(result.axes) == 1
+    plt.close("all")

@@ -493,6 +493,7 @@ def prepare_speckles(
     bounds=None,
     sample_kind=None,
     quantity=None,
+    clock_fmt=None,
 ):
     """Prepare a boiling dark hole once, as a replayable eyepiece ``Sequence``.
 
@@ -542,6 +543,11 @@ def prepare_speckles(
         quantity: ``"total"`` or ``"delta"``. A bare array must declare it;
             a field derives it from ``include_floor`` (a conflicting value
             is refused).
+        clock_fmt: ``str.format`` template for the acquisition-time label,
+            using only ``{value}`` (the time, a float, in ``time_unit``)
+            and ``{unit}``, e.g. ``"t = {value:.2f} {unit}"``. None uses
+            eyepiece's compact default. The frame labels and a strip's
+            per-panel time labels share it.
 
     Returns:
         A ``Sequence``. Without a trace its frames are one ``ImageView``
@@ -566,6 +572,8 @@ def prepare_speckles(
     quantity = _output_quantity(
         is_field, include_floor=include_floor, floor=floor, quantity=quantity
     )
+    # Validated before any evaluation, like every other argument.
+    clock = Clock(CLOCK_ID) if clock_fmt is None else Clock(CLOCK_ID, fmt=clock_fmt)
     times_s = np.asarray(times_s, dtype=float).ravel()
 
     if is_field:
@@ -591,7 +599,7 @@ def prepare_speckles(
     label = base_label if quantity == "total" else f"{base_label} delta"
     unit, divisor = _time_unit(times_s)
     times = times_s / divisor
-    clock_text = f"{float(times[0]):g} {unit}"
+    clock_text = clock.fmt.format(value=float(times[0]), unit=unit)
 
     series = radii = None
     if trace is not None:
@@ -617,7 +625,7 @@ def prepare_speckles(
         valid=None if valid is None else valid[0],
         marks=tuple(marks),
     )
-    channels = [ArrayChannel(IMAGE_ID, "data", cube), Clock(CLOCK_ID)]
+    channels = [ArrayChannel(IMAGE_ID, "data", cube), clock]
     if valid is not None:
         channels.append(ArrayChannel(IMAGE_ID, "valid", valid))
 
