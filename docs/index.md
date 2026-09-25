@@ -38,6 +38,13 @@ reference.
   {class}`~physicaloptix.SpeckleProcess` and `physicaloptix.stats`. The same
   `(E_nom, G)` product is what the `tiptilt` wavefront-control library builds
   its dark-hole loop and drifting-aberration generator on.
+- **Figures from one preparation.** The optional `physicaloptix.viz` package
+  (`pip install 'physicaloptix[viz]'`) draws fields, paths, and speckle
+  statistics through eyepiece. For a boiling dark hole,
+  `physicaloptix.viz.prepare_speckles` evaluates the speckle field,
+  the floor, the display scale, and the dark-zone trace once, and a still, a
+  strip, a movie, and a Manim clip all read that one preparation; see
+  [Speckle boiling, prepared once](prepared-speckles).
 
 ## What physicaloptix is NOT
 
@@ -130,6 +137,11 @@ assume.
   -- driving `cross_band_moments`, its derived views, `joint_covariance`, and the
   `scale_e_nom` fix on a genuinely chromatic process.
 
+Figures have their own guide.
+[Speckle boiling, prepared once](prepared-speckles) prepares a drifting
+speckle field once and draws it as a still, a strip of epochs, and a movie,
+with the same sequence ready for a Manim clip in a talk.
+
 ```{toctree}
 :maxdepth: 1
 :caption: Get started
@@ -152,6 +164,14 @@ examples/05_Speckles_from_First_Principles
 examples/06_The_Speckle_Layer_in_Code
 examples/07_Instrument_Subsystems
 examples/08_Cross_Band_Speckle_Statistics
+```
+
+```{toctree}
+:maxdepth: 1
+:caption: Figures
+:hidden:
+
+prepared-speckles
 ```
 
 ```{toctree}
