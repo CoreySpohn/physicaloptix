@@ -47,8 +47,10 @@ from physicaloptix.elements import (
     SampledOptic,
     ZernikeWavefrontSensor,
     fourier_dm_basis,
+    noll_to_nm,
     segment_ptt_basis,
     zernike_basis,
+    zernike_name,
 )
 from physicaloptix.ifs import (
     LensletChain,
@@ -149,6 +151,7 @@ __all__ = [
     "mft_sampling_parameter",
     "multilayer_response",
     "ncpa_differential_opd",
+    "noll_to_nm",
     "normalize_unit_energy",
     "pastis_matrix",
     "point_source",
@@ -168,4 +171,5 @@ __all__ = [
     "telescope_peak",
     "thickness_kernel",
     "zernike_basis",
+    "zernike_name",
 ]

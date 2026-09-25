@@ -237,3 +237,35 @@ class TestLinearizeIntegration:
         r2 = linearity_residual(path, field, basis, lin, 2e-3 * direction)
         assert r1 < 1e-4
         assert r2 / r1 == pytest.approx(4.0, rel=0.3)
+
+
+class TestNollIndexing:
+    def test_noll_table_through_radial_order_four(self):
+        from physicaloptix.elements.modes import noll_to_nm
+
+        expected = [
+            (0, 0), (1, 1), (1, -1), (2, 0), (2, -2), (2, 2), (3, -1), (3, 1),
+            (3, -3), (3, 3), (4, 0), (4, 2), (4, -2), (4, 4), (4, -4),
+        ]  # fmt: skip
+        assert [noll_to_nm(j) for j in range(1, 16)] == expected
+
+    def test_even_j_is_cosine_member(self):
+        from physicaloptix.elements.modes import noll_to_nm
+
+        for j in range(2, 60):
+            _, m = noll_to_nm(j)
+            if m != 0:
+                assert (m > 0) == (j % 2 == 0)
+
+    def test_names_and_fallback(self):
+        from physicaloptix.elements.modes import zernike_name
+
+        assert zernike_name(4) == "defocus"
+        assert zernike_name(11) == "primary spherical"
+        assert zernike_name(16) == "Z(5, 1)"
+
+    def test_invalid_index_raises(self):
+        from physicaloptix.elements.modes import noll_to_nm
+
+        with pytest.raises(ValueError, match="Noll index"):
+            noll_to_nm(0)

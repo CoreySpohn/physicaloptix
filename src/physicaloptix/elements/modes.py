@@ -19,9 +19,43 @@ import numpy as np
 from physicaloptix.apertures import rasterize_segments
 from physicaloptix.elements.basis import ModeBasis
 
+_ZERNIKE_NAMES = {
+    1: "piston",
+    2: "tip",
+    3: "tilt",
+    4: "defocus",
+    5: "oblique astigmatism",
+    6: "vertical astigmatism",
+    7: "vertical coma",
+    8: "horizontal coma",
+    9: "vertical trefoil",
+    10: "oblique trefoil",
+    11: "primary spherical",
+    12: "vertical secondary astigmatism",
+    13: "oblique secondary astigmatism",
+    14: "vertical quadrafoil",
+    15: "oblique quadrafoil",
+}
 
-def _noll_to_nm(j):
-    """Map a 1-based Noll index to the Zernike ``(n, m)`` (signed azimuth)."""
+
+def noll_to_nm(j):
+    """Map a 1-based Noll index to the Zernike ``(n, m)``.
+
+    ``n`` is the radial order and ``m`` the signed azimuthal frequency: a
+    positive ``m`` is the ``cos(m theta)`` member of the pair and a negative
+    ``m`` the ``sin(|m| theta)`` member. Noll's ordering walks the radial
+    orders in turn, gives even ``j`` to the cosine member and odd ``j`` to
+    the sine member, and within an order takes ``|m|`` from low to high.
+
+    Args:
+        j: The 1-based Noll index.
+
+    Returns:
+        The ``(n, m)`` pair as Python ints.
+
+    Raises:
+        ValueError: ``j`` is less than 1.
+    """
     if j < 1:
         raise ValueError(f"Noll index must be >= 1, got {j}")
     n = 0
@@ -31,6 +65,25 @@ def _noll_to_nm(j):
         remainder -= n
     m = (-1) ** j * ((n % 2) + 2 * ((remainder + ((n + 1) % 2)) // 2))
     return n, m
+
+
+def zernike_name(j):
+    """The conventional aberration name of Noll mode ``j``.
+
+    Names follow the optical-shop vocabulary for the first 15 modes (piston
+    through the quadrafoils); a higher mode is named by its indices.
+
+    Args:
+        j: The 1-based Noll index.
+
+    Returns:
+        The name, e.g. ``"defocus"`` for ``j = 4``, or ``"Z(n, m)"`` beyond
+        the named modes.
+    """
+    if j in _ZERNIKE_NAMES:
+        return _ZERNIKE_NAMES[j]
+    n, m = noll_to_nm(j)
+    return f"Z({n}, {m})"
 
 
 def _zernike_radial(n, m, rho):
@@ -181,7 +234,7 @@ def zernike_basis(grid, n_modes, *, rms_nm=1.0, diameter=1.0):
 
     modes = []
     for j in range(1, n_modes + 1):
-        n, m = _noll_to_nm(j)
+        n, m = noll_to_nm(j)
         z = _zernike(n, m, rho, theta) * aperture
         rms = np.sqrt((z**2).sum() / npupil)
         modes.append(rms_nm * z / rms)
