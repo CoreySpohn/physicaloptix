@@ -198,8 +198,9 @@ def test_strip_labels_each_panel_once_in_a_readable_time_unit(protocol_fake):
         wavelength_nm=500.0,
         include_floor=False,
     )
-    assert result.parts["1/time"].get_text() == "1 d"
-    assert not result.parts["1/clock"].get_visible()
+    assert result.parts["1/clock"].get_text() == "1 d"
+    assert result.parts["1/clock"].get_visible()
+    assert "1/time" not in result.parts  # one time label per panel
     plt.close("all")
 
 
@@ -366,7 +367,8 @@ def test_strip_draws_selected_epochs_of_a_prepared_sequence(protocol_fake):
         assert np.shares_memory(panel.data, sequence.frame(index).views[0].data)
         assert panel.scale is sequence.frame(index).views[0].scale
         assert not result.parts[f"{slot}/annulus"].get_visible()
-        assert not result.parts[f"{slot}/clock"].get_visible()
+        assert result.parts[f"{slot}/clock"].get_visible()
+        assert f"{slot}/time" not in result.parts
     assert "trace" not in "".join(result.parts)  # image panels only
     plt.close("all")
 

@@ -177,5 +177,11 @@ def __getattr__(name):
         from physicaloptix.viz import render_path
 
         return render_path
+    # physicaloptix.viz is a lazy namespace that imports no eyepiece itself,
+    # so attribute access after a bare `import physicaloptix` loads it here.
+    if name == "viz":
+        import importlib
+
+        return importlib.import_module("physicaloptix.viz")
     msg = f"module 'physicaloptix' has no attribute '{name}'"
     raise AttributeError(msg)

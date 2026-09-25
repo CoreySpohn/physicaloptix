@@ -395,6 +395,26 @@ def _scale(cube, valid, quantity, bounds):
 # --- time, coordinates, and the trace ---------------------------------------
 
 
+def _check_times(times_s):
+    """Validate acquisition times before anything is evaluated.
+
+    Raises:
+        ValueError: ``times_s`` is None, empty, not 1D, nonfinite, or not
+            strictly increasing, naming ``times_s``.
+    """
+    if times_s is None:
+        raise ValueError("times_s is required: one acquisition time per frame")
+    times = np.asarray(times_s, dtype=float)
+    if times.ndim != 1 or times.size == 0:
+        msg = f"times_s must be a nonempty 1D array, got shape {times.shape}"
+        raise ValueError(msg)
+    if not np.all(np.isfinite(times)):
+        raise ValueError("times_s must be finite")
+    if times.size > 1 and not np.all(np.diff(times) > 0):
+        raise ValueError("times_s must be strictly increasing")
+    return times
+
+
 def _time_unit(times_s):
     """The largest time unit that keeps the numbers readable, and its divisor."""
     span = float(np.max(np.abs(times_s))) if len(times_s) else 0.0
@@ -561,7 +581,9 @@ def prepare_speckles(
         quantity label that names it a delta.
 
     Raises:
-        ValueError: Undeclared or unsupported sample semantics, a missing or
+        ValueError: Missing, empty, nonfinite, or nonincreasing
+            ``times_s`` (checked before any evaluation); undeclared or
+            unsupported sample semantics, a missing or
             contradictory quantity, a missing ``wavelength_nm``, an
             unavailable floor under ``include_floor=True``, a chromatic
             field, a malformed cube or trace, invalid bounds, or a sequence
@@ -574,7 +596,7 @@ def prepare_speckles(
     )
     # Validated before any evaluation, like every other argument.
     clock = Clock(CLOCK_ID) if clock_fmt is None else Clock(CLOCK_ID, fmt=clock_fmt)
-    times_s = np.asarray(times_s, dtype=float).ravel()
+    times_s = _check_times(times_s)
 
     if is_field:
         cube = _protocol_cube(

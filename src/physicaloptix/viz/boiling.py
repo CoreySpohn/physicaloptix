@@ -33,7 +33,6 @@ import numpy as np
 from physicaloptix.viz import _require
 from physicaloptix.viz._prepare import (
     ANNULUS_ID,
-    CLOCK_ID,
     IMAGE_ID,
     prepare_speckles,
 )
@@ -132,7 +131,7 @@ def boiling_strip(
 
     Returns:
         An ``eyepiece.mpl.MplResult`` of the strip. Panel ``k``'s image is
-        ``parts["k/image"]`` and its time label ``parts["k/time"]``.
+        ``parts["k/image"]`` and its time label ``parts["k/clock"]``.
 
     Raises:
         ValueError: ``axes`` of the wrong shape (naming both); preparation
@@ -193,11 +192,9 @@ def boiling_strip(
         "strip", tuple(find_element(strip, f"{slot}/{IMAGE_ID}") for slot in range(n))
     )
     result = mpl.render(panels, axes=axes, cast=cast, profile=profile)
-    # The strip adds its own per-panel time label, so each panel's clock
-    # would say the same thing twice; one shared colorbar and one y label
-    # serve every panel of a shared extent and scale.
+    # Each panel's clock is its time label; one shared colorbar and one y
+    # label serve every panel of a shared extent and scale.
     for slot, panel_ax in enumerate(axes):
-        result.parts[f"{slot}/{CLOCK_ID}"].set_visible(False)
         annulus = result.parts.get(f"{slot}/{ANNULUS_ID}")
         if annulus is not None:
             annulus.set_visible(False)

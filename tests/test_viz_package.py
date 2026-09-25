@@ -59,6 +59,18 @@ def test_base_import_is_lazy_and_eyepiece_free_under_a_find_spec_blocker():
     assert _run_blocked(["eyepiece"], body) == "survived"
 
 
+def test_viz_is_an_attribute_after_a_bare_import_without_loading_eyepiece():
+    body = (
+        "import physicaloptix\n"
+        "viz = physicaloptix.viz\n"
+        "assert viz is sys.modules['physicaloptix.viz']\n"
+        "assert 'prepare_speckles' in dir(viz)\n"
+        "assert 'eyepiece' not in sys.modules\n"
+        "print('survived')\n"
+    )
+    assert _run_blocked(["eyepiece"], body) == "survived"
+
+
 def test_preparation_runs_without_either_renderer_interface():
     body = (
         "import numpy as np\n"

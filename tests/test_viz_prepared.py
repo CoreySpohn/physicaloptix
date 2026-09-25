@@ -7,6 +7,8 @@ then only index the prepared storage, so no renderer ever re-evaluates the
 field.
 """
 
+import os
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -409,6 +411,27 @@ def test_times_are_held_in_a_readable_unit_shared_by_clock_and_trace():
 # --- floor and units on fields ---------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("times_s", "problem"),
+    [
+        (None, "required"),
+        ([], "nonempty"),
+        ([[0.0, 1.0]], "1D"),
+        ([0.0, float("nan")], "finite"),
+        ([0.0, 0.0], "strictly increasing"),
+        ([1.0, 0.0], "strictly increasing"),
+    ],
+)
+def test_bad_times_are_refused_by_name_before_any_evaluation(
+    protocol_fake, times_s, problem
+):
+    with pytest.raises(ValueError, match=f"times_s.*{problem}"):
+        prepare_speckles(
+            protocol_fake, times_s=times_s, wavelength_nm=500.0, include_floor=False
+        )
+    assert protocol_fake.calls == 0
+
+
 def test_include_floor_on_the_bare_protocol_names_both_remedies(protocol_fake):
     with pytest.raises(ValueError, match="floor=") as excinfo:
         prepare_speckles(protocol_fake, times_s=_times(), wavelength_nm=500.0)
@@ -602,7 +625,12 @@ def test_matplotlib_hides_a_missing_trace_datum_without_losing_handles():
 
 
 def test_manim_hides_a_missing_trace_datum_without_losing_handles(tmp_path):
-    manim = pytest.importorskip("manim")
+    # The render job sets EYEPIECE_REQUIRE_MANIM=1; there a missing Manim
+    # fails this test instead of skipping it.
+    if os.environ.get("EYEPIECE_REQUIRE_MANIM") == "1":
+        import manim
+    else:
+        manim = pytest.importorskip("manim")
     import eyepiece.manim as em
 
     sequence, _ = _gappy_sequence()
@@ -628,7 +656,10 @@ def test_a_clock_format_labels_frames_and_strips_alike():
     )
     assert find_element(sequence.frame(0), "clock").text == "t = 0.00 d"
     assert find_element(sequence.frame(2), "clock").text == "t = 3.29 d"
-    assert find_element(sequence.strip([2]), "0/time").text == "t = 3.29 d"
+    strip = sequence.strip([2])
+    assert find_element(strip, "0/clock").text == "t = 3.29 d"
+    with pytest.raises(KeyError):
+        find_element(strip, "0/time")  # the clock is the only time label
 
 
 def test_the_default_clock_format_is_eyepiece_compact_text():
