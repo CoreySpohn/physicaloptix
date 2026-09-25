@@ -34,7 +34,6 @@ import hwostyle
 import matplotlib.pyplot as plt
 import numpy as np
 from IPython.display import HTML
-from matplotlib.font_manager import FontProperties
 
 import eyepiece.mpl as mpl
 from eyepiece.prepared import find_element
@@ -47,10 +46,8 @@ hwostyle.use("dark")
 plt.rcParams["savefig.dpi"] = 120
 
 # One profile for every output on this page, taken once from the active
-# style. A profile names a single font family, so it is given the face
-# Matplotlib actually finds from the style's list.
+# style and sized from its rc settings.
 PROFILE = snapshot_profile(
-    font_family=FontProperties(family=plt.rcParams["font.sans-serif"]).get_name(),
     text_size_pt=plt.rcParams["font.size"],
     stroke_width_pt=plt.rcParams["lines.linewidth"],
 )
@@ -207,7 +204,8 @@ part is adjusted through its handle. For example,
 
 A comparison between chosen epochs belongs in a strip. `boiling_strip`
 accepts the prepared sequence directly and draws the selected epochs' image
-panels side by side, each labelled with its acquisition time. Every panel
+panels side by side, each labelled once, by its clock, with its acquisition
+time. Every panel
 shares one extent and one scale, so one colorbar and one y label serve them
 all.
 
@@ -274,11 +272,10 @@ print(frame.quantity, frame.scale.kind, (frame.scale.vmin, frame.scale.vmax))
 
 fig, ax = plt.subplots(figsize=(3.8, 3.1), layout="constrained")
 drift = mpl.render(frame, ax=ax, profile=PROFILE)
-# The clock label is drawn in the text color, which vanishes against the
-# near-white zero of a diverging map; the axes title carries the time instead.
-drift.parts["clock"].set_visible(False)
-ax.set_title(f"t = {delta.times[18]:.2f} {delta.time_unit}")
 ```
+
+The clock stays readable over the near-white zero of the diverging map
+because a label drawn over an image carries a halo in the background color.
 
 A precomputed `(n_t, y, x)` cube enters through the same function. The
 preparation cannot know what such a cube holds, so the caller declares it:
@@ -337,3 +334,30 @@ a slide and a movie of the same duration and frame rate show the same
 epochs. Eyepiece's
 [Manim guide](https://eyepiece.readthedocs.io/en/latest/manim.html) covers the
 parts, reveals, and Manim Slides.
+
+## Migrating from the earlier boiling functions
+
+Earlier releases drew `boiling_strip` and `animate_speckles` directly from a
+field or a cube. Both now prepare a sequence first and render it through
+eyepiece, which changes the following behavior.
+
+- A bare `(n_t, y, x)` cube must declare what it holds:
+  `sample_kind="instantaneous"` and `quantity="total"` or `"delta"`. A field
+  still declares both itself, deriving the quantity from `include_floor`.
+- The scale follows the declared quantity, not the sign of the data. A total
+  always takes a log scale and a delta always takes a symmetric diverging
+  scale, even when none of its values are negative. Earlier releases chose
+  the diverging scale only when a frame contained a negative value.
+- `boiling_strip` no longer accepts `titles=` or `imshow_kw=`. Restyle a
+  panel through its artist in `result.parts` instead, and set the time text
+  with `clock_fmt=`.
+- `boiling_strip` returns an `eyepiece.mpl.MplResult`, not a
+  `MosaicResult`. Its parts are keyed by element ID: `parts["0/image"]` is
+  the first panel's image and `parts["0/clock"]` its time label.
+- Each panel's acquisition time is a label inside the panel rather than an
+  axes title, in the strip and in the movie alike.
+- `animate_speckles` plays in physical time. It takes `run_time=` (by
+  default `len(times_s) / fps`) and spaces its output frames evenly from the
+  first epoch to the last, holding the most recent epoch at each frame.
+  Evenly spaced epochs play as before; unevenly spaced epochs hold through a
+  long gap instead of advancing one epoch per output frame.
