@@ -261,3 +261,82 @@ def plot_mode_gallery(
     if response_images:
         artists["response"] = response_images
     return ep.MosaicResult(axes=axes, artists=artists)
+
+
+def plot_zernike_pyramid(
+    modes,
+    *,
+    axes=None,
+    labels="name",
+    panel_size=1.5,
+    cbar_label=None,
+    imshow_kw=None,
+):
+    """Draw a Noll-ordered Zernike stack as the (n, m) pyramid.
+
+    Row ``n`` holds the radial order ``n`` and column position follows the
+    signed azimuthal frequency ``m``, so the modes of one order sit side by
+    side, the rotationally symmetric ``m = 0`` modes run down the center,
+    and each cosine/sine pair sits mirrored about it. The layout carries the
+    structure of the basis: a mode's row says how many times its radial
+    polynomial can change sign, and its distance from the center says how
+    many times it oscillates around the pupil.
+
+    Every panel shares one symmetric scale with the ``opd`` colormap, so for
+    a unit-RMS basis the eye compares amplitudes directly: a mode that
+    concentrates its variance near the rim reaches a larger peak than one
+    that spreads it. Pixels outside the common support render as the axes
+    ground.
+
+    Args:
+        modes: A ``ModeBasis`` or a bare ``(k, y, x)`` stack in Noll order,
+            mode 0 being piston (``j = 1``). A stack that ends partway
+            through a radial order leaves the rest of that row empty.
+        axes: A 2D array of Axes of shape ``(n_max + 1, 2 n_max + 1)`` to
+            draw into. None creates the figure.
+        labels: ``"name"`` titles each panel with ``j`` and its aberration
+            name, ``"nm"`` with ``j`` and ``(n, m)``, None omits titles.
+        panel_size: Size in inches of one cell, for a created figure.
+        cbar_label: Label for the shared colorbar.
+        imshow_kw: Extra kwargs passed to every panel's ``imshow``.
+
+    Returns:
+        eyepiece's ``compare_grid`` ``MosaicResult``; ``artists["image"]``
+        is a nested list indexed ``[n][n_max + m]``, None at empty cells.
+
+    Raises:
+        ValueError: ``modes`` is not a ``(k, y, x)`` stack or ``labels`` is
+            not one of the accepted values.
+    """
+    from physicaloptix.elements.modes import noll_to_nm, zernike_name
+
+    ep = _require.eyepiece()
+    if labels not in ("name", "nm", None):
+        msg = (
+            f"plot_zernike_pyramid: labels must be 'name', 'nm' or None, got {labels!r}"
+        )
+        raise ValueError(msg)
+    stack = _masked_opd(_mode_stack(modes))
+    indices = [noll_to_nm(j) for j in range(1, len(stack) + 1)]
+    n_max = max(n for n, _ in indices)
+    cells = [[None] * (2 * n_max + 1) for _ in range(n_max + 1)]
+    titles = [[""] * (2 * n_max + 1) for _ in range(n_max + 1)]
+    for j, ((n, m), mode) in enumerate(zip(indices, stack, strict=True), start=1):
+        cells[n][n_max + m] = mode
+        if labels == "name":
+            titles[n][n_max + m] = f"$j={j}$\n{zernike_name(j)}"
+        elif labels == "nm":
+            titles[n][n_max + m] = f"$j={j}$, $({n}, {m})$"
+
+    value = hwostyle.cmaps.opd
+    cmap = matplotlib.colormaps[value] if isinstance(value, str) else value
+    return ep.compare_grid(
+        cells,
+        titles=None if labels is None else titles,
+        axes=axes,
+        norm="diverging",
+        cmap=cmap,
+        cbar_label=cbar_label,
+        panel_size=panel_size,
+        imshow_kw=imshow_kw,
+    )

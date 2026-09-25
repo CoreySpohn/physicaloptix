@@ -18,6 +18,7 @@ _LAZY = {
     "boiling_strip": "boiling",
     "plot_contrast_profile": "profiles",
     "plot_mode_gallery": "modes",
+    "plot_zernike_pyramid": "modes",
     "plot_field_ellipse": "speckle",
     "plot_process": "speckle",
     "plot_speckle_ensemble": "speckle",

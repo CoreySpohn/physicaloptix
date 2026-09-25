@@ -214,3 +214,45 @@ def test_chromatic_linearization_is_rejected_with_an_actionable_message():
 def test_mismatched_mode_and_response_counts_raise():
     with pytest.raises(ValueError, match="3 modes but 2 responses"):
         plot_mode_gallery(_mode_stack(), _response_stack(2))
+
+
+def test_zernike_pyramid_places_modes_by_radial_and_azimuthal_order():
+    from physicaloptix.core import Grid
+    from physicaloptix.elements.modes import zernike_basis
+    from physicaloptix.viz import plot_zernike_pyramid
+
+    basis = zernike_basis(Grid.pupil(32), 10)
+    result = plot_zernike_pyramid(basis, labels="nm")
+    images = result.artists["image"]
+    assert result.axes.shape == (4, 7)
+    # defocus (j=4) is (2, 0): row 2, the center column
+    assert "j=4" in result.axes[2, 3].get_title()
+    assert images[2][3] is not None
+    # tip (j=2, m=+1) and tilt (j=3, m=-1) mirror about the center
+    assert "j=2" in result.axes[1, 4].get_title()
+    assert "j=3" in result.axes[1, 2].get_title()
+    # the gaps between members of one order stay empty
+    assert images[0][0] is None and images[1][3] is None
+    norms = {id(im.norm) for row in images for im in row if im is not None}
+    assert len(norms) == 1
+    vmin, vmax = next(im for im in images[3] if im is not None).get_clim()
+    assert vmin == pytest.approx(-vmax)
+    plt.close(result.fig)
+
+
+def test_zernike_pyramid_masks_outside_the_pupil():
+    from physicaloptix.core import Grid
+    from physicaloptix.elements.modes import zernike_basis
+    from physicaloptix.viz import plot_zernike_pyramid
+
+    result = plot_zernike_pyramid(zernike_basis(Grid.pupil(32), 3), labels=None)
+    data = result.artists["image"][1][0].get_array()
+    assert np.ma.is_masked(data) or np.isnan(np.asarray(data)[0, 0])
+    plt.close(result.fig)
+
+
+def test_zernike_pyramid_rejects_unknown_labels():
+    from physicaloptix.viz import plot_zernike_pyramid
+
+    with pytest.raises(ValueError, match="labels must be"):
+        plot_zernike_pyramid(np.ones((3, 8, 8)), labels="bogus")
