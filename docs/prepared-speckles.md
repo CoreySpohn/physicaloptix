@@ -266,6 +266,7 @@ delta = prepare_speckles(
     telescope_peak=TELESCOPE_PEAK,
     include_floor=False,
     bounds=(-2e-9, 2e-9),
+    clock_fmt="t = {value:.2f} {unit}",
 )
 frame = delta.frame(18)
 print(frame.quantity, frame.scale.kind, (frame.scale.vmin, frame.scale.vmax))
