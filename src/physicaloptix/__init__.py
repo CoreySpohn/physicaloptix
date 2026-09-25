@@ -94,7 +94,6 @@ from physicaloptix.trains import (
     synthesize_psd_surface,
 )
 from physicaloptix.transforms import Fraunhofer, Fresnel, cmft_bwd, cmft_fwd
-from physicaloptix.viz import render_path
 
 __all__ = [
     "REFLECTION_OPD_FACTOR",
@@ -169,3 +168,14 @@ __all__ = [
     "thickness_kernel",
     "zernike_basis",
 ]
+
+
+def __getattr__(name):
+    # render_path is deprecated and resolved on first use, so importing
+    # physicaloptix never loads the legacy plotting module.
+    if name == "render_path":
+        from physicaloptix.viz import render_path
+
+        return render_path
+    msg = f"module 'physicaloptix' has no attribute '{name}'"
+    raise AttributeError(msg)

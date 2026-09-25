@@ -116,3 +116,66 @@ def chromatic_field():
     spectrum = Spectrum.tophat(500.0, 0.2, 3)
     data = jnp.broadcast_to(jnp.asarray(disk).astype(complex), (3, 24, 24))
     return Field(data=data, grid=grid, plane=PlaneKind.PUPIL, spectrum=spectrum)
+
+
+# --- speckle-field protocol fixtures (viz preparation and boiling tests) ----
+
+SPECKLE_NPIX = 16
+
+
+class ProtocolFake:
+    """The whole speckle-field protocol and nothing else.
+
+    If the viz layer needs more than ``realize`` and ``pixel_scale_lod``, it
+    is typed on a class rather than on the protocol, and a replayed cube or a
+    maintained residual would need an adapter. ``calls`` counts evaluations,
+    so a test can pin that preparation evaluates each epoch exactly once.
+    """
+
+    pixel_scale_lod = 0.25
+
+    def __init__(self):
+        self.calls = 0
+
+    def realize(self, *, wavelength_nm, time_s=0.0):
+        # Asymmetric in x/y AND time-varying: a uniform or static fixture
+        # cannot tell a shared norm from a per-panel one, nor an x/y
+        # conflation from a correct one.
+        self.calls += 1
+        y, x = np.ogrid[:SPECKLE_NPIX, :SPECKLE_NPIX]
+        return 1e-9 * (1.0 + 0.5 * np.sin(time_s)) * (1.0 + x + 3.0 * y)
+
+
+@pytest.fixture
+def protocol_fake():
+    """A fresh ProtocolFake with its evaluation counter at zero."""
+    return ProtocolFake()
+
+
+@pytest.fixture
+def analytic_speckle_field():
+    """Factory for a small real AnalyticSpeckleField (the concrete protocol end)."""
+    from physicaloptix.speckle import AnalyticSpeckleField
+
+    def build(*, coherent=False, seed=0):
+        rng = np.random.default_rng(seed)
+        shape = (SPECKLE_NPIX, SPECKLE_NPIX)
+        e_nom = jnp.asarray(
+            rng.normal(size=shape) + 1j * rng.normal(size=shape), dtype=complex
+        )
+        g = jnp.asarray(
+            rng.normal(size=(3, *shape)) + 1j * rng.normal(size=(3, *shape)),
+            dtype=complex,
+        )
+        return AnalyticSpeckleField(
+            e_nom * 1e-4,
+            g * 1e-5,
+            amplitudes=jnp.asarray(rng.random((3, 2))),
+            frequencies_hz=jnp.asarray([1e-3, 3e-3]),
+            phases=jnp.asarray(rng.random((3, 2)) * 2.0 * np.pi),
+            input_energy=1.0,
+            pixel_scale_lod=0.25,
+            coherent=coherent,
+        )
+
+    return build

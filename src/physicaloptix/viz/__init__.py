@@ -1,11 +1,11 @@
 """Stateless renderers for physicaloptix objects, built on eyepiece.
 
-Lazy by design: the eyepiece-consuming submodules import on first attribute
-access, so the base install never needs the viz extra. The deprecated
-render_path stays eagerly importable with matplotlib alone.
+Lazy by design: every public name imports on first attribute access, so the
+base install never needs the viz extra, and loading one function never loads
+another's module. The eyepiece-consuming names raise an actionable
+ImportError without the viz extra; the deprecated render_path needs only
+matplotlib, and only once it is called.
 """
-
-from physicaloptix.viz._legacy import render_path
 
 _LAZY = {
     "plot_field": "fields",
@@ -14,6 +14,7 @@ _LAZY = {
     "plot_path": "train",
     "minimap": "train",
     "native_dpi": "train",
+    "prepare_speckles": "_prepare",
     "animate_speckles": "boiling",
     "boiling_strip": "boiling",
     "plot_contrast_profile": "profiles",
@@ -23,17 +24,24 @@ _LAZY = {
     "plot_speckle_ensemble": "speckle",
 }
 
-__all__ = ["render_path", *sorted(_LAZY)]
+# Names that do not go through eyepiece at all.
+_LAZY_PLAIN = {"render_path": "_legacy"}
+
+__all__ = sorted([*_LAZY, *_LAZY_PLAIN])
 
 
 def __getattr__(name):
-    if name in _LAZY:
+    if name in _LAZY or name in _LAZY_PLAIN:
         import importlib
 
-        from physicaloptix.viz import _require
+        if name in _LAZY:
+            from physicaloptix.viz import _require
 
-        _require.eyepiece()
-        module = importlib.import_module(f"physicaloptix.viz.{_LAZY[name]}")
+            _require.eyepiece()
+            module_name = _LAZY[name]
+        else:
+            module_name = _LAZY_PLAIN[name]
+        module = importlib.import_module(f"physicaloptix.viz.{module_name}")
         return getattr(module, name)
     msg = f"module 'physicaloptix.viz' has no attribute '{name}'"
     raise AttributeError(msg)
