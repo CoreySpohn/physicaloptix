@@ -22,14 +22,22 @@ wrong at the reader, wavelength off by 0.1 percent, normalization dropped).
 import hashlib
 import json
 
+import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
 import pytest
+import scipy.special
 from astropy.io import fits
 from hwoutils.conversions import arcsec_to_rad
 
 from physicaloptix.core import PlaneKind
-from physicaloptix.instruments import NIRCamConfig, NIRCamInputs, build_nircam
+from physicaloptix.instruments import (
+    BandLimitedRoundMask,
+    NIRCamConfig,
+    NIRCamInputs,
+    build_nircam,
+    mask_plane_field,
+)
 
 ARCSEC_TO_RAD = np.pi / (180.0 * 3600.0)
 NM_TO_M = 1e-9
@@ -68,15 +76,18 @@ def _asymmetric_opd_nm(npup):
     return 300.0 * yy + 500.0 * xx * yy + 800.0 * xx**3
 
 
-def _inputs(npup=NPUP, *, opd_nm=None):
+def _inputs(npup=NPUP, *, opd_nm=None, **extra):
     return NIRCamInputs(
         pupil_amplitude=jnp.asarray(_asymmetric_pupil(npup)),
         pupil_diameter_m=DIAMETER_M,
         ote_opd_nm=None if opd_nm is None else jnp.asarray(opd_nm),
+        **extra,
     )
 
 
-def _config(det_npix, oversample, *, source=(0.0, 0.0), ote_opd=False, scale=None):
+def _config(
+    det_npix, oversample, *, source=(0.0, 0.0), ote_opd=False, scale=None, **extra
+):
     return NIRCamConfig(
         wavelength_nm=WAVELENGTH_NM,
         pixel_scale_arcsec=PIXEL_SCALE_ARCSEC if scale is None else scale,
@@ -84,6 +95,7 @@ def _config(det_npix, oversample, *, source=(0.0, 0.0), ote_opd=False, scale=Non
         oversample=oversample,
         source_position_arcsec=source,
         ote_opd=ote_opd,
+        **extra,
     )
 
 
@@ -377,3 +389,678 @@ class TestFromBundle:
         (tmp_path / "manifest.json").write_text(json.dumps(manifest))
         with pytest.raises(ValueError, match="sha256"):
             NIRCamInputs.from_bundle(tmp_path)
+
+
+# --- Coronagraphic path: focal mask, Lyot stop, post-mask SI WFE -----------
+#
+# The masked-path anchors below use the same synthetic asymmetric pupil. The
+# occulter is the round band-limited profile with a core radius of 0.6 arcsec
+# (about 5.6 lambda/D here), so on the full-band mask-plane window of
+# NPUP * mask_oversample samples its perturbation (M - 1) is compactly
+# supported well inside the window. Every tolerance is a floating-point
+# floor for the same reason as above: both sides are exact finite sums.
+
+LOD_RAD = WAVELENGTH_NM * NM_TO_M / DIAMETER_M
+LOD_ARCSEC = LOD_RAD / ARCSEC_TO_RAD
+J1_ZERO2 = float(scipy.special.jn_zeros(1, 2)[1])
+CORE_RADIUS_ARCSEC = 0.6
+CORE_SIGMA = J1_ZERO2 / CORE_RADIUS_ARCSEC
+BOX_REGION = ((0.1, 0.5, 0.2, None, 0.3),)
+
+
+class _UniformMask(eqx.Module):
+    """A focal mask of constant amplitude transmission everywhere."""
+
+    amplitude: float = eqx.field(static=True)
+
+    def transmission(self, x_arcsec, y_arcsec):
+        shape = np.broadcast_shapes(np.shape(x_arcsec), np.shape(y_arcsec))
+        return np.full(shape, self.amplitude)
+
+
+def _reference_mask(x, y, *, center=(0.0, 0.0), regions=()):
+    """Independent round band-limited amplitude profile (arcsec in)."""
+    xr = np.asarray(x, float) - center[0]
+    yr = np.asarray(y, float) - center[1]
+    xr, yr = np.broadcast_arrays(xr, yr)
+    r = np.hypot(xr, yr)
+    s = np.clip(CORE_SIGMA * r, np.finfo(float).tiny, J1_ZERO2)
+    t = np.where(r == 0, 0.0, 1.0 - (2.0 * scipy.special.j1(s) / s) ** 2)
+    for x_lo, x_hi, y_lo, y_hi, amplitude in regions:
+        sel = np.ones(t.shape, bool)
+        for value, lo, hi in ((xr, x_lo, x_hi), (yr, y_lo, y_hi)):
+            if lo is not None:
+                sel &= value > lo
+            if hi is not None:
+                sel &= value < hi
+        t = np.where(sel, amplitude, t)
+    return t
+
+
+def _exit_lyot(npup):
+    """Asymmetric Lyot stop in the exit-pupil frame (notch on +x only)."""
+    x = _pupil_coords(npup)
+    xx, yy = np.meshgrid(x, x)
+    lyot = ((xx**2 + yy**2) <= 0.42**2).astype(float)
+    lyot[(xx > 0.3) & (np.abs(yy) < 0.05)] = 0.0
+    return lyot
+
+
+def _exit_support(npup):
+    """SI support with a stripe removed at -y (exit frame)."""
+    x = _pupil_coords(npup)
+    _, yy = np.meshgrid(x, x)
+    support = np.ones((npup, npup))
+    support[(yy < -0.25) & (yy > -0.35)] = 0.0
+    return support
+
+
+def _exit_si_opd_nm(npup):
+    x = _pupil_coords(npup)
+    xx, yy = np.meshgrid(x, x)
+    return 400.0 * xx**2 - 250.0 * xx * yy + 600.0 * yy**3
+
+
+def _occulter(**kwargs):
+    return BandLimitedRoundMask(sigma_per_arcsec=CORE_SIGMA, **kwargs)
+
+
+def _masked_inputs(*, mask=None, opd_nm=None, si_opd_nm=None, support=None):
+    lyot = _exit_lyot(NPUP)
+    return _inputs(
+        opd_nm=opd_nm,
+        focal_mask=_occulter() if mask is None else mask,
+        lyot_amplitude=jnp.asarray(lyot),
+        si_opd_nm=None if si_opd_nm is None else jnp.asarray(si_opd_nm),
+        si_support=None if support is None else jnp.asarray(support),
+        si_wavelength_nm=None if si_opd_nm is None else WAVELENGTH_NM,
+    )
+
+
+def _scale_for_pitch(oversample, pitch_lod):
+    """Detector pixel scale [arcsec] giving output samples of pitch_lod."""
+    return oversample * pitch_lod * LOD_ARCSEC
+
+
+def _expected_masked_field(
+    amp,
+    opd_nm,
+    lyot,
+    si_opd_nm,
+    support,
+    mask_fn,
+    mask_oversample,
+    det_npix,
+    oversample,
+    source_arcsec,
+    scale,
+):
+    """Independent direct Fourier sums in meters and radians, full band.
+
+    The exit-frame field (entrance arrays reflected in y, source as a tilt)
+    is summed to the mask-plane samples at theta_j = (j - (N - 1)/2) * lambda
+    / (D * mask_oversample), multiplied by the mask, summed back to the pupil
+    samples (the direct form, not the Babinet form), multiplied by the Lyot
+    stop and the SI support and phasor, and summed to the detector samples.
+    """
+    npup = amp.shape[0]
+    lam_m = WAVELENGTH_NM * NM_TO_M
+    x_m = _pupil_coords(npup) * DIAMETER_M
+    xx, yy = np.meshgrid(x_m, x_m)
+    sx, sy = np.asarray(source_arcsec) * ARCSEC_TO_RAD
+    norm = 1.0 / np.sqrt(np.sum(amp**2) / npup**2)
+    field = (
+        norm
+        * amp[::-1, :]
+        * np.exp(2j * np.pi * opd_nm[::-1, :] * NM_TO_M / lam_m)
+        * np.exp(2j * np.pi * (sx * xx + sy * yy) / lam_m)
+    )
+    n_mask = npup * mask_oversample
+    theta = (
+        (np.arange(n_mask) - (n_mask - 1) / 2) * lam_m / (DIAMETER_M * mask_oversample)
+    )
+    k_fwd = np.exp(-2j * np.pi * np.outer(theta, x_m) / lam_m)
+    focal = k_fwd @ field @ k_fwd.T / npup**2
+    theta_arcsec = theta / ARCSEC_TO_RAD
+    focal = focal * mask_fn(theta_arcsec[np.newaxis, :], theta_arcsec[:, np.newaxis])
+    k_bwd = np.exp(2j * np.pi * np.outer(x_m, theta) / lam_m)
+    lyot_field = k_bwd @ focal @ k_bwd.T / mask_oversample**2
+    lyot_field = lyot_field * lyot * support
+    lyot_field = lyot_field * np.exp(2j * np.pi * si_opd_nm * NM_TO_M / lam_m)
+    n_out = det_npix * oversample
+    step_rad = scale / oversample * ARCSEC_TO_RAD
+    theta_out = (np.arange(n_out) - (n_out - 1) / 2) * step_rad
+    k_out = np.exp(-2j * np.pi * np.outer(theta_out, x_m) / lam_m)
+    return k_out @ lyot_field @ k_out.T / npup**2
+
+
+class TestMaskedConfig:
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"mask_oversample": 0},
+            {"mask_extent_lod": 0.0},
+            {"mask_extent_lod": -4.0},
+        ],
+    )
+    def test_rejects_invalid_mask_sampling(self, kwargs):
+        with pytest.raises(ValueError):
+            NIRCamConfig(
+                wavelength_nm=WAVELENGTH_NM,
+                pixel_scale_arcsec=PIXEL_SCALE_ARCSEC,
+                **kwargs,
+            )
+
+    @pytest.mark.parametrize(
+        ("toggle", "match"),
+        [("focal_mask", "focal mask"), ("lyot_stop", "Lyot"), ("si_wfe", "SI")],
+    )
+    def test_missing_input_fails_at_build(self, toggle, match):
+        with pytest.raises(ValueError, match=match):
+            build_nircam(_config(16, 2, **{toggle: True}), _inputs())
+
+    def test_si_wavelength_mismatch_fails_at_build(self):
+        inputs = _inputs(
+            si_opd_nm=jnp.zeros((NPUP, NPUP)),
+            si_wavelength_nm=WAVELENGTH_NM + 10.0,
+        )
+        with pytest.raises(ValueError, match="wavelength"):
+            build_nircam(_config(16, 2, si_wfe=True), inputs)
+
+    def test_window_beyond_full_band_fails_at_build(self):
+        with pytest.raises(ValueError, match="undersampled"):
+            build_nircam(
+                _config(16, 2, focal_mask=True, mask_extent_lod=2.0 * NPUP),
+                _masked_inputs(),
+            )
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"lyot_amplitude": jnp.ones((NPUP, NPUP + 1))},
+            {"si_opd_nm": jnp.zeros((NPUP - 1, NPUP)), "si_wavelength_nm": 1.0},
+            {"si_opd_nm": jnp.zeros((NPUP, NPUP))},
+        ],
+    )
+    def test_inputs_reject_bad_post_mask_arrays(self, kwargs):
+        with pytest.raises(ValueError):
+            _inputs(**kwargs)
+
+
+class TestMaskedStructure:
+    def test_stage_order_and_taps(self):
+        opd = _asymmetric_opd_nm(NPUP)
+        inputs = _masked_inputs(opd_nm=opd, si_opd_nm=_exit_si_opd_nm(NPUP))
+        config = _config(
+            16, 2, ote_opd=True, focal_mask=True, lyot_stop=True, si_wfe=True
+        )
+        path, field = build_nircam(config, inputs)
+        assert [stage.name for stage in path.stages] == [
+            "entrance_pupil",
+            "ote_opd",
+            "inversion",
+            "focal_mask",
+            "lyot_stop",
+            "si_wfe",
+            "science_focal",
+        ]
+        taps = ("entrance_pupil", "inversion", "focal_mask", "lyot_stop", "si_wfe")
+        out, tapped = path.propagate(field, taps=taps)
+        assert all(tapped[name].plane is PlaneKind.PUPIL for name in taps)
+        mask_plane = mask_plane_field(path, tapped)
+        assert mask_plane.plane is PlaneKind.FOCAL
+        assert mask_plane.data.shape == (NPUP * 4, NPUP * 4)
+        assert mask_plane.grid.dx == pytest.approx(0.25, rel=1e-15)
+        assert out.data.shape == (32, 32)
+
+    def test_mask_plane_tap_needs_the_pre_mask_field(self):
+        path, field = build_nircam(_config(16, 2, focal_mask=True), _masked_inputs())
+        _, tapped = path.propagate(field, taps=("focal_mask",))
+        with pytest.raises(ValueError, match="inversion"):
+            mask_plane_field(path, tapped)
+
+
+class TestUnityMask:
+    @pytest.mark.parametrize("extent_lod", [None, 24.0, 8.0])
+    @pytest.mark.parametrize(("det_npix", "oversample"), GRIDS)
+    def test_unity_mask_is_the_identity(self, extent_lod, det_npix, oversample):
+        """A unity focal mask returns the unperturbed pupil field on any
+        mask-plane window, including a small stamp (8 lambda/D): the image
+        equals the same path without a focal mask, Lyot stop on, OPD and an
+        off-axis source present."""
+        opd = _asymmetric_opd_nm(NPUP)
+        source = (0.21, -0.13)
+        inputs = _masked_inputs(mask=_UniformMask(1.0), opd_nm=opd)
+        common = {"source": source, "ote_opd": True, "lyot_stop": True}
+        masked, taps = _propagate(
+            _config(
+                det_npix,
+                oversample,
+                focal_mask=True,
+                mask_oversample=2,
+                mask_extent_lod=extent_lod,
+                **common,
+            ),
+            inputs,
+            taps=("inversion", "focal_mask"),
+        )
+        reference, _ = _propagate(_config(det_npix, oversample, **common), inputs)
+        np.testing.assert_allclose(
+            np.asarray(taps["focal_mask"].data),
+            np.asarray(taps["inversion"].data),
+            rtol=0,
+            atol=FLOOR * np.abs(np.asarray(taps["inversion"].data)).max(),
+        )
+        ref = np.asarray(reference.data)
+        np.testing.assert_allclose(
+            np.asarray(masked.data), ref, rtol=0, atol=FLOOR * np.abs(ref).max()
+        )
+
+
+class TestKnownAttenuation:
+    @pytest.mark.parametrize("mask_oversample", [2, 3])
+    def test_half_amplitude_mask_passes_a_quarter_of_the_energy(self, mask_oversample):
+        """A uniform 0.5 amplitude mask over the full band halves the field
+        at the Lyot plane and passes 0.25 of the entrance-pupil energy, both
+        at the Lyot plane and on a complete conjugate output grid."""
+        config = _config(
+            64,
+            1,
+            source=(0.3, -0.2),
+            focal_mask=True,
+            mask_oversample=mask_oversample,
+            scale=_scale_for_pitch(1, 1.0),
+        )
+        out, taps = _propagate(
+            config,
+            _masked_inputs(mask=_UniformMask(0.5)),
+            taps=("inversion", "focal_mask"),
+        )
+        pre = np.asarray(taps["inversion"].data)
+        post = np.asarray(taps["focal_mask"].data)
+        np.testing.assert_allclose(
+            post, 0.5 * pre, rtol=0, atol=FLOOR * np.abs(pre).max()
+        )
+        assert float(taps["focal_mask"].energy()) == pytest.approx(0.25, abs=1e-12)
+        mask_plane = mask_plane_field(
+            build_nircam(config, _masked_inputs(mask=_UniformMask(0.5)))[0], taps
+        )
+        assert float(mask_plane.energy()) == pytest.approx(0.25, abs=1e-12)
+        focal_energy = np.sum(np.abs(np.asarray(out.data)) ** 2) * out.grid.weights
+        assert focal_energy == pytest.approx(0.25, abs=1e-10)
+
+
+class TestMaskSupport:
+    def test_result_is_window_independent_once_the_support_is_inside(self):
+        """With the occulter's perturbation (M - 1) supported within 0.6
+        arcsec (5.6 lambda/D), every mask-plane window that contains it gives
+        the full-band result; a window that cuts it (+-4 lambda/D) does not."""
+
+        def image(extent):
+            config = _config(
+                16,
+                2,
+                source=(0.05, 0.02),
+                focal_mask=True,
+                lyot_stop=True,
+                mask_oversample=2,
+                mask_extent_lod=extent,
+            )
+            return _image(config, _masked_inputs())
+
+        full = image(None)
+        for extent in (16.0, 24.0, 32.0):
+            np.testing.assert_allclose(
+                image(extent), full, rtol=0, atol=FLOOR * full.max()
+            )
+        assert np.abs(image(8.0) - full).max() > 1e-3 * full.max()
+
+
+class TestMaskedIndependentFourierSum:
+    @pytest.mark.parametrize(("det_npix", "oversample"), GRIDS)
+    def test_complex_field_matches_physical_unit_dft(self, det_npix, oversample):
+        """Complex output field of the full coronagraphic path against direct
+        sums in meters and radians: pins the mask pitch, extent, arcsec scale
+        and orientation, Babinet == direct propagation on the full band, the
+        Lyot and SI arrays in the exit-pupil frame, the SI support and the
+        post-mask OPD sign."""
+        amp = _asymmetric_pupil(NPUP)
+        opd = _asymmetric_opd_nm(NPUP)
+        lyot = _exit_lyot(NPUP)
+        si_opd = _exit_si_opd_nm(NPUP)
+        support = _exit_support(NPUP)
+        source = (0.37, -0.21)
+        center = (0.12, -0.08)
+        mask = _occulter(center_arcsec=center, regions=BOX_REGION)
+        inputs = _masked_inputs(
+            mask=mask, opd_nm=opd, si_opd_nm=si_opd, support=support
+        )
+        config = _config(
+            det_npix,
+            oversample,
+            source=source,
+            ote_opd=True,
+            focal_mask=True,
+            lyot_stop=True,
+            si_wfe=True,
+            mask_oversample=2,
+        )
+        out, _ = _propagate(config, inputs)
+        expected = _expected_masked_field(
+            amp,
+            opd,
+            lyot,
+            si_opd,
+            support,
+            lambda x, y: _reference_mask(x, y, center=center, regions=BOX_REGION),
+            2,
+            det_npix,
+            oversample,
+            source,
+            PIXEL_SCALE_ARCSEC,
+        )
+        diff = np.abs(np.asarray(out.data) - expected).max()
+        assert diff <= FLOOR * np.abs(expected).max()
+
+
+class TestMaskDisplacement:
+    def test_image_is_mask_intensity_times_unmasked_image(self):
+        """Without a Lyot stop, with a square-DFT mask-plane window (full band
+        at one sample per lambda/D, where F and B are exact inverses on both
+        sides) and the output samples on the mask-plane samples, the image is
+        |M|^2 times the unmasked image at every sample: an off-center occulter
+        with an asymmetric region is imaged where the mask prescription puts
+        it, x right and y up, in arcsec, as an amplitude (not intensity)
+        transmission. Even output parity (32 samples)."""
+        center = (0.3, -0.2)
+        mask = _occulter(center_arcsec=center, regions=BOX_REGION)
+        scale = _scale_for_pitch(2, 1.0)
+        source = (0.15, -0.1)
+        base = {"source": source, "scale": scale, "mask_oversample": 1}
+        masked = _image(
+            _config(16, 2, focal_mask=True, **base), _masked_inputs(mask=mask)
+        )
+        unmasked = _image(_config(16, 2, **base), _masked_inputs(mask=mask))
+        theta = (np.arange(32) - 15.5) * LOD_ARCSEC
+        m = _reference_mask(
+            theta[np.newaxis, :],
+            theta[:, np.newaxis],
+            center=center,
+            regions=BOX_REGION,
+        )
+        np.testing.assert_allclose(
+            masked, m**2 * unmasked, rtol=0, atol=FLOOR * unmasked.max()
+        )
+        assert m.min() < 0.1  # the occulter core lies inside the output field
+        assert np.any(m == 0.3)  # and so does part of the box region
+
+    @pytest.mark.parametrize(("det_npix", "oversample"), GRIDS)
+    def test_source_shift_equals_opposite_mask_shift(self, det_npix, oversample):
+        """Moving the source by s under a fixed occulter gives the image of a
+        centered source with the occulter moved by -s, shifted by +s: here
+        s = (+3, -2) samples, with the Lyot stop in, so the occulted image
+        moves consistently and with the correct sign."""
+        pitch = 0.5
+        scale = _scale_for_pitch(oversample, pitch)
+        step = pitch * LOD_ARCSEC
+        s = (3 * step, -2 * step)
+        base = {
+            "scale": scale,
+            "focal_mask": True,
+            "lyot_stop": True,
+            "mask_oversample": 2,
+        }
+        moved_source = _image(
+            _config(det_npix, oversample, source=s, **base), _masked_inputs()
+        )
+        moved_mask = _image(
+            _config(det_npix, oversample, **base),
+            _masked_inputs(mask=_occulter(center_arcsec=(-s[0], -s[1]))),
+        )
+        n = moved_source.shape[0]
+        np.testing.assert_allclose(
+            moved_source[: n - 2, 3:],
+            moved_mask[2:, : n - 3],
+            rtol=0,
+            atol=FLOOR * moved_source.max(),
+        )
+
+
+class TestPrePostMaskOPD:
+    def _pair(self, mask, det_npix=16, oversample=2, scale=None):
+        opd = _asymmetric_opd_nm(NPUP)
+        common = {
+            "focal_mask": True,
+            "lyot_stop": True,
+            "mask_oversample": 2,
+            "scale": scale,
+        }
+        pre, _ = _propagate(
+            _config(det_npix, oversample, ote_opd=True, **common),
+            _masked_inputs(mask=mask, opd_nm=opd),
+        )
+        post, _ = _propagate(
+            _config(det_npix, oversample, si_wfe=True, **common),
+            _masked_inputs(
+                mask=mask, si_opd_nm=opd[::-1, :], support=np.ones((NPUP, NPUP))
+            ),
+        )
+        none, _ = _propagate(
+            _config(det_npix, oversample, **common), _masked_inputs(mask=mask)
+        )
+        return np.asarray(pre.data), np.asarray(post.data), np.asarray(none.data)
+
+    def test_same_opd_either_side_of_a_unity_mask_is_identical(self):
+        """The same physical OPD (reflected into the exit frame) placed
+        before or after a unity focal mask gives the same complex field."""
+        pre, post, _ = self._pair(_UniformMask(1.0))
+        np.testing.assert_allclose(post, pre, rtol=0, atol=FLOOR * np.abs(pre).max())
+
+    def test_pre_and_post_mask_opd_differ_with_an_occulter(self):
+        """With the occulter in, the pre-mask OPD scatters light past it and
+        the post-mask OPD only reshapes what the stop passes: the images
+        differ, and on a complete output grid the post-mask OPD leaves the
+        transmitted energy unchanged (floor 1e-10) while the pre-mask OPD
+        changes it (measured 1e-2 here; bound 1e-3)."""
+        pre, post, _ = self._pair(_occulter())
+        pre_i, post_i = np.abs(pre) ** 2, np.abs(post) ** 2
+        assert np.abs(pre_i - post_i).max() > 0.05 * pre_i.max()
+        pre, post, none = self._pair(
+            _occulter(), det_npix=64, oversample=1, scale=_scale_for_pitch(1, 1.0)
+        )
+        e_pre, e_post, e_none = (np.sum(np.abs(f) ** 2) for f in (pre, post, none))
+        assert e_post == pytest.approx(e_none, rel=1e-10)
+        assert abs(e_pre - e_none) > 1e-3 * e_none
+
+
+class TestRoundMaskProfile:
+    def test_profile_center_clip_regions_and_shift(self):
+        center = (0.4, -0.3)
+        regions = ((None, None, 0.5, None, 0.0), (-0.2, 0.2, 0.4, 0.6, 0.5))
+        mask = _occulter(center_arcsec=center, regions=regions)
+        x = np.array([0.4, 0.4 + 0.1, 0.4 + 5.0, 0.4, 0.4, 0.4, 0.4 + 0.3])
+        y = np.array(
+            [-0.3, -0.3, -0.3, -0.3 + 0.55, -0.3 + 0.7, -0.3 + 0.5, -0.3 + 0.1]
+        )
+        got = mask.transmission(x, y)
+        want = _reference_mask(x, y, center=center, regions=regions)
+        np.testing.assert_allclose(got, want, rtol=0, atol=1e-15)
+        assert got[0] == 0.0  # exactly on the (shifted) center
+        assert got[2] == 1.0  # beyond the clip radius
+        assert got[3] == 0.5  # later region overrides the earlier one
+        assert got[4] == 0.0  # inside the half-plane region only
+        assert got[5] == pytest.approx(want[5])  # boundary is open: not in region
+
+    def test_default_clip_is_the_second_zero_of_j1(self):
+        assert _occulter().clip == pytest.approx(J1_ZERO2, rel=1e-15)
+
+
+# --- Reader: focal mask, Lyot stop and SI WFE from the bundle ---------------
+
+
+def _write_header_array(path, data, cards, extensions=()):
+    hdu = fits.PrimaryHDU(np.asarray(data, dtype=float))
+    for key, value in cards.items():
+        hdu.header[key] = value
+    hdus = [hdu]
+    for name, ext_data, ext_cards in extensions:
+        ext = fits.ImageHDU(np.asarray(ext_data, dtype=float), name=name)
+        for key, value in ext_cards.items():
+            ext.header[key] = value
+        hdus.append(ext)
+    fits.HDUList(hdus).writeto(path)
+    return _sha256(path)
+
+
+def _pupil_cards(npix, *, content, bunit, plane):
+    return {
+        "CONTENT": content,
+        "BUNIT": bunit,
+        "PLANE": plane,
+        "PIXSCALE": DIAMETER_M / npix,
+        "PIXUNIT": "m/pix",
+        "NPIX": npix,
+        "CENTERX": (npix - 1) / 2,
+        "CENTERY": (npix - 1) / 2,
+        "PHASECNV": "exp(+i*2*pi*OPD/lambda)",
+    }
+
+
+MASK_NPIX = 64
+MASK_PIXSCALE = 0.05
+
+
+def _sampled_mask():
+    theta = (np.arange(MASK_NPIX) - MASK_NPIX / 2) * MASK_PIXSCALE
+    return _reference_mask(
+        theta[np.newaxis, :], theta[:, np.newaxis], regions=BOX_REGION
+    )
+
+
+def _write_masked_bundle(directory, *, si_opd_m=None, sampled_mask=None):
+    amp = _asymmetric_pupil(NPUP)
+    _write_bundle(directory, amp, _asymmetric_opd_nm(NPUP) * NM_TO_M)
+    manifest = json.loads((directory / "manifest.json").read_text())
+    files = manifest["bundle_files"]
+    files["lyot_stop"] = {
+        "file": "lyot_stop.fits",
+        "sha256": _write_header_array(
+            directory / "lyot_stop.fits",
+            _exit_lyot(NPUP),
+            _pupil_cards(
+                NPUP, content="amplitude_transmission", bunit="", plane="lyot_pupil"
+            ),
+        ),
+    }
+    si_cards = _pupil_cards(
+        NPUP, content="opd", bunit="m", plane="exit_pupil_post_lyot"
+    )
+    si_cards["WAVELEN"] = WAVELENGTH_NM * NM_TO_M
+    files["si_wfe_opd"] = {
+        "file": "si_wfe_opd.fits",
+        "sha256": _write_header_array(
+            directory / "si_wfe_opd.fits",
+            _exit_si_opd_nm(NPUP) * NM_TO_M if si_opd_m is None else si_opd_m,
+            si_cards,
+            extensions=(
+                ("SUPPORT", _exit_support(NPUP), {"CONTENT": "amplitude_transmission"}),
+            ),
+        ),
+    }
+    mask_cards = {
+        "CONTENT": "amplitude_transmission",
+        "BUNIT": "",
+        "PLANE": "image_plane",
+        "PIXSCALE": MASK_PIXSCALE,
+        "PIXUNIT": "arcsec/pix",
+        "NPIX": MASK_NPIX,
+        "CENTERX": MASK_NPIX / 2,
+        "CENTERY": MASK_NPIX / 2,
+        "SIGMA": CORE_SIGMA,
+        "J1ZERO2": J1_ZERO2,
+    }
+    files["focal_mask"] = {
+        "file": "focal_mask.fits",
+        "sha256": _write_header_array(
+            directory / "focal_mask.fits",
+            _sampled_mask() if sampled_mask is None else sampled_mask,
+            mask_cards,
+        ),
+        "analytic": {
+            "kind": "nircamcircular",
+            "sigma_per_arcsec": CORE_SIGMA,
+            "j1_zero2": J1_ZERO2,
+            "regions_in_application_order": [
+                {
+                    "name": "box",
+                    "x_range": [0.1, 0.5],
+                    "y_range": [0.2, None],
+                    "amplitude": 0.3,
+                }
+            ],
+            "shift_x": None,
+            "shift_y": None,
+            "rotation": None,
+        },
+    }
+    (directory / "manifest.json").write_text(json.dumps(manifest))
+    return directory
+
+
+class TestFromBundleMasked:
+    def test_reads_mask_lyot_and_si(self, tmp_path):
+        inputs = NIRCamInputs.from_bundle(_write_masked_bundle(tmp_path))
+        np.testing.assert_array_equal(
+            np.asarray(inputs.lyot_amplitude), _exit_lyot(NPUP)
+        )
+        np.testing.assert_allclose(
+            np.asarray(inputs.si_opd_nm), -_exit_si_opd_nm(NPUP), rtol=1e-14, atol=1e-12
+        )
+        np.testing.assert_array_equal(
+            np.asarray(inputs.si_support), _exit_support(NPUP)
+        )
+        assert inputs.si_wavelength_nm == pytest.approx(WAVELENGTH_NM, rel=1e-15)
+        mask = inputs.focal_mask
+        assert mask.sigma_per_arcsec == CORE_SIGMA
+        assert mask.clip == J1_ZERO2
+        assert mask.regions == BOX_REGION
+        assert mask.center_arcsec == (0.0, 0.0)
+        check = inputs.provenance["focal_mask_check"]
+        assert check["max_abs_diff_analytic_vs_sampled"] <= 1e-14
+
+    def test_sampled_mask_that_disagrees_with_analytic_fails(self, tmp_path):
+        sampled = _sampled_mask()
+        sampled[10, 12] += 1e-6
+        with pytest.raises(ValueError, match="analytic"):
+            NIRCamInputs.from_bundle(
+                _write_masked_bundle(tmp_path, sampled_mask=sampled)
+            )
+
+    def test_stpsf_si_ramp_moves_image_toward_minus_x_and_minus_y(self, tmp_path):
+        """STPSF's SI OPD sits after the inversion: a positive STPSF OPD ramp
+        of +2 samples toward +x and +3 toward +y (exit frame, meters) moves
+        the image by -2 columns and -3 rows. Pins the SI sign reversal, the
+        m -> nm factor and the absence of a reflection after the mask."""
+        step_rad = PIXEL_SCALE_ARCSEC / 2 * ARCSEC_TO_RAD
+        x_m = _pupil_coords(NPUP) * DIAMETER_M
+        xx, yy = np.meshgrid(x_m, x_m)
+        ramp_m = 2 * step_rad * xx + 3 * step_rad * yy
+        inputs = NIRCamInputs.from_bundle(
+            _write_masked_bundle(tmp_path, si_opd_m=ramp_m)
+        )
+        flat_inputs = eqx.tree_at(
+            lambda i: i.si_opd_nm, inputs, jnp.zeros_like(inputs.si_opd_nm)
+        )
+        flat_inputs = eqx.tree_at(
+            lambda i: i.si_support, flat_inputs, jnp.ones_like(inputs.si_support)
+        )
+        ones_inputs = eqx.tree_at(
+            lambda i: i.si_support, inputs, jnp.ones_like(inputs.si_support)
+        )
+        config = _config(16, 2, si_wfe=True)
+        flat = _image(config, flat_inputs)
+        tilted = _image(config, ones_inputs)
+        n = flat.shape[0]
+        np.testing.assert_allclose(
+            tilted[: n - 3, : n - 2], flat[3:, 2:], rtol=0, atol=FLOOR * flat.max()
+        )

@@ -1,5 +1,17 @@
 """Instrument-specific optical-path builders."""
 
-from physicaloptix.instruments.nircam import NIRCamConfig, NIRCamInputs, build_nircam
+from physicaloptix.instruments.nircam import (
+    BandLimitedRoundMask,
+    NIRCamConfig,
+    NIRCamInputs,
+    build_nircam,
+    mask_plane_field,
+)
 
-__all__ = ["NIRCamConfig", "NIRCamInputs", "build_nircam"]
+__all__ = [
+    "BandLimitedRoundMask",
+    "NIRCamConfig",
+    "NIRCamInputs",
+    "build_nircam",
+    "mask_plane_field",
+]

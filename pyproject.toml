@@ -16,7 +16,11 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: Astronomy",
 ]
+# astropy (FITS) is a direct import of instruments.nircam's prescription-bundle
+# reader, and scipy (scipy.special.j1) of its round band-limited mask; both
+# were only transitive (optixstuff, jax) before and are declared here.
 dependencies = [
+    "astropy",
     "equinox>=0.12.0",
     "hwoutils",
     "pyyaml",
@@ -25,6 +29,7 @@ dependencies = [
     "jaxtyping",
     "numpy",
     "optixstuff>=3.0.0",
+    "scipy",
 ]
 
 [project.optional-dependencies]
