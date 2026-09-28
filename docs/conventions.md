@@ -92,6 +92,18 @@ with any external code or transcribing any formula.
   entrance pupil (the physical two-transform relay inverts it); formulas
   imported from treatments that carry the physical inversion must be
   re-expressed in upright coordinates.
+- **The one explicit exception: `CoordinateInversion`.** The transforms never
+  flip parity, but a path may contain an explicit reflection stage.
+  `physicaloptix.instruments.nircam.CoordinateInversion` reverses the field
+  along one axis about the optical axis (lossless on the symmetric grid), and
+  the NIRCam builder places it after the entrance pupil and the telescope
+  OPD, to reproduce the coordinate inversion in y that the reference code
+  (STPSF) puts after the telescope. Planes downstream of it (the mask plane,
+  the Lyot stop, the exit-pupil wavefront error, the detector) are in the
+  entrance frame with y reversed, and their arrays must be given in that
+  frame. The inversion is a named stage, visible in taps; nothing else in
+  the library reflects a plane.
+  See [Instrument builders](instruments.md).
 - **Rows are y, ascending upward.** `data` is `(y, x)` with both axes sampled
   on the same ascending coordinates, so row 0 sits at $y = -\mathrm{extent}$.
   Display with `origin="lower"`; matplotlib's default renders every image
