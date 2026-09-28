@@ -27,6 +27,15 @@ leakage source (the 0.01 arcsec pointing cases and the SI-only case take the
 centered bound, the OTE-only case the OTE + SI bound): coverage by analogy.
 DET_SAMP bounds follow from ``max|d_det| <= 16 max|d_over|``.
 
+The masked checks are regression gates whose containment holds by
+construction, not independent evidence of agreement: the cross-code residual
+is the same mask-plane sampling difference the bound is built from, so each
+bound contains it to first order (the triangle inequality on the two
+envelopes). The tightest case, c-mask335r at (+1.0, +0.5) at 3350 nm
+(``peak_rel``, measured at 0.95 of its bound), is that first-order
+containment, not a near failure; it is also the case most sensitive to any
+numerical drift.
+
 Negative controls: the entrance pupil flipped top to bottom, the source
 displaced by half an OVERSAMP sample and the mask attenuation applied twice
 (amplitude transmission squared) must each exceed a bound. The reserved band
@@ -47,8 +56,8 @@ from physicaloptix.instruments import (
     NIRCamConfig,
     NIRCamInputs,
     build_nircam,
+    integrate_detector_pixels,
     nircam_band_image,
-    pixel_integrate,
 )
 
 fits = pytest.importorskip("astropy.io.fits")
@@ -216,7 +225,7 @@ def test_monochromatic_case(bench, stage, source, bound, record_case):
     )
     config = _config(bench, stage, source)
     po = _mono_image(config, bench["inputs"])
-    det = np.asarray(pixel_integrate(po, config.oversample))
+    det = np.asarray(integrate_detector_pixels(po, config.oversample))
     _check(
         f"{_case_id(stage, source)} (3350 nm)",
         po,
@@ -242,7 +251,7 @@ def test_f335m_band_case(bench, stage, source, bound, record_case):
     )
     config = _config(bench, stage, source)
     po = np.asarray(nircam_band_image(config, bench["inputs"], bench["band"]))
-    det = np.asarray(pixel_integrate(po, config.oversample))
+    det = np.asarray(integrate_detector_pixels(po, config.oversample))
     _check(
         f"{_case_id(stage, source)} (F335M, {BAND_NODES} nodes)",
         po,

@@ -71,10 +71,11 @@ mask and Lyot losses are kept.
 Band and pixels: ``nircam_band_image`` propagates each wavelength node of a
 ``NIRCamBand`` independently (its own lambda/D scale, OPD phase, source tilt,
 mask sampling and SI OPD) onto the one angular output grid set by the pixel
-scale, and sums the photon-weighted energy images. ``pixel_integrate`` then
-integrates detector pixels once, by summing the ``oversample x oversample``
-samples inside each pixel (the composite midpoint rule, STPSF's ``DET_SAMP``
-rule); no further pixel kernel may be applied afterwards.
+scale, and sums the photon-weighted energy images.
+``integrate_detector_pixels`` then integrates detector pixels once, by summing
+the ``oversample x oversample`` samples inside each pixel (the composite
+midpoint rule, STPSF's ``DET_SAMP`` rule); no further pixel kernel may be
+applied afterwards.
 
 Taps: ``OpticalPath.propagate(field, taps=...)`` records any stage output by
 name (``entrance_pupil``, ``ote_opd``, ``inversion``, ``focal_mask`` = the
@@ -92,6 +93,7 @@ from pathlib import Path
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.constants import m2nm
 from hwoutils.conversions import arcsec_to_lambda_d, lambda_d_to_arcsec
 from hwoutils.transforms import downsample_psf
 from jaxtyping import Array
@@ -103,7 +105,6 @@ from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.sources import point_source
 from physicaloptix.transforms import Fraunhofer
 
-M_TO_NM = 1e9
 STPSF_PHASOR = "exp(+i*2*pi*OPD/lambda)"
 # Second positive zero of the Bessel function J1: the round band-limited
 # profile is truncated there, after its first sidelobe, to match the hardware.
@@ -561,7 +562,7 @@ class NIRCamInputs(eqx.Module):
         opd_nm = None
         if "ote_opd" in entries:
             opd_m, _, _ = read_pupil_grid("ote_opd", content="opd", bunit="m")
-            opd_nm = jnp.asarray(-M_TO_NM * opd_m)
+            opd_nm = jnp.asarray(-m2nm * opd_m)
 
         lyot = None
         if "lyot_stop" in entries:
@@ -589,9 +590,9 @@ class NIRCamInputs(eqx.Module):
                 )
             if "WAVELEN" not in si_header:
                 raise ValueError("si_wfe_opd: header WAVELEN [m] is missing")
-            si_opd_nm = jnp.asarray(-M_TO_NM * si_m)
+            si_opd_nm = jnp.asarray(-m2nm * si_m)
             si_support = jnp.asarray(support)
-            si_wavelength_nm = float(si_header["WAVELEN"]) * M_TO_NM
+            si_wavelength_nm = float(si_header["WAVELEN"]) * m2nm
 
         focal_mask = None
         mask_check = None
@@ -1021,11 +1022,11 @@ class NIRCamBand(eqx.Module):
                         f"{entry['file']} {extname}: header WAVE{k} = {found} "
                         f"does not match node {k} at {wavelength_m} m"
                     )
-            si_opd_nm = jnp.asarray(-M_TO_NM * cube_m)
+            si_opd_nm = jnp.asarray(-m2nm * cube_m)
             provenance["si_wfe_opd_extension"] = extname
             provenance["si_wfe_opd_sha256"] = digest
         return cls(
-            wavelengths_nm=[w * M_TO_NM for w in wavelengths_m],
+            wavelengths_nm=[w * m2nm for w in wavelengths_m],
             weights=node_set["weights"],
             si_opd_nm=si_opd_nm,
             provenance=provenance,
@@ -1073,7 +1074,7 @@ def nircam_band_image(config, inputs, band):
     return total
 
 
-def pixel_integrate(image, oversample):
+def integrate_detector_pixels(image, oversample):
     """Integrate an oversampled energy image over detector pixels, once.
 
     Each detector pixel is the sum of its ``oversample x oversample``
@@ -1082,6 +1083,12 @@ def pixel_integrate(image, oversample):
     the pixel integral (error falling as ``oversample**-2``) and STPSF's
     ``DET_SAMP`` rule. The result is the integrated detector image; applying
     another pixel kernel afterwards would integrate twice.
+
+    This is a block SUM of energies, not a mean. It differs from
+    ``physicaloptix.ifs.pixel_integrate(intensity, n_quad, stride)``, which
+    returns the window MEAN of an intensity (the pixel-averaged value): for a
+    square image, ``integrate_detector_pixels(image, q)`` equals
+    ``q**2 * ifs.pixel_integrate(image, q, q)``.
 
     Args:
         image: Square energy image, ``(n, n)`` with ``n`` a multiple of

@@ -6,9 +6,9 @@ from physicaloptix.instruments.nircam import (
     NIRCamConfig,
     NIRCamInputs,
     build_nircam,
+    integrate_detector_pixels,
     mask_plane_field,
     nircam_band_image,
-    pixel_integrate,
 )
 
 __all__ = [
@@ -17,7 +17,7 @@ __all__ = [
     "NIRCamConfig",
     "NIRCamInputs",
     "build_nircam",
+    "integrate_detector_pixels",
     "mask_plane_field",
     "nircam_band_image",
-    "pixel_integrate",
 ]

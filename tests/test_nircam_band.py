@@ -32,13 +32,14 @@ import numpy as np
 import pytest
 from astropy.io import fits
 
+from physicaloptix.ifs import pixel_integrate as ifs_pixel_integrate
 from physicaloptix.instruments import (
     NIRCamBand,
     NIRCamConfig,
     NIRCamInputs,
     build_nircam,
+    integrate_detector_pixels,
     nircam_band_image,
-    pixel_integrate,
 )
 
 ARCSEC_TO_RAD = np.pi / (180.0 * 3600.0)
@@ -358,7 +359,7 @@ class TestPixelIntegration:
             ote_opd=True,
         )
         image = _fraction_image(config, _inputs(opd_nm=_asymmetric_opd_nm()))
-        pixels = np.asarray(pixel_integrate(image, oversample))
+        pixels = np.asarray(integrate_detector_pixels(image, oversample))
         np.testing.assert_allclose(pixels.sum(), image.sum(), rtol=1e-14)
         return pixels
 
@@ -380,10 +381,23 @@ class TestPixelIntegration:
         assert np.all((orders > 1.8) & (orders < 2.2)), (errors, orders)
         assert errors[-1] < 1e-3
 
+    def test_block_sum_is_q_squared_times_the_ifs_window_mean(self):
+        """The detector rule sums energies; ``ifs.pixel_integrate`` averages
+        an intensity. On aligned, non-overlapping windows they differ by the
+        sample count per pixel exactly (to rounding)."""
+        q = 4
+        image = np.random.default_rng(3).random((12 * q, 12 * q))
+        summed = np.asarray(integrate_detector_pixels(image, q))
+        mean = np.asarray(ifs_pixel_integrate(jnp.asarray(image), q, q))
+        np.testing.assert_allclose(summed, q**2 * mean, rtol=1e-14)
+        np.testing.assert_allclose(
+            summed, image.reshape(12, q, 12, q).sum(axis=(1, 3)), rtol=1e-14
+        )
+
     @pytest.mark.parametrize(("shape", "oversample"), [((9, 9), 2), ((8, 6), 2)])
     def test_rejects_grids_that_do_not_tile_into_pixels(self, shape, oversample):
         with pytest.raises(ValueError):
-            pixel_integrate(np.ones(shape), oversample)
+            integrate_detector_pixels(np.ones(shape), oversample)
 
 
 # --- Reading the band nodes, weights and per-node SI OPDs from a bundle ----

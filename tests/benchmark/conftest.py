@@ -6,6 +6,12 @@ failure too. Without it, a missing reference skips with a reason naming the
 environment variable to set. The terminal summary always reports how many
 cases executed and lists them, so a green run that compared nothing is
 visible.
+
+Scope: this gate is local to ``tests/benchmark/``. It governs only the tests
+collected under this directory; it does NOT make the design-survey Tier B
+tests in ``tests/validation/`` required (those keep their own
+skip-when-absent behavior). A shared gate for every reference-data tier may
+replace it later.
 """
 
 import os

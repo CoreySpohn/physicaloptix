@@ -95,8 +95,10 @@ def modified_rician_pdf(intensity, ic, is_):
 def _ndtr(x):
     """Standard normal CDF, numpy in / numpy out, via jax.scipy.special.
 
-    Keeps the library scipy-free. Requires x64 (the deep-tail values these
-    laws live on underflow in float32).
+    A local choice: this module stays on jax.scipy.special and imports no
+    scipy (scipy is a runtime dependency only for the lazily imported J1 of
+    the NIRCam round mask). Requires x64 (the deep-tail values these laws live
+    on underflow in float32).
     """
     if not jax.config.jax_enable_x64:
         msg = "physicaloptix.stats tail laws need x64: call hwoutils.enable_x64() first"
