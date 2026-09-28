@@ -692,9 +692,10 @@ class TestKnownAttenuation:
 
 class TestMaskSupport:
     def test_result_is_window_independent_once_the_support_is_inside(self):
-        """With the occulter's perturbation (M - 1) supported within 0.6
-        arcsec (5.6 lambda/D), every mask-plane window that contains it gives
-        the full-band result; a window that cuts it (+-4 lambda/D) does not."""
+        """COMPACT perturbation only (a regionless occulter, (M - 1) within
+        0.6 arcsec = 5.6 lambda/D): every mask-plane window that contains it
+        gives the full-band result; a window that cuts it (+-4 lambda/D) does
+        not. Masks with extended regions are covered by the next test."""
 
         def image(extent):
             config = _config(
@@ -714,6 +715,59 @@ class TestMaskSupport:
                 image(extent), full, rtol=0, atol=FLOOR * full.max()
             )
         assert np.abs(image(8.0) - full).max() > 1e-3 * full.max()
+
+    @pytest.mark.parametrize("extent_lod", [16.0, 32.0, 48.0])
+    def test_non_compact_mask_needs_the_full_band(self, extent_lod):
+        """A mask with an opaque half-plane (y > 1 arcsec, running to the band
+        edge, like the NIRCam holder) has a non-compact (M - 1). On the full
+        band the Lyot-plane field equals the direct B[M F E] computed
+        independently, and (square DFT window, one sample per lambda/D, where
+        Parseval is exact) the returned energy equals the post-mask
+        mask-plane energy: the half-plane's light is removed. Every truncated
+        window keeps some of it."""
+        half_plane = ((None, None, 1.0, None, 0.0),)
+        mask = _occulter(regions=half_plane)
+        amp = _asymmetric_pupil(NPUP)
+        common = {"source": (0.1, 0.05), "focal_mask": True, "mask_oversample": 1}
+        inputs = _masked_inputs(mask=mask)
+
+        def lyot_field(extent):
+            _, taps = _propagate(
+                _config(16, 2, mask_extent_lod=extent, **common),
+                inputs,
+                taps=("inversion", "focal_mask"),
+            )
+            return taps
+
+        full = lyot_field(None)
+        flat = np.zeros_like(amp)
+        expected = _expected_masked_field(
+            amp,
+            flat,
+            np.ones_like(amp),
+            flat,
+            np.ones_like(amp),
+            lambda x, y: _reference_mask(x, y, regions=half_plane),
+            1,
+            NPUP,
+            1,
+            common["source"],
+            LOD_ARCSEC,
+        )
+        # Detector samples on a complete conjugate grid (1 lambda/D, npup
+        # samples): the direct-form reference is compared through them.
+        out, _ = _propagate(_config(NPUP, 1, scale=LOD_ARCSEC, **common), inputs)
+        np.testing.assert_allclose(
+            np.asarray(out.data), expected, rtol=0, atol=FLOOR * np.abs(expected).max()
+        )
+        path, _ = build_nircam(_config(16, 2, **common), inputs)
+        post_mask_energy = float(mask_plane_field(path, full).energy())
+        assert float(full["focal_mask"].energy()) == pytest.approx(
+            post_mask_energy, rel=1e-12
+        )
+        truncated = lyot_field(extent_lod)
+        e_full = float(full["focal_mask"].energy())
+        assert float(truncated["focal_mask"].energy()) > e_full * (1 + 1e-3)
 
 
 class TestMaskedIndependentFourierSum:

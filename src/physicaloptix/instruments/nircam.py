@@ -21,12 +21,19 @@ carried to a mask-plane window by the continuous-FT MFT, and the field
 returned to the Lyot plane is ``E + B[(M - 1) F E]`` (a Babinet form), with
 ``F`` / ``B`` the MFT pair and ``M`` the amplitude transmission sampled on the
 window. The unperturbed field ``E`` is carried through exactly on any window,
-so a window that holds the mask perturbation's support loses nothing; only
-``(M - 1)`` outside the window is dropped. The default window is the pupil
-raster's full Nyquist band (``npup`` lambda/D wide, ``npup *
-mask_oversample`` samples), on which ``B F`` is the identity to roundoff and
-the Babinet form equals the direct propagation ``B[M F E]``: every part of the
-mask the sampled pupil can resolve is applied.
+and only ``(M - 1)`` outside the window is dropped: a window that contains a
+compactly supported perturbation loses nothing. The NIRCam round masks are NOT
+compactly supported: besides the occulting core, the holder edge (opaque for
+y > 10 arcsec) and the glass edge (a strip at -13 < y < -11.5 arcsec, all x)
+run to the edge of any band, so every window narrower than the full band drops
+part of the mask. The default window is therefore the pupil raster's full
+Nyquist band (``npup`` lambda/D wide, ``npup * mask_oversample`` samples): it
+is the raster's information limit (a sampled pupil's far field is periodic
+beyond it) and the band a padded-FFT propagation of the same raster covers. On
+it ``B F`` is the identity to roundoff and the Babinet form equals the direct
+propagation ``B[M F E]``: every part of the mask the sampled pupil can resolve
+is applied. Narrower windows (``mask_extent_lod``) are for convergence
+studies, not for masks with extended regions.
 
 Frames and signs:
 
@@ -217,9 +224,12 @@ class FocalPlaneMask(eqx.Module):
     ``__call__`` returns ``E + B[(M - 1) F E]``: ``F`` / ``B`` are the
     continuous-FT MFT pair between the pupil grid and the mask-plane window
     (``transform``), ``M`` the amplitude transmission sampled on the window.
-    The unperturbed field passes through exactly on any window; on the full
-    Nyquist band of the pupil raster (window of ``npup`` lambda/D) ``B F`` is
-    the identity and the result equals ``B[M F E]``. A composite pupil-to-pupil
+    The unperturbed field passes through exactly on any window, and only
+    ``(M - 1)`` outside the window is dropped, so a narrower window is exact
+    only for a compactly supported perturbation (not for masks with extended
+    regions such as a holder half-plane). On the full Nyquist band of the
+    pupil raster (window of ``npup`` lambda/D) ``B F`` is the identity and the
+    result equals ``B[M F E]``. A composite pupil-to-pupil
     stage, so it carries ``plane_in`` / ``plane_out`` like a propagator.
 
     Attributes:
@@ -297,7 +307,8 @@ class NIRCamConfig(eqx.Module):
         mask_oversample: Mask-plane samples per lambda/D (D = the pupil array
             side), i.e. a pitch of ``1 / mask_oversample`` lambda/D.
         mask_extent_lod: Full width of the mask-plane window in lambda/D;
-            ``None`` is the pupil raster's full Nyquist band (``npup``).
+            ``None`` is the pupil raster's full Nyquist band (``npup``), the
+            only exact choice for masks whose ``M - 1`` is not compact.
     """
 
     wavelength_nm: float = eqx.field(static=True)
