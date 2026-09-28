@@ -68,6 +68,14 @@ later renormalization happens, so ``out.intensity() * out.grid.weights`` is
 the fraction of entrance-pupil energy per output sample and finite-field,
 mask and Lyot losses are kept.
 
+Band and pixels: ``nircam_band_image`` propagates each wavelength node of a
+``NIRCamBand`` independently (its own lambda/D scale, OPD phase, source tilt,
+mask sampling and SI OPD) onto the one angular output grid set by the pixel
+scale, and sums the photon-weighted energy images. ``pixel_integrate`` then
+integrates detector pixels once, by summing the ``oversample x oversample``
+samples inside each pixel (the composite midpoint rule, STPSF's ``DET_SAMP``
+rule); no further pixel kernel may be applied afterwards.
+
 Taps: ``OpticalPath.propagate(field, taps=...)`` records any stage output by
 name (``entrance_pupil``, ``ote_opd``, ``inversion``, ``focal_mask`` = the
 field arriving at the Lyot plane, ``lyot_stop`` = just after the Lyot stop,
@@ -76,6 +84,7 @@ the pupil-to-pupil mask stage; ``mask_plane_field(path, taps)`` computes it
 from the ``inversion`` tap.
 """
 
+import dataclasses
 import hashlib
 import json
 from pathlib import Path
@@ -84,6 +93,7 @@ import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
 from hwoutils.conversions import arcsec_to_lambda_d, lambda_d_to_arcsec
+from hwoutils.transforms import downsample_psf
 from jaxtyping import Array
 
 from physicaloptix.core import Field, Grid, PlaneKind, validate_field
@@ -854,3 +864,245 @@ def mask_plane_field(path, taps):
             "form the mask-plane field"
         )
     return ops["focal_mask"].mask_plane(taps["inversion"])
+
+
+def _node_tuple(values):
+    return tuple(float(v) for v in values)
+
+
+def _optional_array(value):
+    return None if value is None else jnp.asarray(value)
+
+
+class NIRCamBand(eqx.Module):
+    """Wavelength nodes and photon weights of a band, with per-node SI OPDs.
+
+    The weights are relative photon weights of a stated source spectrum
+    through the filter; ``nircam_band_image`` normalizes them to unit sum, so
+    the band image stays a fraction of entrance-pupil energy. They do not
+    establish absolute throughput.
+
+    Attributes:
+        wavelengths_nm: Node wavelengths in nanometers.
+        weights: Non-negative relative weight of each node.
+        si_opd_nm: Optional SI OPD at each node, ``(n_nodes, n, n)``, exit
+            frame, this library's sign convention (the SI WFE is
+            wavelength-dependent, so every node carries its own map).
+        provenance: Where the nodes came from (source spectrum, rule, hashes).
+    """
+
+    wavelengths_nm: tuple[float, ...] = eqx.field(static=True, converter=_node_tuple)
+    weights: tuple[float, ...] = eqx.field(static=True, converter=_node_tuple)
+    si_opd_nm: Array | None = eqx.field(default=None, converter=_optional_array)
+    provenance: dict = eqx.field(default_factory=dict)
+
+    def __check_init__(self):
+        """Validate node counts, wavelengths, weights and the SI cube."""
+        n_nodes = len(self.wavelengths_nm)
+        if n_nodes < 1:
+            raise ValueError("a band needs at least one wavelength node")
+        if len(self.weights) != n_nodes:
+            raise ValueError(
+                f"need one weight per node: {n_nodes} nodes, "
+                f"{len(self.weights)} weights"
+            )
+        if not all(w > 0 for w in self.wavelengths_nm):
+            raise ValueError(
+                f"node wavelengths must be positive, got {self.wavelengths_nm}"
+            )
+        if any(w < 0 for w in self.weights):
+            raise ValueError(f"node weights must not be negative, got {self.weights}")
+        if not sum(self.weights) > 0:
+            raise ValueError("node weights must have a positive sum")
+        if self.si_opd_nm is not None and (
+            self.si_opd_nm.ndim != 3 or self.si_opd_nm.shape[0] != n_nodes
+        ):
+            raise ValueError(
+                f"si_opd_nm must hold one (n, n) slice per node ({n_nodes}), "
+                f"got shape {self.si_opd_nm.shape}"
+            )
+
+    @classmethod
+    def from_bundle(cls, path, nlambda):
+        """Read one node set (and its SI OPD cube) from a prescription bundle.
+
+        Bundle layout (the manifest of ``NIRCamInputs.from_bundle`` plus)::
+
+            manifest.json  {"configuration": {
+                               "filter": "<FILTER>",
+                               "<filter>_nodes": {
+                                   "source_spectrum": ..., "rule": ...,
+                                   "sets": {"<nlambda>": {
+                                       "wavelengths_m": [...],
+                                       "weights": [...]}}}}}
+            si_wfe_opd.fits  extension ``OPD_<FILTER>_N<nlambda>``: the SI
+                             OPD cube in meters (STPSF convention), one slice
+                             per node, header ``WAVE<k>`` [m] per slice
+
+        The cube is optional (no ``si_wfe_opd`` entry gives ``si_opd_nm =
+        None``); when present, its file must match the manifest sha256 and
+        every ``WAVE<k>`` must equal the node wavelength. OPDs are converted
+        once, as in ``NIRCamInputs.from_bundle``: ``opd_nm = -1e9 * opd_m``.
+
+        Args:
+            path: The bundle directory (containing ``manifest.json``).
+            nlambda: Number of nodes of the set to read.
+
+        Returns:
+            The ``NIRCamBand`` with provenance (source spectrum, node rule,
+            cube extension and file hash).
+
+        Raises:
+            FileNotFoundError: The manifest or the SI file is missing.
+            ValueError: The node set is absent, or the cube does not match
+                its checksum, unit, shape or node wavelengths.
+        """
+        root = Path(path)
+        manifest_path = root / "manifest.json"
+        if not manifest_path.exists():
+            raise FileNotFoundError(f"no manifest.json in bundle directory {root}")
+        manifest = json.loads(manifest_path.read_text())
+        configuration = manifest.get("configuration", {})
+        filter_name = str(configuration.get("filter", ""))
+        record = configuration.get(f"{filter_name.lower()}_nodes", {})
+        sets = record.get("sets", {})
+        if str(nlambda) not in sets:
+            raise ValueError(
+                f"{manifest_path} has no {filter_name} node set for nlambda = "
+                f"{nlambda} (available: {sorted(sets)})"
+            )
+        node_set = sets[str(nlambda)]
+        wavelengths_m = [float(w) for w in node_set["wavelengths_m"]]
+        provenance = {
+            "bundle_name": manifest.get("bundle_name"),
+            "filter": filter_name,
+            "nlambda": int(nlambda),
+            "source_spectrum": record.get("source_spectrum"),
+            "rule": record.get("rule"),
+            "note": record.get("note"),
+        }
+        si_opd_nm = None
+        entry = manifest.get("bundle_files", {}).get("si_wfe_opd")
+        if entry is not None:
+            file_path = root / entry["file"]
+            if not file_path.exists():
+                raise FileNotFoundError(
+                    f"bundle file {entry['file']} listed in {manifest_path} is missing"
+                )
+            digest = hashlib.sha256(file_path.read_bytes()).hexdigest()
+            if digest != entry.get("sha256"):
+                raise ValueError(
+                    f"{entry['file']}: sha256 {digest} does not match the "
+                    f"manifest value {entry.get('sha256')}"
+                )
+            extname = f"OPD_{filter_name.upper()}_N{nlambda}"
+            fits = _fits()
+            with fits.open(file_path) as hdul:
+                if extname not in hdul:
+                    raise ValueError(f"{entry['file']}: no {extname} extension")
+                header = hdul[extname].header
+                cube_m = np.array(hdul[extname].data, dtype=float)
+            if header.get("BUNIT") != "m":
+                raise ValueError(
+                    f"{entry['file']} {extname}: header BUNIT = "
+                    f"{header.get('BUNIT')!r}, expected 'm'"
+                )
+            if cube_m.ndim != 3 or cube_m.shape[0] != len(wavelengths_m):
+                raise ValueError(
+                    f"{entry['file']} {extname}: shape {cube_m.shape} does not "
+                    f"hold {len(wavelengths_m)} node slices"
+                )
+            for k, wavelength_m in enumerate(wavelengths_m):
+                found = header.get(f"WAVE{k}")
+                if found is None or not np.isclose(
+                    float(found), wavelength_m, rtol=1e-12, atol=0
+                ):
+                    raise ValueError(
+                        f"{entry['file']} {extname}: header WAVE{k} = {found} "
+                        f"does not match node {k} at {wavelength_m} m"
+                    )
+            si_opd_nm = jnp.asarray(-M_TO_NM * cube_m)
+            provenance["si_wfe_opd_extension"] = extname
+            provenance["si_wfe_opd_sha256"] = digest
+        return cls(
+            wavelengths_nm=[w * M_TO_NM for w in wavelengths_m],
+            weights=node_set["weights"],
+            si_opd_nm=si_opd_nm,
+            provenance=provenance,
+        )
+
+
+def nircam_band_image(config, inputs, band):
+    """Photon-weighted band image, each node propagated independently.
+
+    Every node gets its own path from ``build_nircam``: ``config`` with the
+    node wavelength (so the lambda/D scale, the OPD phase, the source tilt
+    and the mask sampling all follow the node) and, when the band carries
+    SI OPDs, ``inputs`` with the node's SI OPD. All nodes land on the same
+    angular output grid (``detector_npix * oversample`` samples at
+    ``pixel_scale_arcsec / oversample``), and their energy images are summed
+    with the weights normalized to unit sum.
+
+    Args:
+        config: Everything but the wavelength, which each node replaces.
+        inputs: The prescription; its SI OPD is replaced per node when
+            ``band.si_opd_nm`` is given (otherwise an SI stage at a node
+            other than ``inputs.si_wavelength_nm`` fails at build).
+        band: The nodes and weights.
+
+    Returns:
+        The band image as a fraction of entrance-pupil energy per output
+        sample (unit-sum weights), ``(n, n)`` with ``n = detector_npix *
+        oversample``, rows y.
+    """
+    weights = np.asarray(band.weights) / np.sum(band.weights)
+    total = None
+    for k, (wavelength_nm, weight) in enumerate(
+        zip(band.wavelengths_nm, weights, strict=True)
+    ):
+        node_config = dataclasses.replace(config, wavelength_nm=wavelength_nm)
+        node_inputs = inputs
+        if band.si_opd_nm is not None:
+            node_inputs = dataclasses.replace(
+                inputs, si_opd_nm=band.si_opd_nm[k], si_wavelength_nm=wavelength_nm
+            )
+        path, field = build_nircam(node_config, node_inputs)
+        out, _ = path.propagate(field)
+        image = weight * out.intensity() * out.grid.weights
+        total = image if total is None else total + image
+    return total
+
+
+def pixel_integrate(image, oversample):
+    """Integrate an oversampled energy image over detector pixels, once.
+
+    Each detector pixel is the sum of its ``oversample x oversample``
+    samples: with samples at the sub-pixel centers and values that are
+    fractions of energy per sample, this is the composite midpoint rule for
+    the pixel integral (error falling as ``oversample**-2``) and STPSF's
+    ``DET_SAMP`` rule. The result is the integrated detector image; applying
+    another pixel kernel afterwards would integrate twice.
+
+    Args:
+        image: Square energy image, ``(n, n)`` with ``n`` a multiple of
+            ``oversample``, as returned by ``nircam_band_image`` or
+            ``out.intensity() * out.grid.weights``.
+        oversample: Samples per detector pixel along each axis.
+
+    Returns:
+        The ``(n / oversample, n / oversample)`` detector image.
+
+    Raises:
+        ValueError: The image is not square 2D or does not tile into pixels.
+    """
+    image = jnp.asarray(image)
+    if image.ndim != 2 or image.shape[0] != image.shape[1]:
+        raise ValueError(f"image must be square 2D, got shape {image.shape}")
+    if oversample < 1 or image.shape[0] % oversample:
+        raise ValueError(
+            f"a {image.shape[0]}-sample image does not tile into pixels of "
+            f"{oversample} samples"
+        )
+    n_pix = image.shape[0] // oversample
+    pixels, _ = downsample_psf(image, 1.0, (n_pix, n_pix))
+    return pixels
