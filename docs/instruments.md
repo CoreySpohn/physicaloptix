@@ -79,6 +79,16 @@ pixels = integrate_detector_pixels(energy, config.oversample)
   the entrance pupil with its y component reflected, so the image lands at
   `+position`. The focal mask is centered at its own `center_arcsec` in the
   same frame, independent of the source.
+- The output grid (x along array axis 1) is STPSF's undistorted `OVERSAMP`
+  frame, and intensities agree with it sample by sample, including the parity
+  of x-asymmetric wavefronts. As sky angles, x is along -V2 and y along +V3:
+  the V2/V3 axes with the parity of the SIAF ideal frame (`VIdlParity = -1`).
+  STPSF reaches the science ("sci", DMS) frame from it with a rotation by the
+  aperture's `V3IdlYAngle` and the SIAF distortion (`add_distortion=True`),
+  with no reflection. For the NIRCam apertures the ideal and sci axes share
+  their parity, so a science-frame image maps onto this grid without a flip.
+  The raw detector ("det") frame is a different frame: for NRCA5 its x axis
+  is reversed relative to sci (`DetSciParity = -1`).
 
 This stage is the one explicit exception to the library's rule that no plane
 in a chain is parity-flipped; see [Conventions](conventions.md).
