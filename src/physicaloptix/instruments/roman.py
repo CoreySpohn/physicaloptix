@@ -26,7 +26,11 @@ Conventions:
 """
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
+import numpy as np
+from hwoutils.map_coordinates import map_coordinates
+from jax.scipy.signal import fftconvolve
 from jaxtyping import Array
 
 from physicaloptix.core import Field, Grid, PlaneKind
@@ -48,6 +52,235 @@ def proper_trim(a, n):
     return jnp.pad(a, pad)
 
 
+def dm_surface(
+    strokes_m,
+    influence,
+    *,
+    influence_dx_m,
+    influence_pitch_m,
+    pitch_m,
+    center_act,
+    grid_npix,
+    grid_dx_m,
+    tilt_deg=(0.0, 0.0, 0.0),
+    flip_lr=False,
+):
+    """Surface map of a deformable mirror on an integer-centered wavefront grid.
+
+    Follows the prescription's DM model: actuator heights are placed on a grid
+    sampled like the influence function, convolved with it, then orthographically
+    projected onto the wavefront grid through the DM tilts and interpolated with
+    cubic convolution (Keys, ``a = -0.5``).
+
+    Sign: a positive height is a displacement of the facesheet into the DM
+    (PROPER's ``dm_z`` convention), which delays the reflected wavefront by twice
+    the height; heights measured positive away from the DM must be negated first.
+
+    ``influence_dx_m``, ``influence_pitch_m``, ``pitch_m``, ``grid_npix``,
+    ``grid_dx_m``, ``flip_lr`` and all array shapes set the computation and must
+    be concrete (static under ``jax.jit``); ``strokes_m``, ``influence``,
+    ``center_act`` and ``tilt_deg`` may be traced and differentiated.
+
+    Args:
+        strokes_m: Actuator heights in meters, ``(n_act_y, n_act_x)``; row index
+            is y.
+        influence: Influence function (unit peak for a unit actuator height), odd
+            width and height, centered.
+        influence_dx_m: Influence-function sample spacing as tabulated.
+        influence_pitch_m: Actuator pitch the tabulated function assumes, an
+            integer multiple of ``influence_dx_m``.
+        pitch_m: Actuator pitch of this DM; the influence function is scaled to it.
+        center_act: ``(x, y)`` of the optical axis in actuator units of the
+            (flipped, if ``flip_lr``) array, the first actuator center at ``(0, 0)``.
+        grid_npix: Output grid size; its center sample ``grid_npix // 2`` is the axis.
+        grid_dx_m: Output sample spacing (for a pupil of ``pupil_diam_pix``
+            samples across a beam of diameter ``D``, ``D / pupil_diam_pix``).
+        tilt_deg: Rotations of the DM surface about x, then y, then z, in degrees
+            (left-handed, origin at the axis).
+        flip_lr: Mirror the actuator array and the influence function left-right;
+            the center and the tilts stay in wavefront coordinates.
+
+    Returns:
+        Surface height in meters, ``(grid_npix, grid_npix)``.
+
+    Raises:
+        ValueError: If an array is not 2-D, the influence function has an even
+            side, its magnification is not an integer, or it is wider than the
+            nine-actuator margin of the convolution grid.
+    """
+    influence = jnp.asarray(influence, dtype=float)
+    strokes = jnp.asarray(strokes_m, dtype=float)
+    if strokes.ndim != 2 or influence.ndim != 2:
+        raise ValueError("strokes_m and influence must be 2-D arrays")
+    if influence.shape[0] % 2 == 0 or influence.shape[1] % 2 == 0:
+        raise ValueError("influence function must have odd width and height")
+    ratio = influence_pitch_m / influence_dx_m
+    mag = int(np.round(ratio))
+    if abs(ratio - mag) > 1e-6 * ratio:
+        raise ValueError(
+            f"influence_pitch_m / influence_dx_m = {ratio} must be an integer"
+        )
+    margin = 9 * mag
+    if max(influence.shape) // 2 > margin:
+        raise ValueError(
+            f"influence half-width {max(influence.shape) // 2} samples exceeds the "
+            f"{margin}-sample margin of the convolution grid"
+        )
+    if flip_lr:
+        strokes, influence = strokes[:, ::-1], influence[:, ::-1]
+    dx_inf = influence_dx_m * pitch_m / influence_pitch_m
+    ny_dm, nx_dm = strokes.shape
+    nx_grid, ny_grid = nx_dm * mag + 2 * margin, ny_dm * mag + 2 * margin
+    off = margin + mag // 2
+    fine = jnp.zeros((ny_grid, nx_grid), dtype=float)
+    fine = fine.at[off : off + ny_dm * mag : mag, off : off + nx_dm * mag : mag].set(
+        strokes
+    )
+    fine = fftconvolve(fine, influence, mode="same")
+
+    xdim = min(int(np.round(np.sqrt(2) * nx_grid * dx_inf / grid_dx_m)), grid_npix)
+    ydim = min(int(np.round(np.sqrt(2) * ny_grid * dx_inf / grid_dx_m)), grid_npix)
+    x = ((jnp.arange(xdim) - xdim // 2) * grid_dx_m)[None, :]
+    y = ((jnp.arange(ydim) - ydim // 2) * grid_dx_m)[:, None]
+    a, b, g = (jnp.deg2rad(jnp.asarray(t, dtype=float)) for t in tilt_deg)
+    ca, sa, cb, sb, cg, sg = (
+        jnp.cos(a),
+        jnp.sin(a),
+        jnp.cos(b),
+        jnp.sin(b),
+        jnp.cos(g),
+        jnp.sin(g),
+    )
+    # projections of the unit square's edges through the rotation (x, y rows)
+    m00, m01 = cb * cg, -cb * sg
+    m10, m11 = ca * sg + sa * sb * cg, ca * cg - sa * sb * sg
+    dx_dxs, dy_dxs = m00, m01
+    dx_dys, dy_dys = m10, m11
+    det = dx_dxs * dy_dys
+    xs = (x / dx_dxs - y * dx_dys / det) / (1 - dy_dxs * dx_dys / det)
+    ys = (y / dy_dys - x * dy_dxs / det) / (1 - dx_dys * dy_dxs / det)
+    xdm = (xs + center_act[0] * pitch_m) / dx_inf + off
+    ydm = (ys + center_act[1] * pitch_m) / dx_inf + off
+    xdm, ydm = jnp.broadcast_arrays(xdm, ydm)
+    values = map_coordinates(fine, [ydm, xdm], order=3, mode="constant", cval=0.0)
+
+    y0, x0 = grid_npix // 2 - ydim // 2, grid_npix // 2 - xdim // 2
+    out = jnp.zeros((grid_npix, grid_npix), dtype=float)
+    return out.at[y0 : y0 + ydim, x0 : x0 + xdim].set(values)
+
+
+def _check_increasing(name, values):
+    if isinstance(values, jax.core.Tracer):
+        return
+    v = np.asarray(values)
+    if v.ndim != 1 or not np.all(np.diff(v) > 0):
+        raise ValueError(f"{name} must be a strictly increasing 1-D array")
+
+
+def volts_to_stroke(volts, *, stroke_volts, stroke_table_m, coupling_volts, coupling):
+    """Actuator strokes of a voltage-driven DM from its per-actuator calibration.
+
+    Each actuator's stroke is its calibration table interpolated at its voltage;
+    a voltage-dependent 3 x 3 coupling kernel then spreads a fraction of that
+    stroke onto the neighbors (the kernel center is taken as 1), and neighbors
+    beyond the array edge are dropped. Interpolation is linear and clamps at the
+    ends of the tables.
+
+    Args:
+        volts: Actuator voltages in volts, ``(n_act_y, n_act_x)``; row index is y.
+        stroke_volts: Voltages of the stroke table in volts, ``(n_v,)``, strictly
+            increasing.
+        stroke_table_m: Stroke magnitude in meters at those voltages, positive
+            toward the DM, relative to the 0 V surface, ``(n_v, n_act_y, n_act_x)``.
+        coupling_volts: Voltages of the coupling table in volts, ``(n_c,)``,
+            strictly increasing.
+        coupling: Coupling kernels, ``(n_c, n_act_y, n_act_x, 3, 3)``, indexed
+            ``[..., dy + 1, dx + 1]`` for the neighbor at ``(y + dy, x + dx)``.
+
+    Returns:
+        Stroke in meters, ``(n_act_y, n_act_x)``: negative for actuators that move
+        toward the DM, which increasing voltage does.
+
+    Raises:
+        ValueError: If a table's shape does not match ``volts`` or its voltage
+            axis is not strictly increasing.
+    """
+    v = jnp.asarray(volts, dtype=float)
+    if v.ndim != 2:
+        raise ValueError("volts must be a 2-D array")
+    ny, nx = v.shape
+    n_v, n_c = len(stroke_volts), len(coupling_volts)
+    if jnp.shape(stroke_table_m) != (n_v, ny, nx):
+        raise ValueError(f"stroke_table_m must have shape {(n_v, ny, nx)}")
+    if jnp.shape(coupling) != (n_c, ny, nx, 3, 3):
+        raise ValueError(f"coupling must have shape {(n_c, ny, nx, 3, 3)}")
+    _check_increasing("stroke_volts", stroke_volts)
+    _check_increasing("coupling_volts", coupling_volts)
+    interp = jax.vmap(jnp.interp, in_axes=(0, None, 0))
+    table = jnp.asarray(stroke_table_m, dtype=float).reshape(n_v, -1).T
+    stroke = interp(v.reshape(-1), jnp.asarray(stroke_volts), table).reshape(ny, nx)
+    kernels = jnp.asarray(coupling, dtype=float).reshape(n_c, -1).T
+    c = interp(jnp.repeat(v.reshape(-1), 9), jnp.asarray(coupling_volts), kernels)
+    c = c.reshape(ny, nx, 3, 3).at[:, :, 1, 1].set(1.0)
+    padded = jnp.zeros((ny + 2, nx + 2), dtype=float)
+    for j in range(3):
+        for i in range(3):
+            padded = padded.at[j : j + ny, i : i + nx].add(c[:, :, j, i] * stroke)
+    return -padded[1:-1, 1:-1]
+
+
+def dm_strokes_from_volts(
+    volts,
+    *,
+    stroke_volts,
+    stroke_table_m,
+    coupling_volts,
+    coupling,
+    volt_quantum,
+    live,
+):
+    """Heights handed to :func:`dm_surface` for commanded DM voltages.
+
+    Voltages are quantized down to the driver step, converted with
+    :func:`volts_to_stroke`, referenced to zero median over the live actuators,
+    and negated into :func:`dm_surface`'s convention (positive into the DM). The
+    quantization passes gradients straight through, so derivatives with respect
+    to ``volts`` are those of the unquantized conversion while the values are
+    exactly the quantized ones. Neighbor-rule constraints are assumed already
+    applied to ``volts``.
+
+    Args:
+        volts: Commanded voltages in volts, ``(n_act_y, n_act_x)``.
+        stroke_volts: As in :func:`volts_to_stroke`.
+        stroke_table_m: As in :func:`volts_to_stroke`.
+        coupling_volts: As in :func:`volts_to_stroke`.
+        coupling: As in :func:`volts_to_stroke`.
+        volt_quantum: Driver voltage step in volts.
+        live: Boolean mask of live actuators (neither dead nor tied), the shape
+            of ``volts``.
+
+    Returns:
+        Actuator heights in meters, ``(n_act_y, n_act_x)``.
+
+    Raises:
+        ValueError: If ``live`` does not have the shape of ``volts``.
+    """
+    v = jnp.asarray(volts, dtype=float)
+    if jnp.shape(live) != v.shape:
+        raise ValueError(f"live must have the shape of volts {v.shape}")
+    step = jnp.floor(v / volt_quantum) * volt_quantum
+    quantized = v + jax.lax.stop_gradient(step - v)
+    stroke = volts_to_stroke(
+        quantized,
+        stroke_volts=stroke_volts,
+        stroke_table_m=stroke_table_m,
+        coupling_volts=coupling_volts,
+        coupling=coupling,
+    )
+    median = jnp.nanmedian(jnp.where(jnp.asarray(live), stroke, jnp.nan))
+    return -(stroke - median)
+
+
 class RomanCompact(eqx.Module):
     """Monochromatic compact Roman coronagraph train on prescription grids.
 
@@ -67,8 +300,9 @@ class RomanCompact(eqx.Module):
         beam_diameter_m: Beam diameter at DM1.
         dm_separation_m: DM1 to DM2 distance.
         dm1_surface_m, dm2_surface_m: DM surface maps on ``(n_small, n_small)``
-            (meters of surface; the reflected wavefront carries twice the
-            surface), or ``None``.
+            in meters, positive into the DM (as :func:`dm_surface` returns
+            them); the reflected wavefront is delayed by twice the surface.
+            ``None`` for a flat DM.
     """
 
     pupil: Array = eqx.field(converter=jnp.asarray)

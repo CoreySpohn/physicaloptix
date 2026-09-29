@@ -244,10 +244,42 @@ handled inside the model rather than left to the caller:
   output rows. Offsets are in lambda0/D at `lam0_nm` and scale as
   `lam0_nm / wavelength_nm` at other wavelengths.
 
-DM surfaces enter as surface-height maps on the `n_small` grid; the reflected
-wavefront carries twice the surface. The model does not convert actuator
-commands to surfaces: influence functions, actuator registration and the DM2
-orientation belong to whatever produced the maps.
+DM surfaces enter as surface-height maps on the `n_small` grid. A positive
+height is a displacement of the facesheet into the DM, which delays the
+reflected wavefront by twice the height (the prescription's convention, which
+neglects the cosine of the DM's incidence angle); maps measured positive away
+from the DM must be negated first.
+
+{func}`~physicaloptix.instruments.roman.dm_surface` makes those maps from
+actuator heights the way the prescription does: the heights are placed on a grid
+sampled like the influence function, convolved with it, and projected onto the
+wavefront grid through the DM tilts with cubic-convolution interpolation
+(Keys, $a = -0.5$). The DM2 left-right flip applies to the actuator array and the
+influence function, while the tilts stay in wavefront coordinates and the
+actuator center indexes the flipped array. The map equals PROPER's `prop_dm`,
+run with PROPER's compiled cubic-convolution library, to rounding for every
+Roman DM geometry (a tilt about one axis) and equals PROPER's single-threaded
+interpolation for any tilt; this comparison is run against PROPER outside the
+test suite. PROPER's default threaded interpolation differs for a rotation about
+the optical axis or tilts about two axes: it takes every output sample's x
+weights from the first row of samples, which is exact only when the x sample
+coordinate varies along columns alone, while this function interpolates each
+sample at its own coordinate.
+
+{func}`~physicaloptix.instruments.roman.dm_strokes_from_volts` turns commanded
+voltages into the heights {func}`~physicaloptix.instruments.roman.dm_surface`
+takes, as the prescription's DM model does: voltages are quantized down to the
+driver step, {func}`~physicaloptix.instruments.roman.volts_to_stroke` converts
+them with each actuator's measured stroke table and its voltage-dependent 3 x 3
+coupling to the neighbors, and the result is referenced to zero median over the
+live actuators and negated. The quantization passes gradients straight through,
+so a Jacobian with respect to voltages is that of the unquantized conversion.
+The calibration tables are inputs (their temperature interpolation belongs to
+the caller), and the voltages are assumed to satisfy the neighbor rule already.
+Not part of these functions: the full prescription's measured influence
+functions (its compact model uses PROPER's default one), the static and
+bias-dependent DM surface figure maps, and the fixed astigmatism the full
+prescription adds at each DM.
 
 ### Validation
 
@@ -255,7 +287,16 @@ Data-free tests state the prescription's matrix Fourier transform and its
 final focusing step directly in NumPy and require the model's mask-plane,
 mask-exit and image fields to match them to $10^{-12}$ of their peak, for an
 asymmetric shaped-pupil mask and a patterned complex hybrid-Lyot mask. Further
-tests pin the integer-centered trim, entrance normalization, energy
+tests pin the DM map (a poke on a commensurate grid reproduces the influence
+function sample for sample, also at a scaled actuator pitch; a half-sample
+offset interpolates with the Keys weights; the left-right flip with an
+asymmetric center and influence function; cosine foreshortening under x and y
+tilts; the left-handed rotation about the axis; the Jacobian with respect to the
+heights; input validation), the voltage conversion (each actuator's own table,
+clamping at the table ends, rectangular arrays, coupling onto the neighbors with
+the array edge dropped, coupling interpolated in voltage, quantization and the
+live-actuator median, gradients through the quantization), the
+integer-centered trim, entrance normalization, energy
 conservation on an odd grid, the tilt phase and its direction on output rows
 and columns, the Fresnel round trip, the twice-surface DM phase at each DM
 plane, and the grid checks above. A cross-code comparison with the PROPER
