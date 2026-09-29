@@ -8,7 +8,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from physicaloptix.core import Field, Grid, PlaneKind
+from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
 from physicaloptix.diagnostics import mft_sampling_parameter
 from physicaloptix.transforms import Fraunhofer, cmft_bwd, cmft_fwd
 
@@ -185,6 +185,126 @@ class TestFraunhofer:
             on_undersampled="record",
         ).sampling_parameter
         np.testing.assert_allclose(p_blue, p_ref / 2.0, rtol=1e-12)
+
+
+REF_NM = 500.0
+OFF_REFERENCE_NM = (500.0, 750.0, 1000.0)
+
+
+def _mono_spectrum(wavelength_nm):
+    return Spectrum(wavelengths_nm=jnp.array([wavelength_nm]), weights=jnp.ones(1))
+
+
+def _disk(grid):
+    x = np.asarray(grid.coords)
+    xx, yy = np.meshgrid(x, x)
+    return ((xx**2 + yy**2) <= 0.25).astype(np.complex128)
+
+
+class TestChromaticFixedGridAdjoint:
+    """``backward`` on a fixed angular grid is the adjoint of ``forward``.
+
+    The pairing is the grids' own weighted complex inner products,
+    <F a, y>_focal = du**2 sum(conj(F a) y) on the fixed focal grid and
+    <a, B y>_pupil = dx**2 sum(conj(a) B y), at every wavelength of a
+    chromatic stack, not only at the reference wavelength. Complex values
+    are compared, so a scale error, a conjugation error, or a real-part-only
+    agreement all fail.
+    """
+
+    @pytest.mark.parametrize("wavelength_nm", OFF_REFERENCE_NM)
+    @pytest.mark.parametrize(
+        ("npup", "nfoc", "pixel_scale_lod"),
+        [(12, 16, 0.5), (32, 48, 0.25), (20, 36, 1.3)],
+    )
+    def test_weighted_inner_product_identity(
+        self, npup, nfoc, pixel_scale_lod, wavelength_nm
+    ):
+        pupil = Grid.pupil(npup)
+        focal = Grid.focal(nfoc, pixel_scale_lod)
+        spectrum = _mono_spectrum(wavelength_nm)
+        rng = np.random.default_rng(4821)
+        a = jnp.asarray(_rng_field(rng, npup)[None])
+        b = jnp.asarray(_rng_field(rng, nfoc)[None])
+        x = Field(data=a, grid=pupil, plane=PlaneKind.PUPIL, spectrum=spectrum)
+        y = Field(data=b, grid=focal, plane=PlaneKind.FOCAL, spectrum=spectrum)
+        prop = Fraunhofer(
+            pupil,
+            focal,
+            reference_wavelength_nm=REF_NM,
+            min_wavelength_nm=wavelength_nm,
+            on_undersampled="record",
+        )
+        lhs = complex(jnp.vdot(prop.forward(x).data, b) * focal.weights)
+        rhs = complex(jnp.vdot(a, prop.backward(y).data) * pupil.weights)
+        assert abs(lhs) > 1e-3
+        np.testing.assert_allclose(rhs, lhs, rtol=1e-12)
+        np.testing.assert_allclose(rhs / lhs, 1.0 + 0.0j, atol=1e-12)
+
+    def test_identity_holds_per_slice_of_a_chromatic_stack(self):
+        """One vmapped stack: every slice pairs on the same fixed-grid measure."""
+        npup, nfoc = 24, 40
+        pupil = Grid.pupil(npup)
+        focal = Grid.focal(nfoc, 0.4)
+        wavelengths = jnp.array([450.0, 500.0, 620.0, 800.0, 1000.0])
+        spectrum = Spectrum(wavelengths_nm=wavelengths, weights=jnp.ones(5) / 5)
+        rng = np.random.default_rng(7)
+        a = jnp.asarray(np.stack([_rng_field(rng, npup) for _ in range(5)]))
+        b = jnp.asarray(np.stack([_rng_field(rng, nfoc) for _ in range(5)]))
+        prop = Fraunhofer(
+            pupil,
+            focal,
+            reference_wavelength_nm=REF_NM,
+            min_wavelength_nm=450.0,
+            on_undersampled="record",
+        )
+        fa = prop.forward(
+            Field(data=a, grid=pupil, plane=PlaneKind.PUPIL, spectrum=spectrum)
+        ).data
+        bb = prop.backward(
+            Field(data=b, grid=focal, plane=PlaneKind.FOCAL, spectrum=spectrum)
+        ).data
+        for i in range(5):
+            lhs = complex(jnp.vdot(fa[i], b[i]) * focal.weights)
+            rhs = complex(jnp.vdot(a[i], bb[i]) * pupil.weights)
+            np.testing.assert_allclose(rhs, lhs, rtol=1e-12)
+
+    @pytest.mark.parametrize("wavelength_nm", OFF_REFERENCE_NM)
+    @pytest.mark.parametrize(("npup", "nfoc"), [(32, 64), (24, 40)])
+    def test_complete_grid_round_trip_returns_the_absolute_field(
+        self, npup, nfoc, wavelength_nm
+    ):
+        """Absolute field and energy control off the reference wavelength.
+
+        The fixed focal spacing is chosen so the wavelength's native spacing
+        forms a complete conjugate grid (nfoc * du_native * dx = 1). There
+        the continuous-FT pair is exact: a unit-amplitude clear aperture
+        returns with unit amplitude, and the fixed-grid focal energy equals
+        the pupil energy.
+        """
+        scale = REF_NM / wavelength_nm
+        pupil = Grid.pupil(npup)
+        focal = Grid.focal(nfoc, npup / (nfoc * scale))
+        prop = Fraunhofer(
+            pupil,
+            focal,
+            reference_wavelength_nm=REF_NM,
+            min_wavelength_nm=wavelength_nm,
+            on_undersampled="raise",
+        )
+        disk = _disk(pupil)
+        field = Field(
+            data=jnp.asarray(disk[None]),
+            grid=pupil,
+            plane=PlaneKind.PUPIL,
+            spectrum=_mono_spectrum(wavelength_nm),
+        )
+        focal_field = prop.forward(field)
+        e_pupil = float(jnp.sum(jnp.abs(field.data) ** 2) * pupil.weights)
+        e_focal = float(jnp.sum(jnp.abs(focal_field.data) ** 2) * focal.weights)
+        np.testing.assert_allclose(e_focal, e_pupil, rtol=1e-12)
+        back = prop.backward(focal_field)
+        np.testing.assert_allclose(np.asarray(back.data[0]), disk, atol=1e-12)
 
 
 class TestMftSamplingParameter:

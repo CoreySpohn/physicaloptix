@@ -10,6 +10,16 @@ pupil energy spreads over a solid angle proportional to wavelength squared,
 so surface brightness carries the inverse-square factor). Without a
 reference (the default), the transform is the achromatic dimensionless-core
 MFT: mono fields and chromatic stacks share identical kernels.
+
+``backward`` is the adjoint of ``forward`` under the two FIXED grids'
+weighted inner products, at every wavelength: with ``s = lambda_ref /
+lambda``, forward is ``s * cmft_fwd(., x, s u)`` and backward is
+``cmft_bwd(., x, s u) / s``. ``cmft_bwd`` on the scaled coordinates already
+carries the native cell area ``(s du)**2``, so the single ``1 / s`` converts
+it to the fixed-grid pairing. Because the continuous Fourier transform is
+unitary, the same operator is also the inverse physical propagation (focal
+back to pupil): on a complete conjugate grid ``backward(forward(f)) == f`` at
+every wavelength. The two meanings coincide, so one operation serves both.
 """
 
 import warnings
@@ -27,7 +37,9 @@ class Fraunhofer(eqx.Module):
     """Pupil <-> focal propagation in the dimensionless (achromatic) core.
 
     ``forward`` maps a ``plane_in`` field on ``grid_in`` to ``plane_out`` on
-    ``grid_out`` via the continuous-FT MFT; ``backward`` is the adjoint. The
+    ``grid_out`` via the continuous-FT MFT; ``backward`` is its adjoint under
+    the weighted inner products of ``grid_in`` and ``grid_out`` (also the
+    inverse propagation on a complete conjugate grid). The
     kernel Nyquist ratio is computed once at construction on the static grids
     and handled per ``on_undersampled`` ("raise", "warn", or "record") -- the
     construction-time sampling gate.
@@ -126,8 +138,16 @@ class Fraunhofer(eqx.Module):
     def backward(self, field):
         """Adjoint propagation ``plane_out`` -> ``plane_in``.
 
-        On the fixed angular grid the adjoint pairs per wavelength on that
-        wavelength's native measure (the scaled-coordinate cell area).
+        The fixed-grid adjoint of :meth:`forward`: for every wavelength slice,
+        ``grid_out.weights * vdot(forward(a), y)`` equals
+        ``grid_in.weights * vdot(a, backward(y))``, with the fixed angular
+        grid's cell area on the focal side (the same measure on which
+        ``forward`` conserves energy). With a reference wavelength, each slice
+        applies ``cmft_bwd`` on its scaled coordinates, whose built-in
+        quadrature is the native cell area ``(s du)**2``, and divides by
+        ``s = lambda_ref / lambda``; the product is the fixed-grid adjoint.
+        On a complete conjugate grid this is also the exact inverse
+        propagation, so a round trip returns the input field.
         """
         validate_field(
             field, plane=self.plane_out, grid=self.grid_out, context="Fraunhofer"
@@ -138,7 +158,7 @@ class Fraunhofer(eqx.Module):
         if scaling is None:
             data = cmft_bwd(field.data, x, u)
         else:
-            data = jax.vmap(lambda d, s: cmft_bwd(d, x, u * s) * s)(field.data, scaling)
+            data = jax.vmap(lambda d, s: cmft_bwd(d, x, u * s) / s)(field.data, scaling)
         return Field(
             data=data,
             grid=self.grid_in,

@@ -187,6 +187,7 @@ class TestFixedAngularPropagation:
         assert peak_values[0] > 1.2 * peak_values[-1]
 
     def test_backward_is_per_wavelength_adjoint(self, pupil_field, band, angular_prop):
+        """Every slice pairs on the fixed angular grid's own cell area."""
         rng = np.random.default_rng(0)
         g = jnp.asarray(
             rng.standard_normal((5, 96, 96)) + 1j * rng.standard_normal((5, 96, 96))
@@ -202,9 +203,8 @@ class TestFixedAngularPropagation:
         back = angular_prop.backward(focal)
         du_angular = focal.grid.dx
         dx = source.grid.dx
-        for i, wl in enumerate(np.asarray(band.wavelengths_nm)):
-            du_native = du_angular * REF_NM / wl
-            lhs = jnp.vdot(forward.data[i], g[i]) * du_native**2
+        for i in range(len(band)):
+            lhs = jnp.vdot(forward.data[i], g[i]) * du_angular**2
             rhs = jnp.vdot(source.data[i], back.data[i]) * dx**2
             np.testing.assert_allclose(complex(lhs), complex(rhs), rtol=1e-12)
 
