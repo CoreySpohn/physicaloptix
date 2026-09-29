@@ -11,6 +11,7 @@ _LAZY = {
     "plot_field": "fields",
     "contrast_row": "fields",
     "draw_dark_zone": "fields",
+    "field_columns": "columns",
     "plot_path": "train",
     "minimap": "train",
     "native_dpi": "train",
