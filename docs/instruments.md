@@ -4,8 +4,10 @@
 {class}`~physicaloptix.OpticalPath` for one real instrument from an exported
 optical prescription. There is no generic instrument registry: each builder
 reproduces the plane sequence of one reference calculation, so the two codes
-can be compared plane by plane. The only builder today is JWST NIRCam imaging
-and round-mask coronagraphy, built to match STPSF.
+can be compared plane by plane. There are two: JWST NIRCam imaging and
+round-mask coronagraphy, built to match STPSF, and the compact Roman
+Coronagraph train, built to match the Roman preflight PROPER compact
+prescription.
 
 ## The NIRCam path
 
@@ -187,3 +189,75 @@ independently, second-order pixel convergence). The cross-code comparison
 with STPSF references is the instrument benchmark in `tests/benchmark/`,
 described with its environment variables and gate on the
 [validation](validation.md) page.
+
+## The Roman compact train
+
+{class}`~physicaloptix.instruments.RomanCompact` is the monochromatic compact
+model of the Roman Coronagraph: the same plane sequence as the compact
+prescription distributed with the Roman preflight PROPER models, on the
+prescription's own grids. It holds the arrays read from that prescription
+(entrance pupil, shaped-pupil mask, focal-plane mask, Lyot stop, and optional
+DM surface maps) and the grid sizes that go with them;
+`RomanCompact.propagate` returns every stage as an array.
+
+| Stage | Plane | What it applies |
+|-------|-------|-----------------|
+| `entrance` | pupil | pupil amplitude normalized to unit total intensity, source tilt |
+| `dm1` | pupil | DM1 surface as twice-surface phase |
+| `dm2` | pupil | Fresnel relay to DM2, DM2 surface |
+| `back_to_dm1` | pupil | Fresnel relay back to DM1, trimmed to `n_big` |
+| `pupil_mask` | pupil | shaped-pupil mask (when present) |
+| `fpm` | focal | field at the focal-plane mask, before the mask |
+| `fpm_exit` | pupil | field after the mask, trimmed to `n_small` |
+| `lyot` | pupil | Lyot-stop amplitude |
+| `image` | focal | Fraunhofer transform to `output_dim` samples, transposed |
+
+Two mask forms are supported. A shaped-pupil design (`kind="spc"`) applies a
+real mask directly between a forward and a backward matrix Fourier transform,
+returning onto a grid `pupil_diam_pix` samples wide. A hybrid-Lyot design
+(`kind="hlc"`) applies its complex mask in Babinet form: the field times the
+mask's clear transmission, plus the backward transform of the forward field
+times the mask minus one over the patterned region.
+
+### Conventions
+
+Every stage array is in prescription units (the physicaloptix field times the
+plane's sample spacing, so the sum of squared magnitudes is the fraction of
+entrance energy) and in prescription orientation. Arrays are centered at the
+integer sample `n // 2`; {func}`~physicaloptix.instruments.roman.proper_trim`
+crops and pads about that center. Three differences between the two codes are
+handled inside the model rather than left to the caller:
+
+- **Half-pixel grids.** On even grids physicaloptix samples sit half a sample
+  from the prescription's. The source tilt is re-referenced by a constant
+  phase and the image by the resulting linear phase, so complex fields match,
+  not only intensities. The shaped-pupil return grid must therefore be an
+  integer number of samples with the parity of `n_big`, or the forward and
+  backward half-sample phases do not cancel; the constructor rejects any other
+  combination.
+- **Transform sign.** The prescription's transform to the mask plane uses a
+  `+i` kernel and physicaloptix uses `-i`, so masks are applied rotated by
+  180 degrees. Masks must be square with an odd side, for which the rotation
+  is exact.
+- **Output transpose.** The prescription transposes its final image, so the
+  source offset `source_x_lod` lands on output columns and `source_y_lod` on
+  output rows. Offsets are in lambda0/D at `lam0_nm` and scale as
+  `lam0_nm / wavelength_nm` at other wavelengths.
+
+DM surfaces enter as surface-height maps on the `n_small` grid; the reflected
+wavefront carries twice the surface. The model does not convert actuator
+commands to surfaces: influence functions, actuator registration and the DM2
+orientation belong to whatever produced the maps.
+
+### Validation
+
+Data-free tests state the prescription's matrix Fourier transform and its
+final focusing step directly in NumPy and require the model's mask-plane,
+mask-exit and image fields to match them to $10^{-12}$ of their peak, for an
+asymmetric shaped-pupil mask and a patterned complex hybrid-Lyot mask. Further
+tests pin the integer-centered trim, entrance normalization, energy
+conservation on an odd grid, the tilt phase and its direction on output rows
+and columns, the Fresnel round trip, the twice-surface DM phase at each DM
+plane, and the grid checks above. A cross-code comparison with the PROPER
+compact prescription itself needs the prescription package and is not part of
+the test suite; see the [validation](validation.md) page.

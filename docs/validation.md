@@ -471,6 +471,12 @@ Honesty about the boundary:
 - The NIRCam benchmark is a cross-code comparison of ideal optical products,
   not a comparison with measured JWST images: detector effects, the
   field-dependent OTE term and the measured wavefront are outside it.
+- The [Roman compact train](instruments.md) is anchored only at Tier A,
+  against NumPy statements of the prescription's transforms
+  (`tests/test_roman.py`). Its comparison with the PROPER compact
+  prescription runs outside this suite, the full Roman relay (the optics
+  between the telescope and the coronagraph masks) is not modeled, and DM
+  actuator mapping is outside the model, which takes surface maps.
 
 ## Reproducing
 
