@@ -167,7 +167,11 @@ excluded) and is required for any survey-comparable result;
 `Fraunhofer` projects a chromatic field onto a fixed reference-wavelength
 grid, each slice's amplitude carries the factor
 $\lambda_{\mathrm{ref}}/\lambda$: fixed-grid intensity is a surface
-brightness, not a per-pixel photon count. A band-averaged product must also
+brightness, not a per-pixel photon count. The matching `backward` divides
+each slice by the same factor, so it is the adjoint of `forward` under the
+fixed grids' weighted inner products at every wavelength (not only the
+reference) and, at a wavelength whose native spacing makes the fixed focal
+grid a complete conjugate grid, the exact inverse propagation. A band-averaged product must also
 state its angular space -- YIP band images average on one fixed
 reference-wavelength grid, while a chromatic-built `PathCoronagraph`
 averages in each wavelength's native {term}`lambda/D`; prefer per-wavelength

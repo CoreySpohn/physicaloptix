@@ -25,7 +25,7 @@ import numpy as np
 import pytest
 from jax.test_util import check_grads
 
-from physicaloptix.core import Field, Grid, PlaneKind
+from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
 from physicaloptix.elements import (
     ModeBasis,
     MultiScaleVortex,
@@ -280,3 +280,57 @@ class TestGradientFiniteness:
         grad = jax.grad(loss)(jnp.zeros(n_modes))
         assert bool(jnp.all(jnp.isfinite(grad)))
         assert float(jnp.linalg.norm(grad)) > 0.0
+
+
+class TestChromaticAdjointGradient:
+    """Reverse-mode autodiff and the adjoint operator give one gradient.
+
+    For a fixed-grid dark-zone energy L = du**2 sum(M |F a|**2) of a chromatic
+    pupil stack ``a``, the Euclidean gradient over the real and imaginary
+    parts is 2 du**2 F^H M F a. With ``backward`` the adjoint under the
+    grids' weighted inner products, that gradient equals
+    2 dx**2 backward(M F a) at every wavelength, including off the reference
+    wavelength. An adjoint-state (backward-propagated) gradient therefore
+    matches what jax.grad returns through ``forward``.
+    """
+
+    def test_adjoint_state_gradient_matches_autodiff_off_reference(self):
+        npup, nfoc, ref_nm = 32, 48, 500.0
+        pupil = Grid.pupil(npup)
+        focal = Grid.focal(nfoc, 0.3)
+        wavelengths = jnp.array([500.0, 750.0, 1000.0])
+        spectrum = Spectrum(wavelengths_nm=wavelengths, weights=jnp.ones(3) / 3)
+        prop = Fraunhofer(
+            pupil,
+            focal,
+            reference_wavelength_nm=ref_nm,
+            min_wavelength_nm=500.0,
+            on_undersampled="record",
+        )
+        mask = _focal_mask(nfoc, 0.3, r_in=1.0, r_out=5.0)
+        rng = np.random.default_rng(11)
+        a = jnp.asarray(
+            rng.standard_normal((3, npup, npup))
+            + 1j * rng.standard_normal((3, npup, npup))
+        )
+
+        def pupil_field(data):
+            return Field(
+                data=data, grid=pupil, plane=PlaneKind.PUPIL, spectrum=spectrum
+            )
+
+        def loss(data):
+            out = prop.forward(pupil_field(data)).data
+            return jnp.sum(jnp.abs(out) ** 2 * mask) * focal.weights
+
+        # jax.grad of a real loss in a complex input returns the conjugate of
+        # dL/dRe + i dL/dIm.
+        euclidean = jnp.conj(jax.grad(loss)(a))
+        residual = prop.forward(pupil_field(a))
+        masked = eqx.tree_at(lambda f: f.data, residual, residual.data * mask)
+        adjoint_state = 2.0 * pupil.weights * prop.backward(masked).data
+        scale = float(jnp.abs(euclidean).max())
+        assert scale > 0.0
+        np.testing.assert_allclose(
+            np.asarray(adjoint_state), np.asarray(euclidean), atol=1e-12 * scale
+        )
