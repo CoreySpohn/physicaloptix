@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.1.0](https://github.com/CoreySpohn/physicaloptix/compare/v2.0.0...v2.1.0) (2026-09-29)
+
+
+### Features
+
+* **instruments:** add the Roman DM model: influence-function surface maps and voltage-to-height conversion ([7d26d54](https://github.com/CoreySpohn/physicaloptix/commit/7d26d54bfd62be3c62b0befcf19aef5380dbc545))
+* **viz:** give the field_columns no-light hatch its own hatch_color, keeping blank_color the flat fill ([c2b6a9a](https://github.com/CoreySpohn/physicaloptix/commit/c2b6a9a7d579c324f2ca2de3d77160180b84b69e))
+* **viz:** let field_columns take caller-placed keys, hang gap labels on the figure, and hatch the no-light phase pixels ([5ffd710](https://github.com/CoreySpohn/physicaloptix/commit/5ffd710afc2e7d835ca6081a7dd0742d7a0724b5))
+
+
+### Bug Fixes
+
+* **deps:** require eyepiece 0.5.0 in the viz extra, the first release with eyepiece.prepared ([9a9119f](https://github.com/CoreySpohn/physicaloptix/commit/9a9119f5de691ce5a7a3d010a7f2ebbf0fadeac0))
+
 ## [2.0.0](https://github.com/CoreySpohn/physicaloptix/compare/v1.2.0...v2.0.0) (2026-09-29)
 
 
