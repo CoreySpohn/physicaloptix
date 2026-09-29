@@ -18,8 +18,12 @@ lambda``, forward is ``s * cmft_fwd(., x, s u)`` and backward is
 carries the native cell area ``(s du)**2``, so the single ``1 / s`` converts
 it to the fixed-grid pairing. Because the continuous Fourier transform is
 unitary, the same operator is also the inverse physical propagation (focal
-back to pupil): on a complete conjugate grid ``backward(forward(f)) == f`` at
-every wavelength. The two meanings coincide, so one operation serves both.
+back to pupil): ``backward(forward(f)) == f`` for any wavelength slice whose
+native spacing ``s du`` makes the focal grid complete
+(``n_focal * s du * dx = 1``). A fixed focal grid can be complete for at most
+one wavelength; at the others the round trip is a projection, but the adjoint
+identity still holds. The two meanings coincide where both apply, so one
+operation serves both.
 """
 
 import warnings
@@ -39,7 +43,8 @@ class Fraunhofer(eqx.Module):
     ``forward`` maps a ``plane_in`` field on ``grid_in`` to ``plane_out`` on
     ``grid_out`` via the continuous-FT MFT; ``backward`` is its adjoint under
     the weighted inner products of ``grid_in`` and ``grid_out`` (also the
-    inverse propagation on a complete conjugate grid). The
+    inverse propagation at a wavelength whose native spacing makes the grid
+    complete). The
     kernel Nyquist ratio is computed once at construction on the static grids
     and handled per ``on_undersampled`` ("raise", "warn", or "record") -- the
     construction-time sampling gate.
@@ -146,8 +151,9 @@ class Fraunhofer(eqx.Module):
         applies ``cmft_bwd`` on its scaled coordinates, whose built-in
         quadrature is the native cell area ``(s du)**2``, and divides by
         ``s = lambda_ref / lambda``; the product is the fixed-grid adjoint.
-        On a complete conjugate grid this is also the exact inverse
-        propagation, so a round trip returns the input field.
+        At a wavelength whose native spacing makes the focal grid a complete
+        conjugate grid, this is also the exact inverse propagation, so a round
+        trip returns the input field.
         """
         validate_field(
             field, plane=self.plane_out, grid=self.grid_out, context="Fraunhofer"
