@@ -152,6 +152,126 @@ def test_blank_color_paints_the_masked_phase():
     assert phase.get_cmap().get_bad() == pytest.approx(to_rgba("0.5"))
 
 
+def _key_axes(fig, names):
+    """One caller-placed key axes per name, off the panels."""
+    return {
+        name: fig.add_axes([0.01, 0.1 * i, 0.02, 0.08]) for i, name in enumerate(names)
+    }
+
+
+def test_cax_draws_each_named_key_in_its_axes_and_nothing_in_the_columns():
+    fig, axes = plt.subplots(2, 4)
+    cax = _key_axes(fig, ("amplitude", "phase", "intensity", "blank"))
+    res = field_columns(
+        _sequence(),
+        intensity=("image",),
+        blank_hatch="//",
+        cax=cax,
+        axes=axes,
+    )
+    cbars = res.artists["cbar"]
+    assert [c.ax for c in cbars] == [cax["amplitude"], cax["phase"], cax["intensity"]]
+    assert [c.ax.get_ylabel() for c in cbars] == [
+        "$|E|$",
+        "phase [rad]",
+        "$I = |E|^2$",
+    ]
+    assert cbars[1].mappable is res.artists["image"][4]
+    assert cbars[2].mappable is res.artists["image"][3]
+    assert [c.ax.yaxis.get_ticks_position() for c in cbars] == ["left", "left", "right"]
+    # The swatch goes in its own slot, hatched and labeled.
+    assert res.artists["fill"][-1].axes is cax["blank"]
+    assert res.artists["text"][-1].get_text() == "no light"
+    assert all(not ax.child_axes for ax in axes.flat)
+
+
+def test_cax_draws_only_the_keys_it_names():
+    fig, axes = plt.subplots(2, 4)
+    cax = _key_axes(fig, ("phase",))
+    res = field_columns(_sequence(), intensity=("image",), cax=cax, axes=axes)
+    assert [c.ax for c in res.artists["cbar"]] == [cax["phase"]]
+    assert all(not ax.child_axes for ax in axes.flat)
+
+
+def test_figure_labels_hang_on_the_figure_between_their_columns():
+    res = field_columns(
+        _sequence(),
+        gaps=GAPS,
+        pairs={"mask": ("before", "after")},
+        labels_on="figure",
+    )
+    fig = res.fig
+    labels = res.artists["text"]
+    assert [t.get_text() for t in labels] == [*GAPS, "mask"]
+    assert all(t in fig.artists for t in labels)
+    assert all(not ax.texts for ax in res.axes.flat)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    for col, label in enumerate(labels[:-1]):
+        box = label.get_window_extent(renderer)
+        left = res.axes[0, col].get_window_extent(renderer)
+        right = res.axes[0, col + 1].get_window_extent(renderer)
+        assert left.x1 < 0.5 * (box.x0 + box.x1) < right.x0
+    header = labels[-1].get_window_extent(renderer)
+    assert header.y0 > res.axes[0, 1].get_window_extent(renderer).y1
+
+
+def _column_prints(ax):
+    """What a column axes holds: its artists and inset children."""
+    return (
+        len(ax.texts),
+        len(ax.patches),
+        len(ax.child_axes),
+        [np.ma.getdata(im.get_array()).tobytes() for im in ax.get_images()],
+    )
+
+
+def test_caller_keys_and_figure_labels_keep_a_column_the_same_in_any_subset():
+    # A column drawn alone, or with its neighbors, or in the full sequence,
+    # holds the same artists: no key inset, no gap label, rides along with it.
+    kw = {"gaps": GAPS, "intensity": ("image",), "blank_hatch": "//"}
+    prints = []
+    for columns in (KEYS, ("after", "image"), ("after",)):
+        fig, axes = plt.subplots(2, len(columns), squeeze=False)
+        names = ("amplitude", "phase", "blank")
+        if "image" in columns:
+            names = (*names, "intensity")
+        res = field_columns(
+            _sequence(),
+            columns=columns,
+            cax=_key_axes(fig, names),
+            labels_on="figure",
+            axes=axes,
+            **kw,
+        )
+        col = columns.index("after")
+        prints.append([_column_prints(res.axes[row, col]) for row in range(2)])
+    assert prints[0] == prints[1] == prints[2]
+
+
+def test_blank_hatch_shows_through_transparent_masked_pixels():
+    res = field_columns(_sequence(), blank_hatch="////", blank_color="0.4")
+    hatches = res.artists["fill"]
+    # One hatch behind each phase panel, then the swatch under the phase key.
+    assert [h.axes for h in hatches[:4]] == list(res.axes[1])
+    for patch in hatches:
+        assert patch.get_hatch() == "////"
+        assert patch.get_hatchcolor() == pytest.approx(to_rgba("0.4"))
+        assert patch.get_facecolor()[3] == 0.0
+    for phase in res.artists["image"][4:]:
+        assert phase.get_cmap().get_bad()[3] == 0.0
+        assert phase.zorder > hatches[0].zorder
+    swatch = hatches[-1].axes
+    assert swatch in res.axes[1, 0].child_axes
+    assert res.artists["text"][-1].get_text() == "no light"
+
+
+def test_blank_hatch_without_keys_draws_no_swatch():
+    res = field_columns(_sequence(), blank_hatch="//", colorbar=False)
+    assert len(res.artists["fill"]) == 4
+    assert all(not ax.child_axes for ax in res.axes.flat)
+
+
 def test_field_input_carries_its_grid_extent():
     grid = Grid(npix=16, dx=0.25)
     field = Field(
@@ -181,6 +301,12 @@ def test_update_redraws_under_the_first_norm():
         ({"pairs": {"m": ("pupil", "after")}}, "neighboring"),
         ({"intensity": ("nope",)}, "intensity"),
         ({"axes": np.empty((2, 3), dtype=object)}, "axes shape"),
+        ({"labels_on": "gap"}, "labels_on"),
+        ({"cax": {"colour": None}}, "unknown cax keys"),
+        ({"cax": [None]}, "mapping"),
+        ({"cax": {"phase": None}, "colorbar": False}, "colorbar=True"),
+        ({"cax": {"blank": None}}, "nothing drawn uses"),
+        ({"cax": {"intensity": None}}, "nothing drawn uses"),
     ],
 )
 def test_rejects_malformed_arguments(kwargs, match):
