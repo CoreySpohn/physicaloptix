@@ -43,6 +43,12 @@ _HEADER_IN = 0.3
 _BOTTOM_IN = 0.55
 _KEY_WIDTH = 0.06
 _KEY_PAD = 0.1
+# The no-light swatch of the default keys, in fractions of the first
+# phase panel: a square under the phase key, its label left of it.
+_SWATCH = 0.1
+_SWATCH_LABEL_PT = 3.0
+_KEY_NAMES = frozenset({"amplitude", "phase", "intensity", "blank"})
+_LABELS_ON = ("axes", "figure")
 _PHASE_TICKS = (-np.pi, 0.0, np.pi)
 _PHASE_TICKLABELS = (r"$-\pi$", "0", r"$\pi$")
 
@@ -183,11 +189,120 @@ def _phase_image(data, phase_floor):
     return np.where(np.abs(data) >= phase_floor, np.angle(data), np.nan)
 
 
-def _key(ax, image, side, label, ticks=None, ticklabels=None):
-    """A colorbar in a thin inset beside ``ax``, on the given side."""
+def _check_keys(cax, colorbar, blank_hatch, has_amplitude, has_intensity):
+    """Check a ``cax`` mapping against what the drawn columns can key.
+
+    Raises:
+        ValueError: ``cax`` is not a mapping of known key names, is given
+            with ``colorbar=False``, or names a key the drawn columns do not
+            have (an amplitude key with no amplitude column drawn, an
+            intensity key with no intensity column drawn, a no-light swatch
+            without ``blank_hatch``).
+    """
+    if cax is None:
+        return
+    if not isinstance(cax, Mapping):
+        msg = (
+            "field_columns: cax= is a mapping of key name to Axes, with "
+            f"names from {sorted(_KEY_NAMES)}; got {type(cax).__name__}"
+        )
+        raise ValueError(msg)
+    unknown = sorted(set(cax) - _KEY_NAMES)
+    if unknown:
+        msg = f"field_columns: unknown cax keys {unknown}; known: {sorted(_KEY_NAMES)}"
+        raise ValueError(msg)
+    if not colorbar:
+        msg = "field_columns: cax= places the keys; it needs colorbar=True"
+        raise ValueError(msg)
+    absent = {
+        "amplitude": not has_amplitude,
+        "intensity": not has_intensity,
+        "blank": blank_hatch is None,
+    }
+    missing = [name for name in cax if absent.get(name, False)]
+    if missing:
+        msg = (
+            f"field_columns: cax names keys {missing} that nothing drawn uses "
+            "(no amplitude or intensity column drawn, or no blank_hatch)"
+        )
+        raise ValueError(msg)
+
+
+def _hatch_patch(ax, hatch, color):
+    """A hatch over all of ``ax``, behind its images, in ``color`` lines.
+
+    The face is left empty, so the axes background shows between the
+    lines. The hatch takes the edge color; the edge itself is not stroked.
+    """
+    from matplotlib.patches import Rectangle
+
+    patch = Rectangle(
+        (0.0, 0.0),
+        1.0,
+        1.0,
+        transform=ax.transAxes,
+        facecolor="none",
+        edgecolor=color,
+        linewidth=0.0,
+        hatch=hatch,
+        zorder=-1,
+    )
+    ax.add_patch(patch)
+    return patch
+
+
+def _hatch_color(hatch_color):
+    """The hatch line color: ``hatch_color``, else matplotlib's own."""
+    import matplotlib as mpl
+
+    if hatch_color is not None:
+        return hatch_color
+    color = mpl.rcParams["hatch.color"]
+    return mpl.rcParams["patch.edgecolor"] if color == "edge" else color
+
+
+def _blank_swatch(sax, hatch, color, fill):
+    """Key the no-light hatch: ``sax`` hatched, labeled "no light" on its left.
+
+    ``fill``, when not None, is the swatch's face under the hatch, as it is
+    the phase panels'.
+    """
+    sax.set_xticks([])
+    sax.set_yticks([])
+    if fill is not None:
+        sax.set_facecolor(fill)
+    patch = _hatch_patch(sax, hatch, color)
+    label = sax.annotate(
+        "no light",
+        xy=(0.0, 0.5),
+        xycoords="axes fraction",
+        xytext=(-_SWATCH_LABEL_PT, 0.0),
+        textcoords="offset points",
+        ha="right",
+        va="center",
+        annotation_clip=False,
+    )
+    return patch, label
+
+
+def _place_label(figure, anchor, labels_on, text, **kw):
+    """An annotation hung on ``anchor``'s axes, or on the figure itself."""
+    if labels_on == "axes":
+        return anchor.annotate(text, annotation_clip=False, **kw)
+    from matplotlib.text import Annotation
+
+    return figure.add_artist(Annotation(text, annotation_clip=False, **kw))
+
+
+def _key_inset(ax, side):
+    """A thin inset beside ``ax``, on the given side, to hold a key."""
     x0 = -_KEY_PAD - _KEY_WIDTH if side == "left" else 1.0 + _KEY_PAD
-    cax = ax.inset_axes([x0, 0.0, _KEY_WIDTH, 1.0])
-    cbar = ax.figure.colorbar(image, cax=cax, label=label)
+    return ax.inset_axes([x0, 0.0, _KEY_WIDTH, 1.0])
+
+
+def _key(cax, image, side, label, ticks=None, ticklabels=None):
+    """A colorbar of ``image`` in ``cax``, its ticks and label on ``side``."""
+    cbar = cax.figure.colorbar(image, cax=cax, label=label)
     cax.yaxis.set_ticks_position(side)
     cax.yaxis.set_label_position(side)
     if ticks is not None:
@@ -212,7 +327,11 @@ def field_columns(
     amp_cmap=None,
     phase_cmap=None,
     blank_color=None,
+    blank_hatch=None,
+    hatch_color=None,
     colorbar=True,
+    cax=None,
+    labels_on="axes",
     axes=None,
     imshow_kw=None,
 ):
@@ -273,11 +392,33 @@ def field_columns(
             ``eyepiece.show_field`` does for its amplitude panel.
         phase_cmap: Colormap for the phase panels. None uses the semantic
             "phase" colormap.
-        blank_color: Color of the masked phase pixels. None uses the phase
-            axes' own facecolor.
+        blank_color: Flat fill of the masked phase pixels (under the hatch
+            lines, when ``blank_hatch`` is set). None uses the phase axes'
+            own facecolor.
+        blank_hatch: A matplotlib hatch pattern (``"////"``, say) that marks
+            the masked phase pixels instead of a flat fill alone: the pixels
+            are transparent, and a hatch behind the image shows through
+            them. A flat fill can read as a value of a cyclic phase map
+            whose ends are pale; a hatch cannot. The keys then include a
+            hatched "no light" swatch. None paints the masked pixels flat.
+        hatch_color: Line color of the ``blank_hatch`` hatch. None uses
+            matplotlib's hatch color. Unused without ``blank_hatch``.
         colorbar: Whether to draw the keys: amplitude and phase beside the
             first column (on its left), intensity beside the last intensity
-            column (on its right).
+            column (on its right), and the no-light swatch under the phase
+            key when ``blank_hatch`` is set.
+        cax: Mapping of key name to a caller-placed Axes to draw that key
+            in, instead of an inset of a column: ``"amplitude"``,
+            ``"phase"``, ``"intensity"`` (colorbars) and ``"blank"`` (the
+            no-light swatch, labeled on its left). Only the keys named are
+            drawn. The amplitude and phase keys put their ticks on the left,
+            the intensity key on the right. A column then carries only its
+            own drawing, so it is the same whichever columns are drawn with
+            it. None hangs the keys as insets of the first and last columns.
+        labels_on: ``"axes"`` hangs the gap and pair labels on the axes of
+            the column left of (or under) them; ``"figure"`` hangs them on
+            the figure, so no column axes holds a label that belongs to a
+            gap. Either way they are placed at draw time.
         axes: A ``(2, n)`` array of Axes, amplitude row first, for the
             ``n`` drawn columns. None creates a new figure with the panels
             at a fixed size and every gap one width. The gap labels
@@ -291,23 +432,39 @@ def field_columns(
         ``axes.flat`` order (the top row, then the phase row).
         ``artists["title"]`` is the list of column titles drawn.
         ``artists["text"]`` is the list of gap labels, left to right,
-        followed by the pair labels. ``artists["cbar"]``, when drawn, is
-        the list of keys ``[amplitude, phase]`` plus the intensity key when
-        an intensity column is drawn. ``update(new_fields)`` redraws the
+        followed by the pair labels, then the no-light swatch's label when
+        drawn. ``artists["cbar"]``, when drawn, is the list of keys
+        ``[amplitude, phase]`` plus the intensity key when an intensity
+        column is drawn (with ``cax``, only the keys it names, in that
+        order). ``artists["fill"]``, with ``blank_hatch``, is the list of
+        hatch patches, one per phase panel, then the swatch's hatch when
+        drawn. ``update(new_fields)`` redraws the
         drawn columns from a new full sequence under the same norms and
         phase threshold.
 
     Raises:
         ValueError: An unknown or out-of-order column, a ``gaps`` of the
             wrong length, a pair of non-neighboring columns, an unknown
-            intensity key, a column that is not one 2D field, or ``axes``
-            of the wrong shape.
+            intensity key, a column that is not one 2D field, ``axes``
+            of the wrong shape, an unknown ``labels_on``, or a ``cax``
+            that names an unknown key or one nothing drawn uses.
     """
     ep = _require.eyepiece()
     keys, items = _keyed(fields)
     intensity = tuple(intensity)
     picks = _validate_selection(keys, columns, gaps, pairs, intensity)
     n = len(picks)
+    if labels_on not in _LABELS_ON:
+        msg = f"field_columns: labels_on must be one of {_LABELS_ON}; got {labels_on!r}"
+        raise ValueError(msg)
+    drawn_keys = [keys[i] for i in picks]
+    _check_keys(
+        cax,
+        colorbar,
+        blank_hatch,
+        any(k not in intensity for k in drawn_keys),
+        any(k in intensity for k in drawn_keys),
+    )
     if axes is not None:
         axes = np.asarray(axes, dtype=object)
         if axes.shape != (2, n):
@@ -339,6 +496,8 @@ def field_columns(
     kw = dict(imshow_kw or {})
     images = [None] * (2 * n)
     titles_drawn = []
+    hatches = []
+    lines = None if blank_hatch is None else _hatch_color(hatch_color)
     for col, i in enumerate(picks):
         key = keys[i]
         data, own_extent, plane = resolved[i]
@@ -375,9 +534,13 @@ def field_columns(
         images[col] = top.artists["image"]
         if blank_color is not None:
             phase_ax.set_facecolor(blank_color)
+        cmap = _resolved_phase_cmap(phase_cmap, phase_ax)
+        if blank_hatch is not None:
+            hatches.append(_hatch_patch(phase_ax, blank_hatch, lines))
+            cmap = cmap.with_extremes(bad=(0.0, 0.0, 0.0, 0.0))
         phase_im = phase_ax.imshow(
             _phase_image(data, phase_floor),
-            cmap=_resolved_phase_cmap(phase_cmap, phase_ax),
+            cmap=cmap,
             vmin=-np.pi,
             vmax=np.pi,
             extent=extent,
@@ -395,6 +558,7 @@ def field_columns(
             titles_drawn.append(top_ax.set_title(title))
 
     texts = []
+    figure = axes[0, 0].figure
     for col in range(n - 1):
         a, b = picks[col], picks[col + 1]
         word = None if gaps is None or b != a + 1 else gaps[a]
@@ -403,13 +567,15 @@ def field_columns(
         left = (axes[0, col], axes[1, col])
         right = (axes[0, col + 1], axes[1, col + 1])
         texts.append(
-            axes[0, col].annotate(
+            _place_label(
+                figure,
+                axes[0, col],
+                labels_on,
                 word,
                 xy=(0.5, 0.5),
                 xycoords=_between(left, right),
                 ha="center",
                 va="center",
-                annotation_clip=False,
             )
         )
     for label, pair in (pairs or {}).items():
@@ -418,7 +584,10 @@ def field_columns(
             continue
         size = float(axes[0, drawn[0]].title.get_fontsize())
         above = 1.3 * size + 10.0
-        header = axes[0, drawn[0]].annotate(
+        header = _place_label(
+            figure,
+            axes[0, drawn[0]],
+            labels_on,
             label,
             xy=(0.5, 1.0),
             xycoords=_spanning([axes[0, col] for col in drawn]),
@@ -427,33 +596,52 @@ def field_columns(
             ha="center",
             va="bottom",
             fontsize=size,
-            annotation_clip=False,
         )
         texts.append(header)
 
     artists = {"image": images, "title": titles_drawn, "text": texts}
     if colorbar:
+        slots = dict(cax or {})
         amp_col = next(
             (c for c, i in enumerate(picks) if keys[i] not in intensity), None
         )
-        cbars = []
-        if amp_col is not None:
-            cbars.append(_key(axes[0, 0], images[amp_col], "left", "$|E|$"))
-        cbars.append(
-            _key(
-                axes[1, 0],
-                images[n],
-                "left",
-                "phase [rad]",
-                _PHASE_TICKS,
-                _PHASE_TICKLABELS,
-            )
-        )
         drawn_intensity = [c for c, i in enumerate(picks) if keys[i] in intensity]
-        if drawn_intensity:
+        if cax is None:
+            if amp_col is not None:
+                slots["amplitude"] = _key_inset(axes[0, 0], "left")
+            slots["phase"] = _key_inset(axes[1, 0], "left")
+            if drawn_intensity:
+                slots["intensity"] = _key_inset(axes[0, drawn_intensity[-1]], "right")
+            if blank_hatch is not None:
+                slots["blank"] = axes[1, 0].inset_axes(
+                    [-_KEY_PAD - _KEY_WIDTH, -_KEY_PAD - _SWATCH, _SWATCH, _SWATCH]
+                )
+        cbars = []
+        if "amplitude" in slots:
+            cbars.append(_key(slots["amplitude"], images[amp_col], "left", "$|E|$"))
+        if "phase" in slots:
+            cbars.append(
+                _key(
+                    slots["phase"],
+                    images[n],
+                    "left",
+                    "phase [rad]",
+                    _PHASE_TICKS,
+                    _PHASE_TICKLABELS,
+                )
+            )
+        if "intensity" in slots:
             last = drawn_intensity[-1]
-            cbars.append(_key(axes[0, last], images[last], "right", "$I = |E|^2$"))
+            cbars.append(_key(slots["intensity"], images[last], "right", "$I = |E|^2$"))
         artists["cbar"] = cbars
+        if "blank" in slots:
+            patch, label = _blank_swatch(
+                slots["blank"], blank_hatch, lines, blank_color
+            )
+            hatches.append(patch)
+            texts.append(label)
+    if blank_hatch is not None:
+        artists["fill"] = hatches
 
     def update(new_fields):
         _, new_items = _keyed(new_fields)
