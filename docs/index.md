@@ -190,6 +190,7 @@ explanation/cross-band-statistics
 :hidden:
 
 conventions
+instruments
 validation
 glossary
 ```
