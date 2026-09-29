@@ -108,7 +108,14 @@ def test_dir_lists_lazy_names():
     import physicaloptix.viz as v
 
     listing = dir(v)
-    names = ("plot_field", "contrast_row", "plot_path", "minimap", "render_path")
+    names = (
+        "plot_field",
+        "contrast_row",
+        "field_columns",
+        "plot_path",
+        "minimap",
+        "render_path",
+    )
     for name in (*names, "prepare_speckles"):
         assert name in listing
 
