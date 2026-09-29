@@ -1,5 +1,36 @@
 # Changelog
 
+## [2.0.0](https://github.com/CoreySpohn/physicaloptix/compare/v1.2.0...v2.0.0) (2026-09-29)
+
+
+### ⚠ BREAKING CHANGES
+
+* **viz:** share prepared speckle outputs
+
+### Features
+
+* **elements:** noll_to_nm and zernike_name map Noll indices to orders and names ([073268d](https://github.com/CoreySpohn/physicaloptix/commit/073268dd8e9891694461a488e46c5caba082b3e1))
+* **instruments:** add NIRCam band integration over independent wavelength nodes and single detector pixel integration ([ab95e08](https://github.com/CoreySpohn/physicaloptix/commit/ab95e08cc6ac470ba7d83b935f78cd9198a0c700))
+* **instruments:** add NIRCam pupil-path builder and STPSF bundle reader ([8a755ad](https://github.com/CoreySpohn/physicaloptix/commit/8a755ade134364dea78a63b258a434080c74979e))
+* **instruments:** add NIRCam round focal mask, Lyot stop and post-mask SI WFE ([7885ec9](https://github.com/CoreySpohn/physicaloptix/commit/7885ec92d241234355dc561d7607cd980dbcc955))
+* **instruments:** add the Roman Coronagraph compact train matched to the PROPER compact prescription ([7c73b23](https://github.com/CoreySpohn/physicaloptix/commit/7c73b230f572f27e1aacd10fe60a418deb38342b))
+* **speckle:** public eps accessor for the drifting mode coefficients ([3383d40](https://github.com/CoreySpohn/physicaloptix/commit/3383d405c6c55bcfb16af44547cc5566f87b1eff))
+* **viz:** add field_columns for amplitude-over-phase columns of a field sequence ([3c6571d](https://github.com/CoreySpohn/physicaloptix/commit/3c6571dadaebc7d2c02c9f62245fa1750b42c920))
+* **viz:** boiling_strip and animate_speckles on the speckle-field protocol ([a38566b](https://github.com/CoreySpohn/physicaloptix/commit/a38566b0078e37494b42629681f40372ad87f911))
+* **viz:** plot_zernike_pyramid lays Zernike modes out by radial and azimuthal order ([0261778](https://github.com/CoreySpohn/physicaloptix/commit/026177894c4294031dab754fd9a749e21e7764a8))
+* **viz:** share prepared speckle outputs ([286484e](https://github.com/CoreySpohn/physicaloptix/commit/286484e92c59b3b11ba5eab5ae404b72deace783))
+* **viz:** the five stats shapes -- contrast profile, process, ensemble, field ellipse, mode gallery ([76e4082](https://github.com/CoreySpohn/physicaloptix/commit/76e4082168f1cbc6796f536eb14687f98db7bb11))
+
+
+### Bug Fixes
+
+* **instruments:** document non-compact NIRCam mask support and pin the full-band requirement ([af896d8](https://github.com/CoreySpohn/physicaloptix/commit/af896d8e5ac357be9f6e02e2f1b29b2300ae9c8c))
+* **instruments:** rename the NIRCam detector block sum to integrate_detector_pixels, take m2nm from hwoutils, and state the benchmark gate scope and by-construction containment ([9df1d98](https://github.com/CoreySpohn/physicaloptix/commit/9df1d983566809bb125079c303dc99b80322b9cd))
+* **transforms:** make chromatic Fraunhofer.backward the fixed-grid adjoint at every wavelength ([97f5060](https://github.com/CoreySpohn/physicaloptix/commit/97f50605b5ed325b4991b60bb727994c206f13c2))
+* **viz:** retire the eyepiece colorbar and figure-sizing workarounds ([bfddbd3](https://github.com/CoreySpohn/physicaloptix/commit/bfddbd356e43df1deb85d5fffd1c44ac073c1831))
+* **viz:** strip prepared speckle sequences directly ([9f92439](https://github.com/CoreySpohn/physicaloptix/commit/9f924399ee7b354f8a86be2073876782adb7ae2e))
+* **viz:** validate times before evaluating and label strip panels by their clock ([a787927](https://github.com/CoreySpohn/physicaloptix/commit/a787927762d008fcac80e4c0f4687b200fab00e3))
+
 ## [1.2.0](https://github.com/CoreySpohn/physicaloptix/compare/v1.1.0...v1.2.0) (2026-08-12)
 
 
