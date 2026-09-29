@@ -250,7 +250,9 @@ def test_caller_keys_and_figure_labels_keep_a_column_the_same_in_any_subset():
 
 
 def test_blank_hatch_shows_through_transparent_masked_pixels():
-    res = field_columns(_sequence(), blank_hatch="////", blank_color="0.4")
+    res = field_columns(
+        _sequence(), blank_hatch="////", hatch_color="0.4", blank_color="0.9"
+    )
     hatches = res.artists["fill"]
     # One hatch behind each phase panel, then the swatch under the phase key.
     assert [h.axes for h in hatches[:4]] == list(res.axes[1])
@@ -261,9 +263,21 @@ def test_blank_hatch_shows_through_transparent_masked_pixels():
     for phase in res.artists["image"][4:]:
         assert phase.get_cmap().get_bad()[3] == 0.0
         assert phase.zorder > hatches[0].zorder
+    # blank_color stays the flat fill: under the hatch, panels and swatch.
     swatch = hatches[-1].axes
+    for ax in (*res.axes[1], swatch):
+        assert ax.get_facecolor() == pytest.approx(to_rgba("0.9"))
     assert swatch in res.axes[1, 0].child_axes
     assert res.artists["text"][-1].get_text() == "no light"
+
+
+def test_hatch_color_defaults_to_matplotlibs_and_leaves_the_fill_alone():
+    with plt.rc_context({"hatch.color": "tab:red"}):
+        res = field_columns(_sequence(), blank_hatch="//", colorbar=False)
+    for patch in res.artists["fill"]:
+        assert patch.get_hatchcolor() == pytest.approx(to_rgba("tab:red"))
+    plain = plt.figure().add_subplot()
+    assert res.axes[1, 0].get_facecolor() == plain.get_facecolor()
 
 
 def test_blank_hatch_without_keys_draws_no_swatch():

@@ -251,20 +251,26 @@ def _hatch_patch(ax, hatch, color):
     return patch
 
 
-def _hatch_color(blank_color):
-    """The hatch line color: ``blank_color``, else matplotlib's own."""
+def _hatch_color(hatch_color):
+    """The hatch line color: ``hatch_color``, else matplotlib's own."""
     import matplotlib as mpl
 
-    if blank_color is not None:
-        return blank_color
+    if hatch_color is not None:
+        return hatch_color
     color = mpl.rcParams["hatch.color"]
     return mpl.rcParams["patch.edgecolor"] if color == "edge" else color
 
 
-def _blank_swatch(sax, hatch, color):
-    """Key the no-light hatch: ``sax`` hatched, labeled "no light" on its left."""
+def _blank_swatch(sax, hatch, color, fill):
+    """Key the no-light hatch: ``sax`` hatched, labeled "no light" on its left.
+
+    ``fill``, when not None, is the swatch's face under the hatch, as it is
+    the phase panels'.
+    """
     sax.set_xticks([])
     sax.set_yticks([])
+    if fill is not None:
+        sax.set_facecolor(fill)
     patch = _hatch_patch(sax, hatch, color)
     label = sax.annotate(
         "no light",
@@ -322,6 +328,7 @@ def field_columns(
     phase_cmap=None,
     blank_color=None,
     blank_hatch=None,
+    hatch_color=None,
     colorbar=True,
     cax=None,
     labels_on="axes",
@@ -385,16 +392,17 @@ def field_columns(
             ``eyepiece.show_field`` does for its amplitude panel.
         phase_cmap: Colormap for the phase panels. None uses the semantic
             "phase" colormap.
-        blank_color: Color of the masked phase pixels, or of the hatch
-            lines when ``blank_hatch`` is set. None uses the phase axes' own
-            facecolor (or, for a hatch, matplotlib's hatch color).
+        blank_color: Flat fill of the masked phase pixels (under the hatch
+            lines, when ``blank_hatch`` is set). None uses the phase axes'
+            own facecolor.
         blank_hatch: A matplotlib hatch pattern (``"////"``, say) that marks
-            the masked phase pixels instead of a flat color: the pixels are
-            transparent, and a hatch of ``blank_color`` lines behind the
-            image shows through them. A flat fill can read as a value of a
-            cyclic phase map whose ends are pale; a hatch cannot. The keys
-            then include a hatched "no light" swatch. None paints the masked
-            pixels flat.
+            the masked phase pixels instead of a flat fill alone: the pixels
+            are transparent, and a hatch behind the image shows through
+            them. A flat fill can read as a value of a cyclic phase map
+            whose ends are pale; a hatch cannot. The keys then include a
+            hatched "no light" swatch. None paints the masked pixels flat.
+        hatch_color: Line color of the ``blank_hatch`` hatch. None uses
+            matplotlib's hatch color. Unused without ``blank_hatch``.
         colorbar: Whether to draw the keys: amplitude and phase beside the
             first column (on its left), intensity beside the last intensity
             column (on its right), and the no-light swatch under the phase
@@ -489,7 +497,7 @@ def field_columns(
     images = [None] * (2 * n)
     titles_drawn = []
     hatches = []
-    hatch_color = None if blank_hatch is None else _hatch_color(blank_color)
+    lines = None if blank_hatch is None else _hatch_color(hatch_color)
     for col, i in enumerate(picks):
         key = keys[i]
         data, own_extent, plane = resolved[i]
@@ -524,15 +532,12 @@ def field_columns(
                 imshow_kw=kw,
             )
         images[col] = top.artists["image"]
+        if blank_color is not None:
+            phase_ax.set_facecolor(blank_color)
+        cmap = _resolved_phase_cmap(phase_cmap, phase_ax)
         if blank_hatch is not None:
-            hatches.append(_hatch_patch(phase_ax, blank_hatch, hatch_color))
-            cmap = _resolved_phase_cmap(phase_cmap, phase_ax).with_extremes(
-                bad=(0.0, 0.0, 0.0, 0.0)
-            )
-        else:
-            if blank_color is not None:
-                phase_ax.set_facecolor(blank_color)
-            cmap = _resolved_phase_cmap(phase_cmap, phase_ax)
+            hatches.append(_hatch_patch(phase_ax, blank_hatch, lines))
+            cmap = cmap.with_extremes(bad=(0.0, 0.0, 0.0, 0.0))
         phase_im = phase_ax.imshow(
             _phase_image(data, phase_floor),
             cmap=cmap,
@@ -630,7 +635,9 @@ def field_columns(
             cbars.append(_key(slots["intensity"], images[last], "right", "$I = |E|^2$"))
         artists["cbar"] = cbars
         if "blank" in slots:
-            patch, label = _blank_swatch(slots["blank"], blank_hatch, hatch_color)
+            patch, label = _blank_swatch(
+                slots["blank"], blank_hatch, lines, blank_color
+            )
             hatches.append(patch)
             texts.append(label)
     if blank_hatch is not None:
