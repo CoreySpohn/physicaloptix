@@ -138,3 +138,49 @@ def test_build_helpers_are_public_on_roman_full():
     ):
         assert name in roman_full.__all__
         assert callable(getattr(roman_full, name))
+
+
+def test_dm_height_jacobian_matches_finite_differences():
+    """A directional derivative through one actuator equals central differences."""
+    inf_dx, pitch = 0.2e-3, 1e-3
+    xi = (np.arange(21) - 10) * inf_dx
+    influence = np.exp(-(xi[None, :] ** 2 + xi[:, None] ** 2) / (0.6 * pitch) ** 2)
+    geometry = (
+        ("influence_dx_m", inf_dx),
+        ("influence_pitch_m", pitch),
+        ("pitch_m", pitch),
+        ("center_act", (3.5, 3.5)),
+        ("tilt_deg", (9.65, 0.0, 0.0)),
+        ("flip_lr", False),
+    )
+    steps = [
+        ("multiply", "pupil"),
+        ("normalize",),
+        ("dm", "dm1", geometry),
+        ("lens", 0.5),
+        ("propagate", 0.5, "focus", True),
+    ]
+    plan = compile_train(steps, lam_m=LAM, n=N, beam_diameter_m=D, pupil_diam_pix=DPIX)
+    arrays = {**_arrays(), "dm1": jnp.zeros((8, 8)), "dm1_influence": influence}
+    model = RomanFull(
+        arrays=arrays,
+        program=plan.program,
+        n=N,
+        lam_m=LAM,
+        pupil_diam_pix=DPIX,
+        final_dx_m=plan.final.dx,
+    )
+
+    def loss(h):
+        m = eqx.tree_at(lambda mm: mm.arrays["dm1"], model, h)
+        return jnp.sum(
+            jnp.abs(m()["end"][N // 2 - 3 : N // 2 + 4, N // 2 + 2 : N // 2 + 9]) ** 2
+        )
+
+    h0 = jnp.asarray(np.random.default_rng(0).normal(0.0, 5e-9, (8, 8)))
+    v = jnp.zeros((8, 8)).at[3, 4].set(1.0)
+    _, jvp = jax.jvp(loss, (h0,), (v,))
+    eps = 1e-11
+    fd = (loss(h0 + eps * v) - loss(h0 - eps * v)) / (2 * eps)
+    assert float(jvp) == pytest.approx(float(fd), rel=1e-5)
+    assert abs(float(jvp)) > 0.0

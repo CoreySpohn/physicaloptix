@@ -309,40 +309,56 @@ the test suite; see the [validation](validation.md) page.
 
 ## The Roman full train
 
-{class}`~physicaloptix.instruments.RomanFull` models the full preflight train:
-the telescope, every relay optic, both DMs, the masks, and the imaging lens, on
-the propagation grids of the PROPER library. The train is an ordered list of
-steps (plain tuples: propagations, thin lenses, element multiplications,
-wavefront terms, DM surfaces, and the two focal-mask blocks; see
-{mod}`physicaloptix.instruments.roman_full`), and
-{func}`~physicaloptix.instruments.compile_train` resolves it into a fixed program.
+{class}`~physicaloptix.instruments.RomanFull` runs a PROPER-style optical train
+given as an ordered list of steps: propagations, thin lenses, element
+multiplications, wavefront terms, DM surfaces, and the two focal-mask blocks (see
+{mod}`physicaloptix.instruments.roman_full`). It was built to run the full Roman
+Coronagraph preflight train (telescope, relay optics, both DMs, masks and
+imaging lens) on the propagation grids of the PROPER library. The Roman step list
+and its data are not distributed with physicaloptix: a caller transcribes the
+steps from the `roman_preflight_proper` package and loads its pupil, mask, map
+and DM calibration files.
+
+```python
+from physicaloptix.instruments.roman_full import RomanFull, compile_train
+
+plan = compile_train(steps, lam_m=575e-9, n=1024, beam_diameter_m=2.363114,
+                     pupil_diam_pix=309.0)
+# build the element arrays, using plan.beams[i].dx for any array that step i
+# applies on the propagation grid
+model = RomanFull(arrays=arrays, program=plan.program, n=1024, lam_m=575e-9,
+                  pupil_diam_pix=309.0, final_dx_m=plan.final.dx)
+fields = model(taps=("FPM", "LYOT STOP"))   # fields["end"] is the last plane
+```
 
 Propagation follows PROPER (Krist 2007). A Gaussian pilot beam travels with the
-field; a propagation whose ends both lie within one Rayleigh distance of the
-pilot waist uses the angular-spectrum method on a fixed grid, and any other goes
-through the waist with a single-FFT Fresnel transform that swaps a planar
-reference surface for a spherical one, changing the sample spacing to
-$\lambda |dz| / (n\, dx)$. A lens moves the pilot waist and applies only the part
-of its phase the change of reference surface does not absorb. None of this reads
-the field, so `compile_train` resolves the whole schedule, every plane's sample
-spacing and every propagation's operations, in NumPy when the model is built;
-JAX runs only FFTs, quadratic phases and element multiplications. Fields are held
-in PROPER's layout internally and returned integer-centered at `n // 2`.
+field. A propagation whose ends both lie within one Rayleigh distance of the
+pilot waist uses the paraxial Fresnel transfer function on a fixed grid. Any
+other propagation is split at the waist: a leg inside the Rayleigh distance uses
+the transfer function, and a leg outside it uses a single-FFT Fresnel transform
+between a planar reference surface at the waist and a spherical one centered on
+it, which sets the sample spacing to $\lambda |dz| / (n\, dx)$ with $dz$ the
+leg length. A lens moves the pilot waist and applies only the part of its phase
+that the change of reference surface does not absorb. None of this reads the
+field, so `compile_train` resolves the whole schedule (every plane's sample
+spacing and every propagation's operations) in NumPy when the model is built,
+and JAX runs only FFTs, quadratic phases and element multiplications. Fields are
+held in PROPER's layout internally and returned integer-centered at `n // 2`.
 
 Arrays that depend on a plane's sample spacing are built by the caller from the
 beam `compile_train` reports for their step:
 
 - surface error maps, resampled with
   {func}`~physicaloptix.instruments.roman_full.resample_map`, which reproduces
-  PROPER's cubic-convolution edge rule (the integer tap is clamped to
+  PROPER's cubic-convolution edge rule (the integer sample index is clamped to
   $[2, n-2]$ and the fractional offset kept, so samples beyond a map continue its
   edge);
 - the field stop, from
   {func}`~physicaloptix.instruments.roman_full.ellipse_mask` (PROPER's
   antialiased circle, 11 x 11 subsamples on edge pixels);
 - each DM's wavefront terms (above), with the Z6
-  ({func}`~physicaloptix.instruments.roman_full.noll_z6`) normalized to the radius of
-  the {class}`~physicaloptix.instruments.roman_full.PilotBeam` at the DM. The
+  ({func}`~physicaloptix.instruments.roman_full.noll_z6`) normalized to the radius
+  of the {class}`~physicaloptix.instruments.roman_full.PilotBeam` at the DM. The
   bias-proportional term is fixed when the arrays are built, so it does not follow
   later changes to the DM heights.
 
@@ -352,22 +368,24 @@ lens front focus, the detector orientation, and a damped-sinc zoom to the
 detector sampling that conserves amplitude.
 {func}`~physicaloptix.instruments.roman_full.polarization_maps` builds the
 primary-plane amplitude and phase for a polarization condition from the
-tabulated Zernike coefficients.
+tabulated Zernike coefficients, as scalar maps (one run per condition).
 
 The schedule is fixed per wavelength, so the model is differentiable with
-respect to array values (DM heights, maps, masks) but not with respect to
-wavelength or distances. The model follows the global `jax_enable_x64` setting;
-agreement with PROPER at rounding needs x64.
+respect to array values (DM heights, maps, mask transmissions) but not with
+respect to wavelength, distances, or the region a focal mask treats as
+patterned. The model follows the global `jax_enable_x64` setting. Agreement with
+PROPER at rounding needs x64.
 
 ### Validation
 
 Data-free tests pin the planner (regime selection, the sampling change through a
 focus, a relay's return to a planar reference, the `to_plane` override, the
-rejection of odd grids), the array operations (the angular-spectrum hop equals
+rejection of odd grids), the array operations (the transfer-function hop equals
 the same-grid {class}`~physicaloptix.transforms.Fresnel` hop, energy
 conservation, a planned focus reproduces the Gaussian-beam amplitude from the
-complex beam parameter, differentiability), and the helpers (the edge rule
+complex beam parameter, stacked fields match single ones), a DM-height
+Jacobian against central finite differences, and the helpers (the edge rule
 against values measured from PROPER's interpolation, the zoom, the mask, the Z6
-normalization). The surface-by-surface comparison with the full prescription
-needs the prescription package and is not part of the test suite; see the
+normalization). The plane-by-plane comparison with the full prescription needs
+the prescription package and is not part of the test suite. See the
 [validation](validation.md) page.

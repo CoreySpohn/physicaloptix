@@ -461,7 +461,7 @@ Honesty about the boundary:
   simulation code. Hardware-anchored validation of segment-level models
   exists in the field (for example PASTIS on HiCAT, Laginja et al. 2022) and
   is the model for what Tier C should eventually look like here.
-- **Polarization** is not modeled (a sizing study found the filtered leakage
+- **Polarization** is not modeled in the segmented-telescope design chains (a sizing study found the filtered leakage
   floors below the drift floors for the current design regime), and the
   chromatic linearization shortcut is deliberately unimplemented pending its
   own validation.
@@ -479,15 +479,20 @@ Honesty about the boundary:
 - The [Roman full train](instruments.md) is anchored in this suite only by
   data-free tests of its planner, array operations and helpers
   (`tests/test_proper_beam.py`, `tests/test_proper_ops.py`,
-  `tests/test_roman_full.py`). Its surface-by-surface comparison with the full
-  prescription needs the prescription package and runs outside this suite.
-  Run that way for the hybrid-Lyot Band 1 and wide-field shaped-pupil Band 4
-  modes, with and without pupil defocus, surface error maps, the flight DM model
-  from delivered voltages and polarization aberrations, every one of the 27
-  propagated fields agrees with the prescription to at most 1.5e-14 of the unit
-  entrance field, the pilot-beam state is bit-identical, and detector images at
-  three wavelengths per band agree to 1e-15. It reproduces the prescription's
-  schedule and conventions; it is not an independent model of the instrument.
+  `tests/test_roman_full.py`). Its comparison with the Roman preflight PROPER
+  prescription needs the prescription package and runs outside this suite. When
+  run for the hybrid-Lyot Band 1 and wide-field shaped-pupil Band 4 modes with
+  an on-axis source at the design wavelength, each of the 27 recorded fields
+  agrees with the prescription to at most 1.5e-14 of the unit entrance field, with
+  and without pupil defocus, surface error maps, the flight DM model from
+  delivered voltages and the averaged polarization aberrations, and the
+  pilot-beam state is bit-identical. Final detector images (off-axis sources, the
+  four single polarization conditions, and three wavelengths per band in the
+  detector sampling of the Roman simulation package corgisim) agree to 1e-15 of
+  the unit entrance field. Agreement to rounding reproduces the prescription's
+  schedule and conventions, including its own approximations (paraxial
+  propagation, thin masks and DMs, finite grids, the preflight rather than
+  as-built optical design); it is not an independent model of the instrument.
 
 ## Reproducing
 

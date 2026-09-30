@@ -2,9 +2,11 @@
 
 PROPER (Krist 2007) carries a Gaussian pilot beam beside the field. A propagation
 whose ends both lie within a Rayleigh distance of the pilot waist uses the
-angular-spectrum method on a fixed grid; otherwise the field is carried relative
-to a spherical reference surface and a single-FFT Fresnel transform moves it to
-or from the waist, changing the sample spacing to ``lambda |dz| / (n dx)``. A lens
+paraxial Fresnel transfer function on a fixed grid. Any other is split at the
+waist: a leg inside the Rayleigh distance uses the transfer function, and a leg
+outside it is carried relative to a spherical reference surface and moved to or
+from the waist by a single-FFT Fresnel transform, which sets the sample spacing to
+``lambda |dz| / (n dx)`` with ``dz`` the leg length. A lens
 updates the pilot waist and applies only the part of its phase that the change of
 reference surface does not absorb.
 
