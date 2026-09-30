@@ -6,6 +6,7 @@ import pytest
 
 from physicaloptix.instruments.roman import (
     RomanCompact,
+    dm_median_volts,
     dm_strokes_from_volts,
     dm_surface,
     proper_trim,
@@ -158,7 +159,9 @@ def test_spc_mask_rejects_a_return_grid_of_other_parity(n_big, diam):
         )
 
 
-@pytest.mark.parametrize("name", ["dm1_surface_m", "dm2_surface_m"])
+@pytest.mark.parametrize(
+    "name", ["dm1_surface_m", "dm2_surface_m", "dm1_wfe_m", "dm2_wfe_m"]
+)
 def test_dm_surface_must_match_the_pupil_grid(name):
     with pytest.raises(ValueError, match=name):
         _clear_model(**{name: np.zeros((N_SMALL - 1, N_SMALL - 1))})
@@ -526,3 +529,32 @@ def test_dm_strokes_reject_a_live_mask_of_the_wrong_shape():
         dm_strokes_from_volts(
             np.zeros((4, 4)), **_calibration(), volt_quantum=0.5, live=np.ones(4, bool)
         )
+
+
+@pytest.mark.parametrize("k", [1, 2])
+def test_dm_wavefront_term_is_added_once_after_the_surface(k):
+    rng = np.random.default_rng(k)
+    surface = 3e-9 * rng.standard_normal((N_SMALL, N_SMALL))
+    wfe = 7e-9 * rng.standard_normal((N_SMALL, N_SMALL))
+    wl, stage = 825.0, f"dm{k}"
+    base = _clear_model(**{f"dm{k}_surface_m": surface})
+    both = _clear_model(**{f"dm{k}_surface_m": surface, f"dm{k}_wfe_m": wfe})
+    a = base.propagate(wl, 0.0, 0.0, output_dim=65)[stage]
+    b = both.propagate(wl, 0.0, 0.0, output_dim=65)[stage]
+    np.testing.assert_allclose(
+        b, a * np.exp(2j * np.pi * wfe / (wl * 1e-9)), atol=1e-15
+    )
+
+
+def test_dm_median_volts_quantizes_then_takes_the_live_median():
+    q = 110.0 / 2**16
+    v = np.array([[1.0, 2.00001], [3.0, 100.0]])
+    live = np.array([[True, True], [True, False]])
+    expect = np.median(np.floor(np.array([1.0, 2.00001, 3.0]) / q) * q)
+    got = float(dm_median_volts(v, volt_quantum=q, live=live))
+    assert got == pytest.approx(expect, rel=1e-15)
+
+
+def test_dm_median_volts_rejects_a_live_mask_of_the_wrong_shape():
+    with pytest.raises(ValueError, match="live"):
+        dm_median_volts(np.zeros((4, 4)), volt_quantum=0.5, live=np.ones(4, bool))

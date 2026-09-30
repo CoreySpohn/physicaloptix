@@ -281,6 +281,29 @@ def dm_strokes_from_volts(
     return -(stroke - median)
 
 
+def dm_median_volts(volts, *, volt_quantum, live):
+    """Median of the quantized voltages over live actuators.
+
+    The flight DM model scales its bias-proportional surface-error map by this
+    median. Quantization passes gradients straight through, as in
+    :func:`dm_strokes_from_volts`.
+
+    Args:
+        volts: Commanded voltages in volts, ``(n_act_y, n_act_x)``.
+        volt_quantum: Driver voltage step in volts.
+        live: Boolean mask of live actuators, the shape of ``volts``.
+
+    Raises:
+        ValueError: If ``live`` does not have the shape of ``volts``.
+    """
+    v = jnp.asarray(volts, dtype=float)
+    if jnp.shape(live) != v.shape:
+        raise ValueError(f"live must have the shape of volts {v.shape}")
+    step = jnp.floor(v / volt_quantum) * volt_quantum
+    quantized = v + jax.lax.stop_gradient(step - v)
+    return jnp.nanmedian(jnp.where(jnp.asarray(live), quantized, jnp.nan))
+
+
 class RomanCompact(eqx.Module):
     """Monochromatic compact Roman coronagraph train on prescription grids.
 
@@ -303,6 +326,9 @@ class RomanCompact(eqx.Module):
             in meters, positive into the DM (as :func:`dm_surface` returns
             them); the reflected wavefront is delayed by twice the surface.
             ``None`` for a flat DM.
+        dm1_wfe_m, dm2_wfe_m: Wavefront terms in meters applied after each DM
+            surface (the flight DM model's static and bias-proportional surface
+            errors, reflected at -2x, and its residual astigmatism), or ``None``.
     """
 
     pupil: Array = eqx.field(converter=jnp.asarray)
@@ -320,6 +346,8 @@ class RomanCompact(eqx.Module):
     dm_separation_m: float = eqx.field(static=True, default=1.0)
     dm1_surface_m: Array | None = None
     dm2_surface_m: Array | None = None
+    dm1_wfe_m: Array | None = None
+    dm2_wfe_m: Array | None = None
 
     def __check_init__(self):
         """Validate grid shapes and the mask kind."""
@@ -349,7 +377,7 @@ class RomanCompact(eqx.Module):
                     f"pupil_diam_pix {d} must be an integer with the parity of "
                     f"n_big {self.n_big} for a shaped-pupil focal mask"
                 )
-        for name in ("dm1_surface_m", "dm2_surface_m"):
+        for name in ("dm1_surface_m", "dm2_surface_m", "dm1_wfe_m", "dm2_wfe_m"):
             surface = getattr(self, name)
             if surface is not None and jnp.shape(surface) != (
                 self.n_small,
@@ -409,7 +437,7 @@ class RomanCompact(eqx.Module):
                 plane=field.plane,
             )
         stages["entrance"] = field.data * dx
-        field = self._dm(field, self.dm1_surface_m, wl)
+        field = self._dm(field, self.dm1_surface_m, wl, self.dm1_wfe_m)
         stages["dm1"] = field.data * dx
 
         grid = self._pupil_grid(self.n_small)
@@ -420,7 +448,7 @@ class RomanCompact(eqx.Module):
             wavelength_nm=wl,
             on_undersampled="record",
         )
-        at_dm2 = self._dm(relay.forward(field), self.dm2_surface_m, wl)
+        at_dm2 = self._dm(relay.forward(field), self.dm2_surface_m, wl, self.dm2_wfe_m)
         stages["dm2"] = at_dm2.data * dx
         field = relay.backward(at_dm2)
 
@@ -456,11 +484,15 @@ class RomanCompact(eqx.Module):
         stages["image"] = jnp.transpose(data)
         return stages
 
-    def _dm(self, field, surface_m, wl):
-        if surface_m is None:
-            return field
-        phase = jnp.exp(2j * jnp.pi * 2.0 * jnp.asarray(surface_m) / (wl * 1e-9))
-        return Field(data=field.data * phase, grid=field.grid, plane=field.plane)
+    def _dm(self, field, surface_m, wl, wfe_m=None):
+        data = field.data
+        if surface_m is not None:
+            data = data * jnp.exp(
+                2j * jnp.pi * 2.0 * jnp.asarray(surface_m) / (wl * 1e-9)
+            )
+        if wfe_m is not None:
+            data = data * jnp.exp(2j * jnp.pi * jnp.asarray(wfe_m) / (wl * 1e-9))
+        return Field(data=data, grid=field.grid, plane=field.plane)
 
     @staticmethod
     def _mask_plane_record(at_mask, pupil_grid, dout):

@@ -475,10 +475,14 @@ Honesty about the boundary:
   only at Tier A (`tests/test_roman.py`): NumPy statements of the
   prescription's transforms, and property tests of the DM map and voltage
   conversion. Their comparison with PROPER and the compact prescription runs
-  outside this suite. The full Roman relay (the optics between the telescope
-  and the coronagraph masks) is not modeled, nor are the full prescription's
-  measured DM influence functions, DM surface figure maps and per-DM
-  astigmatism.
+  outside this suite.
+- The [Roman full train](instruments.md) is anchored in this suite only by
+  data-free tests of its planner, array operations and helpers
+  (`tests/test_proper_beam.py`, `tests/test_proper_ops.py`,
+  `tests/test_roman_full.py`). Its surface-by-surface comparison with the full
+  prescription needs the prescription package and runs outside this suite. It
+  reproduces the prescription's schedule and conventions; it is not an
+  independent model of the instrument.
 
 ## Reproducing
 
