@@ -11,6 +11,7 @@ from physicaloptix.instruments.nircam import (
     nircam_band_image,
 )
 from physicaloptix.instruments.roman import RomanCompact
+from physicaloptix.instruments.roman_full import RomanFull, compile_train
 
 __all__ = [
     "BandLimitedRoundMask",
@@ -18,7 +19,9 @@ __all__ = [
     "NIRCamConfig",
     "NIRCamInputs",
     "RomanCompact",
+    "RomanFull",
     "build_nircam",
+    "compile_train",
     "integrate_detector_pixels",
     "mask_plane_field",
     "nircam_band_image",

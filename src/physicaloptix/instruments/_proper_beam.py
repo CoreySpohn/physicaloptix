@@ -53,6 +53,11 @@ class PilotBeam:
     reference: str
     beam_type_old: str
 
+    def __post_init__(self):
+        """Hold plain Python floats (static data under jit, never NumPy scalars)."""
+        for name in ("lam_m", "dx", "z", "z_w0", "w0", "z_rayleigh"):
+            object.__setattr__(self, name, float(getattr(self, name)))
+
     @classmethod
     def begin(cls, beam_diameter_m, lam_m, n, beam_diam_fraction):
         """Entrance state: a collimated beam of ``beam_diameter_m`` at its waist.
@@ -107,12 +112,16 @@ class Op(NamedTuple):
     forward: bool
 
 
+def _op(kind, value, dx, forward):
+    return Op(kind, float(value), float(dx), bool(forward))
+
+
 def _ptp(beam, dz):
     if np.abs(dz) < 1e-12:
         return beam, ()
     if beam.reference != "PLANAR":
         raise ValueError("ptp: input reference surface is not planar")
-    return dataclasses.replace(beam, z=beam.z + dz), (Op("ptp", dz, beam.dx, True),)
+    return dataclasses.replace(beam, z=beam.z + dz), (_op("ptp", dz, beam.dx, True),)
 
 
 def _stw(beam, dz=0.0):
@@ -122,14 +131,14 @@ def _stw(beam, dz=0.0):
         dz = beam.z_w0 - beam.z
     dx = beam.lam_m * np.abs(dz) / (beam.n * beam.dx)
     beam = dataclasses.replace(beam, z=beam.z + dz, dx=dx, reference="PLANAR")
-    return beam, (Op("stw", dz, dx, bool(dz >= 0.0)),)
+    return beam, (_op("stw", dz, dx, dz >= 0.0),)
 
 
 def _wts(beam, dz):
     beam = dataclasses.replace(beam, reference="SPHERI")
     if dz == 0.0:
         return beam, ()
-    op = Op("wts", dz, beam.dx, bool(dz >= 0.0))
+    op = _op("wts", dz, beam.dx, dz >= 0.0)
     dx = beam.lam_m * np.abs(dz) / (beam.n * beam.dx)
     return dataclasses.replace(beam, z=beam.z + dz, dx=dx), (op,)
 
@@ -228,7 +237,7 @@ def plan_lens(beam, lens_fl):
         reference="PLANAR" if new == "INSIDE_" else "SPHERI",
         beam_type_old=new,
     )
-    return beam, Op("lens", phase, beam.dx, True)
+    return beam, _op("lens", phase, beam.dx, True)
 
 
 def _to_corner(a):
