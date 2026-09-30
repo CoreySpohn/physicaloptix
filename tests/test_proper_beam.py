@@ -152,3 +152,16 @@ def test_run_ops_jits_and_differentiates():
 
     g = jax.jit(jax.grad(loss))(jnp.zeros((n, n)))
     assert bool(jnp.all(jnp.isfinite(g)))
+
+
+def test_batched_fields_match_one_at_a_time():
+    n, dx = 32, 0.01 / 16
+    ops = (
+        Op("lens", 2.0, dx, True),
+        Op("stw", 0.4, LAM * 0.4 / (n * dx), True),
+        Op("ptp", 0.1, dx, True),
+    )
+    a = _corner(_gaussian(n, dx, 0.003))
+    stack = jnp.stack([a, 2 * a])
+    out = run_ops(stack, ops, LAM)
+    assert jnp.max(jnp.abs(out[1] - run_ops(2 * a, ops, LAM))) < 1e-14

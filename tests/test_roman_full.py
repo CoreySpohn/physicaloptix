@@ -123,3 +123,18 @@ def test_polarization_rejects_unsupported_condition():
     z = np.zeros((2, 2, 6, 22))
     with pytest.raises(ValueError, match="condition"):
         polarization_maps(z, z, 575e-9, 309.0, 5)
+
+
+def test_build_helpers_are_public_on_roman_full():
+    from physicaloptix.instruments import roman_full
+
+    for name in (
+        "PilotBeam",
+        "plan_propagate",
+        "plan_lens",
+        "resample_map",
+        "ellipse_mask",
+        "noll_z6",
+    ):
+        assert name in roman_full.__all__
+        assert callable(getattr(roman_full, name))

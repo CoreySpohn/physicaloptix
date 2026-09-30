@@ -87,3 +87,9 @@ def test_noll_z6_normalization():
     z = noll_z6(64, 1.0, 16.0)
     assert float(z[32, 48]) == pytest.approx(np.sqrt(6.0), rel=1e-14)
     assert float(z[48, 32]) == pytest.approx(-np.sqrt(6.0), rel=1e-14)
+
+
+def test_ffts_batched_matches_single():
+    rng = np.random.default_rng(4)
+    a = jnp.asarray(rng.standard_normal((2, 8, 8)) + 0j)
+    assert jnp.max(jnp.abs(ffts(a, -1)[1] - ffts(a[1], -1))) < 1e-15

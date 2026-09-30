@@ -26,7 +26,8 @@ def ffts(a, direction):
     """
     n = a.shape[-1]
     a = jnp.roll(a, (-n // 2, -n // 2), axis=(-2, -1))
-    a = jnp.fft.fft2(a) / a.size if direction == -1 else jnp.fft.ifft2(a) * a.size
+    size = a.shape[-2] * a.shape[-1]
+    a = jnp.fft.fft2(a) / size if direction == -1 else jnp.fft.ifft2(a) * size
     return jnp.roll(a, (n // 2, n // 2), axis=(-2, -1))
 
 

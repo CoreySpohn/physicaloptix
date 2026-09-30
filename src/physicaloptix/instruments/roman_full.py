@@ -22,10 +22,14 @@ propagation's array operations and every plane's sample spacing (PROPER's
 convention, Krist 2007); :class:`RomanFull` runs the fixed program in JAX. Arrays
 that depend on a plane's spacing (surface error maps, a field stop, DM surface
 error terms) are built by the caller from the beam ``compile_train`` reports for
-their step. Fields and arrays are integer-centered at ``n // 2``.
+their step, with :func:`resample_map`, :func:`ellipse_mask` and :func:`noll_z6`
+(PROPER's conventions). Fields and arrays are integer-centered at ``n // 2``.
 
 The schedule is fixed per wavelength, so the model is differentiable with respect
-to array values (DM heights, maps, masks) but not wavelength or distances.
+to array values (DM heights, maps, masks) but not wavelength or distances. A DM
+wavefront term built from commanded voltages (the bias-proportional map scales with
+their median) is an array like any other: it does not follow later changes to the
+DM heights.
 """
 
 from typing import NamedTuple
@@ -41,12 +45,30 @@ from physicaloptix.instruments._proper_beam import (
     run_ops,
 )
 from physicaloptix.instruments._proper_ops import (
+    ellipse_mask,
     ffts,
     mft2,
+    noll_z6,
+    resample_map,
     shift_center,
     szoom_weights,
 )
 from physicaloptix.instruments.roman import dm_surface, proper_trim
+
+__all__ = [
+    "PilotBeam",
+    "RomanFull",
+    "TrainPlan",
+    "compile_train",
+    "detector_image",
+    "ellipse_mask",
+    "noll_z6",
+    "plan_lens",
+    "plan_propagate",
+    "polarization_maps",
+    "resample_map",
+    "source_tilt",
+]
 
 
 class TrainPlan(NamedTuple):

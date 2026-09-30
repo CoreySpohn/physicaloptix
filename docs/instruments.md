@@ -333,15 +333,18 @@ Arrays that depend on a plane's sample spacing are built by the caller from the
 beam `compile_train` reports for their step:
 
 - surface error maps, resampled with
-  {func}`~physicaloptix.instruments._proper_ops.resample_map`, which reproduces
+  {func}`~physicaloptix.instruments.roman_full.resample_map`, which reproduces
   PROPER's cubic-convolution edge rule (the integer tap is clamped to
   $[2, n-2]$ and the fractional offset kept, so samples beyond a map continue its
   edge);
 - the field stop, from
-  {func}`~physicaloptix.instruments._proper_ops.ellipse_mask` (PROPER's
+  {func}`~physicaloptix.instruments.roman_full.ellipse_mask` (PROPER's
   antialiased circle, 11 x 11 subsamples on edge pixels);
-- each DM's wavefront terms (above), with the Z6 normalized to the pilot-beam
-  radius at the DM.
+- each DM's wavefront terms (above), with the Z6
+  ({func}`~physicaloptix.instruments.roman_full.noll_z6`) normalized to the radius of
+  the {class}`~physicaloptix.instruments.roman_full.PilotBeam` at the DM. The
+  bias-proportional term is fixed when the arrays are built, so it does not follow
+  later changes to the DM heights.
 
 {func}`~physicaloptix.instruments.roman_full.detector_image` applies the
 prescription's last steps: the residual quadratic phase of a pupil not at the

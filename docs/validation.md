@@ -480,9 +480,14 @@ Honesty about the boundary:
   data-free tests of its planner, array operations and helpers
   (`tests/test_proper_beam.py`, `tests/test_proper_ops.py`,
   `tests/test_roman_full.py`). Its surface-by-surface comparison with the full
-  prescription needs the prescription package and runs outside this suite. It
-  reproduces the prescription's schedule and conventions; it is not an
-  independent model of the instrument.
+  prescription needs the prescription package and runs outside this suite.
+  Run that way for the hybrid-Lyot Band 1 and wide-field shaped-pupil Band 4
+  modes, with and without pupil defocus, surface error maps, the flight DM model
+  from delivered voltages and polarization aberrations, every one of the 27
+  propagated fields agrees with the prescription to at most 1.5e-14 of the unit
+  entrance field, the pilot-beam state is bit-identical, and detector images at
+  three wavelengths per band agree to 1e-15. It reproduces the prescription's
+  schedule and conventions; it is not an independent model of the instrument.
 
 ## Reproducing
 

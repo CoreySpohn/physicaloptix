@@ -246,11 +246,13 @@ def _to_corner(a):
 
 
 def _fft_forward(a, n):
-    return jnp.fft.fft2(a) / a.size * n
+    size = a.shape[-2] * a.shape[-1]
+    return jnp.fft.fft2(a) / size * n
 
 
 def _fft_backward(a, n):
-    return jnp.fft.ifft2(a) * a.size / n
+    size = a.shape[-2] * a.shape[-1]
+    return jnp.fft.ifft2(a) * size / n
 
 
 def _ptp_array(a, lam, dz, dx, n):
