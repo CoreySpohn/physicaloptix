@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.2.0](https://github.com/CoreySpohn/physicaloptix/compare/v2.1.0...v2.2.0) (2026-09-30)
+
+
+### Features
+
+* **roman:** add flight DM wavefront terms to the compact model and document the full train ([d5eb0bc](https://github.com/CoreySpohn/physicaloptix/commit/d5eb0bcd41f8482afd7a4d1a3780153787ba4edc))
+* **roman:** add PROPER-convention transforms, masks and resampling weights ([df3fb93](https://github.com/CoreySpohn/physicaloptix/commit/df3fb93800cf199d7e0d6845cfec58141fa4d52f))
+* **roman:** compile and run the full Roman train on pilot-beam grids ([c3d1b44](https://github.com/CoreySpohn/physicaloptix/commit/c3d1b449d9143c9e9d07e977af3dbc699e2d9815))
+* **roman:** plan PROPER-style pilot-beam propagation and run it in JAX ([4a72f9b](https://github.com/CoreySpohn/physicaloptix/commit/4a72f9b5eb1e700aeb92ed710129bcc7f4ef99ec))
+
+
+### Bug Fixes
+
+* **roman:** normalize batched transforms by the grid, expose the full-train build helpers, and state the full-train agreement ([87c4bb3](https://github.com/CoreySpohn/physicaloptix/commit/87c4bb3009c0477094adca788f57de2df3829dec))
+
 ## [2.1.0](https://github.com/CoreySpohn/physicaloptix/compare/v2.0.0...v2.1.0) (2026-09-29)
 
 
