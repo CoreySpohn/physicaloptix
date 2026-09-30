@@ -1,4 +1,4 @@
-"""Array helpers in PROPER and Roman-prescription conventions (private).
+"""Array helpers in PROPER and Roman-prescription conventions (internal module).
 
 These reproduce reference conventions that the general transforms in hwoutils do
 not share on purpose: PROPER's cubic-convolution edge rule (the integer tap is
@@ -7,6 +7,12 @@ the array are dropped), its damped-sinc zoom, its antialiased circle, and the
 prescription's centered FFT and matrix Fourier transform. Samples are
 integer-centered at ``n // 2``. The weight builders and the mask run in NumPy at
 build time; the transforms are JAX.
+
+ellipse_mask, cubic_conv_weights, resample_map and szoom_weights are ported from
+PROPER (prop_ellipse, prop_cubic_conv, prop_szoom_c; Copyright California
+Institute of Technology, designated Technology and Software Publicly Available);
+ffts, mft2 and noll_z6 follow the Roman Preflight PROPER prescription. See the
+NOTICE file for the terms.
 """
 
 import jax.numpy as jnp

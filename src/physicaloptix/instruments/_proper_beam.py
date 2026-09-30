@@ -1,4 +1,4 @@
-"""Pilot-beam propagation in the convention of the PROPER library (private).
+"""Pilot-beam propagation in the convention of the PROPER library (internal module).
 
 PROPER (Krist 2007) carries a Gaussian pilot beam beside the field. A propagation
 whose ends both lie within a Rayleigh distance of the pilot waist uses the
@@ -16,6 +16,10 @@ The beam state never reads the field, so :func:`plan_propagate` and
 PROPER's layout, with the grid center ``n // 2`` rolled to the ``[0, 0]`` corner.
 Expressions follow PROPER's operation order so the schedule reproduces its beam
 state to rounding.
+
+The schedule is ported from PROPER's prop_propagate, prop_lens, prop_ptp,
+prop_stw and prop_wts (Copyright California Institute of Technology, designated
+Technology and Software Publicly Available); see the NOTICE file for its terms.
 """
 
 import dataclasses
