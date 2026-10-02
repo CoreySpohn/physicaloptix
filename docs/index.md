@@ -137,10 +137,12 @@ assume.
   -- driving `cross_band_moments`, its derived views, `joint_covariance`, and the
   `scale_e_nom` fix on a genuinely chromatic process.
 
-Figures have their own guide.
+Figures have their own guides.
 [Speckle boiling, prepared once](prepared-speckles) prepares a drifting
 speckle field once and draws it as a still, a strip of epochs, and a movie,
 with the same sequence ready for a Manim clip in a talk.
+[Propagation maps](propagation-maps) draws a field along its direction of
+travel, with screens, phase screens, and marked planes on the bench.
 
 ```{toctree}
 :maxdepth: 1
@@ -172,6 +174,7 @@ examples/08_Cross_Band_Speckle_Statistics
 :hidden:
 
 prepared-speckles
+propagation-maps
 ```
 
 ```{toctree}
