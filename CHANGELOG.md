@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.3.0](https://github.com/CoreySpohn/physicaloptix/compare/v2.2.0...v2.3.0) (2026-10-03)
+
+
+### Features
+
+* **viz:** add plot_propagation, a field-along-z map with bench elements and a background-centered signed colormap ([9b3701f](https://github.com/CoreySpohn/physicaloptix/commit/9b3701fd29914024735e4f10e07d5c24f8671c4d))
+* **viz:** add ray_train and mirror_train side views with paraxial and conic-mirror tracers, and near-to-far, Fresnel-zone and Cornu views ([da896e5](https://github.com/CoreySpohn/physicaloptix/commit/da896e528606901c9f4bc9ecc141a58ca37e6c27))
+
+
+### Bug Fixes
+
+* **deps:** require eyepiece 0.7.0 for the viz extra, whose Cornu view draws with phasor ([c2cd05e](https://github.com/CoreySpohn/physicaloptix/commit/c2cd05ed2a05471f10c1f10ad1d4229b07536bc3))
+
 ## [2.2.0](https://github.com/CoreySpohn/physicaloptix/compare/v2.1.0...v2.2.0) (2026-09-30)
 
 
