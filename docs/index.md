@@ -175,6 +175,8 @@ examples/08_Cross_Band_Speckle_Statistics
 
 prepared-speckles
 propagation-maps
+near-and-far-field
+ray-trains
 ```
 
 ```{toctree}
