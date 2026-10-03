@@ -89,6 +89,18 @@ def test_preparation_runs_without_either_renderer_interface():
     assert _run_blocked(blocked, body) == "prepared"
 
 
+def test_ray_tracers_run_without_eyepiece_or_matplotlib():
+    body = (
+        "from physicaloptix.viz import parabola, trace_mirrors, trace_paraxial\n"
+        "trace_paraxial(0.5, 0.0, [(1.0, 1.0)], 0.0, 2.0)\n"
+        "trace_mirrors((0.0, 2.0), (1.0, 0.0), [parabola((4.0, 0.0), 1.0)])\n"
+        "for name in ('matplotlib', 'eyepiece', 'physicaloptix.viz.rays'):\n"
+        "    assert name not in sys.modules, name\n"
+        "print('traced')\n"
+    )
+    assert _run_blocked(["eyepiece", "matplotlib"], body) == "traced"
+
+
 def test_lazy_name_gives_actionable_error_without_eyepiece():
     code = (
         "import sys; sys.modules['eyepiece'] = None\n"
