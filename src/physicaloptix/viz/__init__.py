@@ -4,7 +4,8 @@ Lazy by design: every public name imports on first attribute access, so the
 base install never needs the viz extra, and loading one function never loads
 another's module. The eyepiece-consuming names raise an actionable
 ImportError without the viz extra; the deprecated render_path needs only
-matplotlib, and only once it is called.
+matplotlib, and only once it is called; the side-view ray tracers
+(``physicaloptix.viz.raytrace``) need only NumPy and SciPy.
 """
 
 _LAZY = {
@@ -20,6 +21,13 @@ _LAZY = {
     "boiling_strip": "boiling",
     "plot_contrast_profile": "profiles",
     "plot_propagation": "propagation",
+    "plot_near_to_far": "fresnel",
+    "prepare_near_to_far": "fresnel",
+    "plot_fresnel_zones": "fresnel",
+    "plot_cornu": "fresnel",
+    "ray_train": "rays",
+    "mirror_train": "rays",
+    "plot_mirror": "rays",
     "plot_mode_gallery": "modes",
     "plot_zernike_pyramid": "modes",
     "plot_field_ellipse": "speckle",
@@ -28,7 +36,17 @@ _LAZY = {
 }
 
 # Names that do not go through eyepiece at all.
-_LAZY_PLAIN = {"render_path": "_legacy"}
+_LAZY_PLAIN = {
+    "render_path": "_legacy",
+    "trace_paraxial": "raytrace",
+    "beam_polygons": "raytrace",
+    "strip_polygons": "raytrace",
+    "trace_mirrors": "raytrace",
+    "ray_crossing": "raytrace",
+    "parabola": "raytrace",
+    "hyperbola": "raytrace",
+    "Mirror": "raytrace",
+}
 
 __all__ = sorted([*_LAZY, *_LAZY_PLAIN])
 
