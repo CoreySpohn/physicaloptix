@@ -20,15 +20,17 @@ set_platform("cpu")
 enable_x64()
 
 EAC1_CACHE_ENV = "PHYSICALOPTIX_EAC1_CACHE"
+_WORKSPACE = Path(__file__).parents[3] / "hwo-mission-control"  # internal-ref-ok
+# Development-workspace fallbacks, matched in any status folder so that a
+# project move cannot silently turn these gate tests into skips.
+DEV_DATA_PATTERNS = (
+    "*/eac1-simulation/scripts/eac1/data",  # internal-ref-ok
+    "*/physicaloptix-setup/scripts/eac1/data",  # internal-ref-ok
+    "*/physicaloptix-setup/scripts/eac1_dlux/data",  # internal-ref-ok
+)
 _DATA_DIRS = (
     Path(__file__).parent / "data",
-    # Development-workspace fallback paths.
-    Path(__file__).parents[3]
-    / "hwo-mission-control/burn/physicaloptix-setup"  # internal-ref-ok
-    / "scripts/eac1/data",  # internal-ref-ok
-    Path(__file__).parents[3]
-    / "hwo-mission-control/burn/physicaloptix-setup"  # internal-ref-ok
-    / "scripts/eac1_dlux/data",  # internal-ref-ok
+    *(d for pat in DEV_DATA_PATTERNS for d in sorted(_WORKSPACE.glob(pat))),
 )
 
 

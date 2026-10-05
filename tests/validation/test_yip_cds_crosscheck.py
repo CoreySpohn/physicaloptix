@@ -52,13 +52,14 @@ _HCIPY_TAPER_XFAIL_REASON = (
     "module fixed (2026-07-22); pending a fix + reference regen upstream."
 )
 
-_REFERENCE_CANDIDATES = (
-    "tests/data/cds_eac1_yip_reduced.npz",
-    # Development-workspace locations written by the generation script.
-    "../../hwo-mission-control/burn/physicaloptix-setup"  # internal-ref-ok
-    "/scripts/eac1/data/cds_eac1_yip_reduced.npz",  # internal-ref-ok
-    "../../hwo-mission-control/burn/physicaloptix-setup"  # internal-ref-ok
-    "/scripts/eac1_dlux/data/cds_eac1_yip_reduced.npz",  # internal-ref-ok
+_REFERENCE_CANDIDATES = ("tests/data/cds_eac1_yip_reduced.npz",)
+# Development-workspace locations written by the generation script, matched in
+# any status folder.
+_WORKSPACE_REL = "../../hwo-mission-control"  # internal-ref-ok
+_WORKSPACE_DIRS = (
+    "*/eac1-simulation/scripts/eac1/data",  # internal-ref-ok
+    "*/physicaloptix-setup/scripts/eac1/data",  # internal-ref-ok
+    "*/physicaloptix-setup/scripts/eac1_dlux/data",  # internal-ref-ok
 )
 
 
@@ -75,6 +76,10 @@ def reference():
     for candidate in _REFERENCE_CANDIDATES:
         path = (root / candidate).resolve()
         if path.exists():
+            return np.load(path)
+    workspace = (root / _WORKSPACE_REL).resolve()
+    for pattern in _WORKSPACE_DIRS:
+        for path in sorted(workspace.glob(f"{pattern}/cds_eac1_yip_reduced.npz")):
             return np.load(path)
     pytest.skip("reduced cds YIP reference not found")
 
