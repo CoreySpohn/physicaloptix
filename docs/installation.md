@@ -59,7 +59,7 @@ To build these docs, install the `docs` extra and run Sphinx:
 
 ```bash
 uv sync --extra docs
-uv run sphinx-build docs docs/_build/html
+uv run sphinx-build docs docs/.build/html
 ```
 
 ## Where physicaloptix sits in the stack
