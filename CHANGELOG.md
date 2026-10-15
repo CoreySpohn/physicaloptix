@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.1](https://github.com/CoreySpohn/physicaloptix/compare/v2.3.0...v2.3.1) (2026-10-15)
+
+
+### Bug Fixes
+
+* **interop:** accept stellar_diam_lod in core_mean_intensity ([4dbc6ef](https://github.com/CoreySpohn/physicaloptix/commit/4dbc6efa5a95532cab65def7c4638ac2ac6fc7e0))
+
 ## [2.3.0](https://github.com/CoreySpohn/physicaloptix/compare/v2.2.0...v2.3.0) (2026-10-03)
 
 
