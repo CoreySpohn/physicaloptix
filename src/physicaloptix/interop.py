@@ -221,8 +221,14 @@ class PathCoronagraph(AbstractCoronagraph):
         """Photometric core area (above-half-max region) in (lambda/D)^2."""
         return self._interp(self.curve_core_area, separation_lod)
 
-    def core_mean_intensity(self, separation_lod, wavelength_nm, *, time_s=0.0):
-        """Mean stellar intensity density over the core, in (lambda/D)^-2."""
+    def core_mean_intensity(
+        self, separation_lod, wavelength_nm, *, time_s=0.0, stellar_diam_lod=0.0
+    ):
+        """Mean stellar intensity density over the core, in (lambda/D)^-2.
+
+        The curves are propagated for a point star, so stellar_diam_lod is
+        accepted for the coronagraph contract and ignored.
+        """
         return self._interp(self.curve_core_mean_intensity, separation_lod)
 
     def occulter_transmission(self, separation_lod, wavelength_nm, *, time_s=0.0):

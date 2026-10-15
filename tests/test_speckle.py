@@ -34,7 +34,7 @@ class _MockCoro(ox.AbstractScalarCoronagraph):
     def core_area(self, sep, wl, *, time_s=0.0):
         return 1.0
 
-    def core_mean_intensity(self, sep, wl, *, time_s=0.0):
+    def core_mean_intensity(self, sep, wl, *, time_s=0.0, stellar_diam_lod=0.0):
         return 1e-10
 
     def occulter_transmission(self, sep, wl, *, time_s=0.0):
