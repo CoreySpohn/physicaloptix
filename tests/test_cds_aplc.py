@@ -9,6 +9,7 @@ from physicaloptix.core import Field, Grid
 from physicaloptix.instruments import cds
 from physicaloptix.sources import point_source
 from physicaloptix.transforms import PreparedMFT, cmft_bwd, cmft_fwd
+from physicaloptix.transforms.cmft import resolve_precision
 from physicaloptix.transforms.czt import CZT
 
 
@@ -170,3 +171,98 @@ def test_parity_with_cds_pipeline():
             )
             mine = np.asarray(p.lyot_field(s[0], s[1], iw))
             assert np.linalg.norm(mine - ref) / np.linalg.norm(ref) < 1e-12
+
+
+def _dot_precisions(fn, *args):
+    """Precision parameter of every dot_general in the traced function."""
+    found = []
+
+    def walk(jaxpr):
+        for eqn in jaxpr.eqns:
+            if eqn.primitive.name == "dot_general":
+                found.append(eqn.params["precision"])
+            for v in eqn.params.values():
+                for sub in v if isinstance(v, (list, tuple)) else [v]:
+                    inner = getattr(sub, "jaxpr", sub)
+                    if hasattr(inner, "eqns"):
+                        walk(inner)
+
+    walk(jax.make_jaxpr(fn)(*args).jaxpr)
+    return found
+
+
+def _has(found, want):
+    """Whether a recorded dot_general precision is ``want`` (single or pair)."""
+    pair = found if isinstance(found, tuple) else (found, found)
+    return found is not None and all(f == want for f in pair)
+
+
+X3 = jax.lax.DotAlgorithmPreset.BF16_BF16_F32_X3
+
+
+def test_default_precision_policy_on_cpu(tiny):
+    highest = jax.lax.Precision.HIGHEST
+    for dt in (jnp.complex128, jnp.complex64):
+        p = cds.DirectAPLC.prepare(tiny, [1.0], V, dt)
+        assert p.precision == highest
+    assert resolve_precision("bf16_bf16_f32_x3", jnp.complex64) == X3
+    assert resolve_precision("highest", jnp.complex64) == highest
+
+
+def test_precision_reaches_every_dot_general(tiny):
+    for prec in (None, X3):
+        for split in (False, True):
+            p = cds.DirectAPLC.prepare(tiny, [1.0], V, jnp.complex64, precision=prec)
+            want = p.precision
+            found = _dot_precisions(
+                lambda sx, sy, p=p, split=split: p.field(sx, sy, split=split),
+                jnp.array([1.0]),
+                jnp.array([2.0]),
+            )
+            assert len(found) >= 6
+            assert all(_has(f, want) for f in found), found
+    mft = PreparedMFT.build(tiny.x, tiny.u, dtype=jnp.complex64, precision=X3)
+    f = jnp.ones((40, 40), jnp.complex64)
+    for fn in (mft.fwd, mft.bwd):
+        arg = f if fn == mft.fwd else jnp.ones((16, 16), jnp.complex64)
+        found = _dot_precisions(fn, arg)
+        assert found
+        assert all(_has(x, X3) for x in found)
+
+
+def test_global_matmul_precision_is_not_inherited(tiny):
+    a = cds.DirectAPLC.prepare(tiny, [1.0], V, jnp.complex128)
+    with jax.default_matmul_precision("bfloat16"):
+        b = cds.DirectAPLC.prepare(tiny, [1.0], V, jnp.complex128)
+        found = _dot_precisions(
+            lambda sx, sy: b.field(sx, sy), jnp.array([1.0]), jnp.array([2.0])
+        )
+    assert a.precision == b.precision == jax.lax.Precision.HIGHEST
+    assert all(_has(f, jax.lax.Precision.HIGHEST) for f in found)
+
+
+@pytest.mark.gpu
+def test_complex64_default_policy_within_target_on_gpu(tiny):
+    if jax.default_backend() != "gpu":
+        pytest.skip("needs a GPU backend")
+    sx, sy = np.array([2.0]), np.array([1.0])
+    p128 = cds.DirectAPLC.prepare(tiny, [1.0], V, jnp.complex128)
+    p64 = cds.DirectAPLC.prepare(tiny, [1.0], V, jnp.complex64)
+    assert p64.precision == X3
+    a = np.asarray(p128.field(sx, sy)[0])
+    b = np.asarray(p64.field(sx, sy)[0])
+    assert np.abs(b - a).max() / np.abs(a).max() < 1e-5
+
+
+def test_source_chunk_does_not_change_results(tiny):
+    p = cds.DirectAPLC.prepare(tiny, [0.97, 1.03], V, jnp.complex128)
+    assert p.chunk == 1  # CPU default
+    assert cds.DirectAPLC.prepare(tiny, [1.0], V, chunk=16).chunk == 16
+    rng = np.random.default_rng(3)
+    sx, sy = rng.uniform(-3, 3, (2, 7))
+    sw, wl = rng.uniform(0.5, 2, 7), np.array([0.4, 0.6])
+    ref = p.intensity(sx, sy, sw, wl)
+    for chunk in (2, 3, 7, 16):
+        np.testing.assert_allclose(
+            p.intensity(sx, sy, sw, wl, chunk=chunk), ref, rtol=1e-11
+        )

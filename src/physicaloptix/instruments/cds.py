@@ -31,7 +31,13 @@ import jax.numpy as jnp
 import numpy as np
 from astropy.io import fits
 
-from physicaloptix.transforms.cmft import PreparedMFT, cmft_bwd, cmft_fwd
+from physicaloptix.transforms.cmft import (
+    PreparedMFT,
+    cmft_bwd,
+    cmft_fwd,
+    matmul,
+    resolve_precision,
+)
 from physicaloptix.transforms.czt import CZT
 
 _DESIGN = "designs/aplc/LUVOIR-A_delivery_May2019"
@@ -156,11 +162,11 @@ def detector_field_reference(inputs, lyot, v, wavelength_ratio=1.0):
     return c * cmft_fwd(lyot, x, jnp.asarray(v) / wavelength_ratio)
 
 
-def _real_times_complex(q, k, split):
+def _real_times_complex(q, k, split, prec):
     """``q @ k`` for real ``q``; optionally as two real products."""
     if split:
-        return jax.lax.complex(q @ k.real, q @ k.imag)
-    return q.astype(k.dtype) @ k
+        return jax.lax.complex(matmul(q, k.real, prec), matmul(q, k.imag, prec))
+    return matmul(q.astype(k.dtype), k, prec)
 
 
 def _tilts(x, ax, ay, cdt):
@@ -169,7 +175,7 @@ def _tilts(x, ax, ay, cdt):
     return tx, ty
 
 
-def _lyot_chunk(q, ls, disk, kf, cb, tx, ty, split):
+def _lyot_chunk(q, ls, disk, kf, cb, tx, ty, split, prec):
     """Lyot field for a chunk of ``S`` sources, layout ``(n, S, n)``.
 
     All sources share each matrix product (the source index is folded into
@@ -178,22 +184,22 @@ def _lyot_chunk(q, ls, disk, kf, cb, tx, ty, split):
     s, n = tx.shape
     m = kf.shape[0]
     kx = (tx.T[:, :, None] * kf.T[:, None, :]).reshape(n, s * m)
-    t = _real_times_complex(q, kx, split).reshape(n, s, m) * ty.T[:, :, None]
-    a = (kf @ t.reshape(n, s * m)).reshape(m, s, m)
+    t = _real_times_complex(q, kx, split, prec).reshape(n, s, m) * ty.T[:, :, None]
+    a = matmul(kf, t.reshape(n, s * m), prec).reshape(m, s, m)
     g = disk[:, None, :] * a
     kc = jnp.conj(kf)
-    h = (g.reshape(m * s, m) @ kc).reshape(m, s, n)
-    back = (kc.T @ h.reshape(m, s * n)).reshape(n, s, n)
+    h = matmul(g.reshape(m * s, m), kc, prec).reshape(m, s, n)
+    back = matmul(kc.T, h.reshape(m, s * n), prec).reshape(n, s, n)
     qs = q[:, None, :] * ty.T[:, :, None] * tx[None, :, :]
     return ls[:, None, :] * (qs - cb * back)
 
 
-def _detector_chunk(lyot, kd, kdy, cdet):
+def _detector_chunk(lyot, kd, kdy, cdet, prec):
     n, s, _ = lyot.shape
     vx = kd.shape[0]
     vy = kdy.shape[0]
-    p = (lyot.reshape(n * s, n) @ kd.T).reshape(n, s * vx)
-    d = (kdy @ p).reshape(vy, s, vx)
+    p = matmul(lyot.reshape(n * s, n), kd.T, prec).reshape(n, s * vx)
+    d = matmul(kdy, p, prec).reshape(vy, s, vx)
     return cdet * jnp.transpose(d, (1, 0, 2))
 
 
@@ -227,6 +233,8 @@ class DirectAPLC(eqx.Module):
         cb: Babinet weight ``dx^2 du^2 / ratio^2`` per wavelength, real.
         cdet: Detector constant per wavelength, complex.
         sigma: ``lambda0 / lambda`` per wavelength (float64).
+        precision: Matmul precision of every product (static).
+        chunk: Default sources per product in ``intensity`` (static).
     """
 
     q: jnp.ndarray
@@ -240,10 +248,20 @@ class DirectAPLC(eqx.Module):
     cdet: jnp.ndarray
     sigma: jnp.ndarray
     czt: tuple | None = None
+    precision: object = eqx.field(static=True, default=jax.lax.Precision.HIGHEST)
+    chunk: int = eqx.field(static=True, default=1)
 
     @classmethod
     def prepare(
-        cls, inputs, wavelength_ratios, v, dtype=jnp.complex128, vy=None, czt=False
+        cls,
+        inputs,
+        wavelength_ratios,
+        v,
+        dtype=jnp.complex128,
+        vy=None,
+        czt=False,
+        precision=None,
+        chunk=None,
     ):
         """Cache kernels for the given wavelength ratios and detector axis.
 
@@ -254,16 +272,29 @@ class DirectAPLC(eqx.Module):
             dtype: ``complex64`` or ``complex128`` for the products.
             vy: 1D detector row (y) coordinates; defaults to ``v``.
             czt: Also build the chirp-z constants (all grids must be uniform).
+            precision: Matmul precision for every product (``Precision``,
+                ``DotAlgorithmPreset`` or a name). ``None`` resolves the
+                default policy now: full precision for complex128, and for
+                complex64 ``BF16_BF16_F32_X3`` on a GPU, full float32 elsewhere.
+            chunk: Default sources per product in ``intensity``; ``None`` is 16
+                on a GPU and 1 elsewhere.
         """
         cdt = jnp.dtype(dtype)
         rdt = jnp.float32 if cdt == jnp.complex64 else jnp.float64
+        prec = resolve_precision(precision, cdt)
+        if chunk is None:
+            chunk = 16 if jax.default_backend() == "gpu" else 1
         w = np.atleast_1d(np.asarray(wavelength_ratios, dtype=np.float64))
-        fpm = PreparedMFT.build(inputs.x, inputs.u, scale=w, dtype=cdt)
-        det = PreparedMFT.build(inputs.x, np.asarray(v, float), scale=w, dtype=cdt)
+        fpm = PreparedMFT.build(inputs.x, inputs.u, scale=w, dtype=cdt, precision=prec)
+        det = PreparedMFT.build(
+            inputs.x, np.asarray(v, float), scale=w, dtype=cdt, precision=prec
+        )
         dety = (
             det
             if vy is None
-            else PreparedMFT.build(inputs.x, np.asarray(vy, float), scale=w, dtype=cdt)
+            else PreparedMFT.build(
+                inputs.x, np.asarray(vy, float), scale=w, dtype=cdt, precision=prec
+            )
         )
         cdet = np.asarray(det.dx2) * inputs.diameter_m / (1j * w)
         cz = None
@@ -293,6 +324,8 @@ class DirectAPLC(eqx.Module):
             cdet=jnp.asarray(cdet, dtype=jnp.complex128),
             sigma=jnp.asarray(1.0 / w),
             czt=cz,
+            precision=prec,
+            chunk=int(chunk),
         )
 
     @property
@@ -325,7 +358,9 @@ class DirectAPLC(eqx.Module):
             return _lyot_chunk_czt(
                 self.q, self.lyot, self.disk, cz[0], cz[1], cb, tx, ty
             )
-        return _lyot_chunk(self.q, self.lyot, self.disk, kf, cb, tx, ty, split)
+        return _lyot_chunk(
+            self.q, self.lyot, self.disk, kf, cb, tx, ty, split, self.precision
+        )
 
     def _field(self, wl, sx, sy, method, split):
         """Detector fields ``(S, vy, vx)`` of sources at one wavelength slice."""
@@ -334,7 +369,7 @@ class DirectAPLC(eqx.Module):
         cdet = cdet.astype(self.cdtype)
         if method == "czt":
             return _detector_chunk_czt(lyot, cz[2], cz[3], cdet)
-        return _detector_chunk(lyot, kd, kdy, cdet)
+        return _detector_chunk(lyot, kd, kdy, cdet, self.precision)
 
     def lyot_field(self, sx, sy, iw=0, split=False, method="gemm"):
         """Lyot-plane field ``(n, n)`` of one source at wavelength index ``iw``."""
@@ -346,18 +381,20 @@ class DirectAPLC(eqx.Module):
         return self._field(self._slice(iw), sx, sy, method, split)
 
     def intensity(
-        self, sx, sy, src_weights, wl_weights, chunk=4, split=False, method="gemm"
+        self, sx, sy, src_weights, wl_weights, chunk=None, split=False, method="gemm"
     ):
         """Weighted incoherent sum of detector intensities.
 
         ``sum_w wl_weights[w] sum_s src_weights[s] |E(s, w)|^2`` with ``chunk``
-        sources per product (the source count is padded with zero weights); the
-        intensities are summed in float64 even when the products run in complex64.
+        sources per product (default ``self.chunk``; the source count is padded
+        with zero weights); the intensities are summed in float64 even when the
+        products run in complex64.
         Wavelengths run in a ``lax.scan`` so only one wavelength's kernels are
         live at a time. ``method`` is ``"gemm"`` (dense matrix products, sources
         folded into the right-hand side) or ``"czt"`` (chirp-z, needs
         ``prepare(..., czt=True)``).
         """
+        chunk = self.chunk if chunk is None else chunk
         sx = jnp.asarray(sx, jnp.float64)
         sy = jnp.asarray(sy, jnp.float64)
         sw = jnp.asarray(src_weights, jnp.float64)
@@ -374,7 +411,9 @@ class DirectAPLC(eqx.Module):
                 cx, cy, cw = ys
                 e = self._field(wl, cx, cy, method, split)
                 inten = (e.real**2 + e.imag**2).astype(jnp.float64)
-                return acc_w + jnp.tensordot(cw, inten, axes=1), None
+                return acc_w + jnp.tensordot(
+                    cw, inten, axes=1, precision=jax.lax.Precision.HIGHEST
+                ), None
 
             img, _ = jax.lax.scan(per_chunk, jnp.zeros(shape), (sx, sy, sw))
             return acc + ww * img, None

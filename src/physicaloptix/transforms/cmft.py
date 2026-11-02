@@ -16,8 +16,38 @@ Leading batch axes (e.g. wavelength) broadcast through the matrix products.
 """
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
+
+
+def resolve_precision(precision, dtype):
+    """Matmul precision for products in a complex ``dtype``.
+
+    ``None`` selects the default policy, decided here and never inherited from
+    ``jax_default_matmul_precision``: full precision for complex128 and, for
+    complex64, the three-pass bfloat16 algorithm ``BF16_BF16_F32_X3`` on a GPU
+    (the default TF32 products are too coarse) and full float32 elsewhere
+    (CPU rejects the multi-pass presets). An explicit value may be a
+    ``jax.lax.Precision``, a ``jax.lax.DotAlgorithmPreset`` or the name of
+    either.
+    """
+    if precision is None:
+        gpu = jax.default_backend() == "gpu"
+        if jnp.dtype(dtype) == jnp.complex64 and gpu:
+            return jax.lax.DotAlgorithmPreset.BF16_BF16_F32_X3
+        return jax.lax.Precision.HIGHEST
+    if isinstance(precision, str):
+        name = precision.upper()
+        if name in jax.lax.DotAlgorithmPreset.__members__:
+            return jax.lax.DotAlgorithmPreset[name]
+        return jax.lax.Precision[name]
+    return precision
+
+
+def matmul(a, b, precision):
+    """``a @ b`` with an explicit precision."""
+    return jnp.matmul(a, b, precision=precision)
 
 
 def cmft_fwd(f, x, u):
@@ -71,9 +101,10 @@ class PreparedMFT(eqx.Module):
     kernel: jnp.ndarray
     dx2: jnp.ndarray
     du2: jnp.ndarray
+    precision: object = eqx.field(static=True, default=jax.lax.Precision.HIGHEST)
 
     @classmethod
-    def build(cls, x, u, scale=1.0, dtype=jnp.complex128):
+    def build(cls, x, u, scale=1.0, dtype=jnp.complex128, precision=None):
         """Build the kernel in float64 on the host, then cast to ``dtype``.
 
         Args:
@@ -82,6 +113,8 @@ class PreparedMFT(eqx.Module):
             scale: Focal coordinate divisor (wavelength ratio); scalar or a
                 1D array that becomes a leading axis.
             dtype: Complex dtype of the stored kernel.
+            precision: Matmul precision of ``fwd`` and ``bwd``; ``None`` takes
+                the default policy of ``resolve_precision``.
         """
         x = np.asarray(x, dtype=np.float64)
         u = np.asarray(u, dtype=np.float64)
@@ -95,14 +128,17 @@ class PreparedMFT(eqx.Module):
             kernel=kernel,
             dx2=jnp.asarray(dx**2),
             du2=jnp.asarray((du / scale) ** 2),
+            precision=resolve_precision(precision, dtype),
         )
 
     def fwd(self, f):
         """Pupil field ``(..., n, n)`` to focal field."""
         k = self.kernel
-        return self.dx2 * (k @ f @ jnp.swapaxes(k, -1, -2))
+        kt = jnp.swapaxes(k, -1, -2)
+        return self.dx2 * matmul(matmul(k, f, self.precision), kt, self.precision)
 
     def bwd(self, field):
         """Adjoint: focal field to pupil field."""
         kc = jnp.conj(self.kernel)
-        return self.du2 * (jnp.swapaxes(kc, -1, -2) @ field @ kc)
+        kct = jnp.swapaxes(kc, -1, -2)
+        return self.du2 * matmul(matmul(kct, field, self.precision), kc, self.precision)
