@@ -35,8 +35,12 @@ from physicaloptix.transforms.cmft import (
     PreparedMFT,
     cmft_bwd,
     cmft_fwd,
+    fold_kernel,
+    fold_left,
+    fold_right,
     matmul,
     resolve_precision,
+    symmetric_grid,
 )
 from physicaloptix.transforms.czt import CZT
 
@@ -175,11 +179,13 @@ def _tilts(x, ax, ay, cdt):
     return tx, ty
 
 
-def _lyot_chunk(q, ls, disk, kf, cb, tx, ty, split, prec):
+def _lyot_chunk(q, ls, disk, kf, cb, tx, ty, split, prec, kb=None):
     """Lyot field for a chunk of ``S`` sources, layout ``(n, S, n)``.
 
     All sources share each matrix product (the source index is folded into
     the right-hand side), so ``q`` and the kernels are read once per chunk.
+    With ``kb`` (the folded back-transform kernel) the two products that
+    return from the mask plane use the symmetry of the mask grid.
     """
     s, n = tx.shape
     m = kf.shape[0]
@@ -187,9 +193,13 @@ def _lyot_chunk(q, ls, disk, kf, cb, tx, ty, split, prec):
     t = _real_times_complex(q, kx, split, prec).reshape(n, s, m) * ty.T[:, :, None]
     a = matmul(kf, t.reshape(n, s * m), prec).reshape(m, s, m)
     g = disk[:, None, :] * a
-    kc = jnp.conj(kf)
-    h = matmul(g.reshape(m * s, m), kc, prec).reshape(m, s, n)
-    back = matmul(kc.T, h.reshape(m, s * n), prec).reshape(n, s, n)
+    if kb is None:
+        kc = jnp.conj(kf)
+        h = matmul(g.reshape(m * s, m), kc, prec).reshape(m, s, n)
+        back = matmul(kc.T, h.reshape(m, s * n), prec).reshape(n, s, n)
+    else:
+        h = fold_right(g.reshape(m * s, m), kb, prec).reshape(m, s, n)
+        back = fold_left(kb, h.reshape(m, s * n), prec).reshape(n, s, n)
     qs = q[:, None, :] * ty.T[:, :, None] * tx[None, :, :]
     return ls[:, None, :] * (qs - cb * back)
 
@@ -232,6 +242,8 @@ class DirectAPLC(eqx.Module):
         kdy: Detector row (y) kernels per wavelength, ``(nw, vy, n)``.
         cb: Babinet weight ``dx^2 du^2 / ratio^2`` per wavelength, real.
         cdet: Detector constant per wavelength, complex.
+        kback: Real half-kernel for the return from the mask plane
+            (``fold_kernel`` of ``conj(kf).T``), ``(nw, n, ne)``, or ``None``.
         sigma: ``lambda0 / lambda`` per wavelength (float64).
         precision: Matmul precision of every product (static).
         chunk: Default sources per product in ``intensity`` (static).
@@ -248,6 +260,7 @@ class DirectAPLC(eqx.Module):
     cdet: jnp.ndarray
     sigma: jnp.ndarray
     czt: tuple | None = None
+    kback: jnp.ndarray | None = None
     precision: object = eqx.field(static=True, default=jax.lax.Precision.HIGHEST)
     chunk: int = eqx.field(static=True, default=1)
 
@@ -262,6 +275,7 @@ class DirectAPLC(eqx.Module):
         czt=False,
         precision=None,
         chunk=None,
+        fold=False,
     ):
         """Cache kernels for the given wavelength ratios and detector axis.
 
@@ -278,6 +292,9 @@ class DirectAPLC(eqx.Module):
                 complex64 ``BF16_BF16_F32_X3`` on a GPU, full float32 elsewhere.
             chunk: Default sources per product in ``intensity``; ``None`` is 16
                 on a GPU and 1 elsewhere.
+            fold: Use the symmetry of the pupil and mask grids (both must be
+                symmetric about zero) to halve the work of the two products
+                that return from the mask plane. Exact up to rounding.
         """
         cdt = jnp.dtype(dtype)
         rdt = jnp.float32 if cdt == jnp.complex64 else jnp.float64
@@ -296,6 +313,12 @@ class DirectAPLC(eqx.Module):
                 inputs.x, np.asarray(vy, float), scale=w, dtype=cdt, precision=prec
             )
         )
+        kback = None
+        if fold:
+            if not (symmetric_grid(inputs.x) and symmetric_grid(inputs.u)):
+                msg = "fold=True needs pupil and mask grids symmetric about zero"
+                raise ValueError(msg)
+            kback = fold_kernel(jnp.conj(jnp.swapaxes(fpm.kernel, -1, -2)))
         cdet = np.asarray(det.dx2) * inputs.diameter_m / (1j * w)
         cz = None
         if czt:
@@ -324,6 +347,7 @@ class DirectAPLC(eqx.Module):
             cdet=jnp.asarray(cdet, dtype=jnp.complex128),
             sigma=jnp.asarray(1.0 / w),
             czt=cz,
+            kback=kback,
             precision=prec,
             chunk=int(chunk),
         )
@@ -343,14 +367,24 @@ class DirectAPLC(eqx.Module):
             self.cdet[iw],
             self.sigma[iw],
             cz,
+            None if self.kback is None else self.kback[iw],
         )
 
     def _slices(self):
-        return (self.kf, self.kd, self.kdy, self.cb, self.cdet, self.sigma, self.czt)
+        return (
+            self.kf,
+            self.kd,
+            self.kdy,
+            self.cb,
+            self.cdet,
+            self.sigma,
+            self.czt,
+            self.kback,
+        )
 
     def _lyot(self, wl, sx, sy, method, split):
         """Lyot fields for sources at one wavelength slice; (n, S, n) or (S, n, n)."""
-        kf, _, _, cb, _, sigma, cz = wl
+        kf, _, _, cb, _, sigma, cz, kb = wl
         ax = jnp.atleast_1d(jnp.asarray(sx, jnp.float64)) * sigma
         ay = jnp.atleast_1d(jnp.asarray(sy, jnp.float64)) * sigma
         tx, ty = _tilts(self.x, ax, ay, self.cdtype)
@@ -359,12 +393,12 @@ class DirectAPLC(eqx.Module):
                 self.q, self.lyot, self.disk, cz[0], cz[1], cb, tx, ty
             )
         return _lyot_chunk(
-            self.q, self.lyot, self.disk, kf, cb, tx, ty, split, self.precision
+            self.q, self.lyot, self.disk, kf, cb, tx, ty, split, self.precision, kb
         )
 
     def _field(self, wl, sx, sy, method, split):
         """Detector fields ``(S, vy, vx)`` of sources at one wavelength slice."""
-        _, kd, kdy, _, cdet, _, cz = wl
+        _, kd, kdy, _, cdet, _, cz, _ = wl
         lyot = self._lyot(wl, sx, sy, method, split)
         cdet = cdet.astype(self.cdtype)
         if method == "czt":

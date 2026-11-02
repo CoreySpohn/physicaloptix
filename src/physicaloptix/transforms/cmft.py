@@ -142,3 +142,66 @@ class PreparedMFT(eqx.Module):
         kc = jnp.conj(self.kernel)
         kct = jnp.swapaxes(kc, -1, -2)
         return self.du2 * matmul(matmul(kct, field, self.precision), kc, self.precision)
+
+
+def symmetric_grid(x, rtol=1e-12):
+    """Whether the 1D grid ``x`` is symmetric about zero (``x[::-1] == -x``)."""
+    x = np.asarray(x, dtype=np.float64)
+    return bool(np.allclose(x[::-1], -x, rtol=0.0, atol=rtol * np.abs(x).max()))
+
+
+def fold_kernel(kernel):
+    """Real half-kernel of a Fourier kernel over a grid symmetric about zero.
+
+    For ``kernel[:, j] = exp(-+2j pi u x_j)`` with ``x[n - 1 - j] = -x[j]``,
+    the mirrored column is the complex conjugate, so a complex product splits
+    into an even and an odd part along the input axis::
+
+        kernel @ f = Re(K[:, :h]) (f[:h] + f[::-1][:h])
+                     + 1j Im(K[:, :h]) (f[:h] - f[::-1][:h])        (+ centre column)
+
+    Both terms use a real kernel with half the inner dimension, so the
+    complex-by-complex product becomes a real-by-complex one with the same
+    inner dimension ``n`` (half the work of a complex product). The output
+    grid ``u`` is arbitrary. Odd ``n`` carries the real centre column.
+
+    Args:
+        kernel: Complex kernel ``(r, n)`` in the orientation ``kernel @ f``.
+
+    Returns:
+        Real array ``(r, n)``: ``[Re K[:, :h], Im K[:, :h]]`` plus the centre
+        column when ``n`` is odd.
+    """
+    n = kernel.shape[-1]
+    h = n // 2
+    cols = [kernel.real[..., :h], kernel.imag[..., :h]]
+    if n % 2:
+        cols.append(kernel.real[..., h : h + 1])
+    return jnp.concatenate(cols, axis=-1)
+
+
+def _fold_input(f, axis):
+    """Stack the even part, ``1j`` times the odd part and the centre of ``f``."""
+    f = jax.lax.optimization_barrier(f)  # keep XLA from recomputing f per slice
+    n = f.shape[axis]
+    h = n // 2
+    lo = jax.lax.slice_in_dim(f, 0, h, axis=axis)
+    hi = jnp.flip(jax.lax.slice_in_dim(f, n - h, n, axis=axis), axis=axis)
+    parts = [lo + hi, 1j * (lo - hi)]
+    if n % 2:
+        parts.append(jax.lax.slice_in_dim(f, h, h + 1, axis=axis))
+    return jnp.concatenate(parts, axis=axis)
+
+
+def fold_left(kfold, f, precision):
+    """``kernel @ f`` for ``f`` of shape ``(n, c)`` using ``fold_kernel`` output."""
+    c = _fold_input(f, 0)
+    both = matmul(kfold, jnp.concatenate([c.real, c.imag], axis=1), precision)
+    return jax.lax.complex(both[:, : f.shape[1]], both[:, f.shape[1] :])
+
+
+def fold_right(f, kfold, precision):
+    """``f @ kernel.T`` for ``f`` of shape ``(R, n)`` using ``fold_kernel`` output."""
+    c = _fold_input(f, 1)
+    both = matmul(jnp.concatenate([c.real, c.imag], axis=0), kfold.T, precision)
+    return jax.lax.complex(both[: f.shape[0]], both[f.shape[0] :])

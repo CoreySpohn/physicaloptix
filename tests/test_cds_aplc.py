@@ -9,7 +9,13 @@ from physicaloptix.core import Field, Grid
 from physicaloptix.instruments import cds
 from physicaloptix.sources import point_source
 from physicaloptix.transforms import PreparedMFT, cmft_bwd, cmft_fwd
-from physicaloptix.transforms.cmft import resolve_precision
+from physicaloptix.transforms.cmft import (
+    fold_kernel,
+    fold_left,
+    fold_right,
+    resolve_precision,
+    symmetric_grid,
+)
 from physicaloptix.transforms.czt import CZT
 
 
@@ -266,3 +272,83 @@ def test_source_chunk_does_not_change_results(tiny):
         np.testing.assert_allclose(
             p.intensity(sx, sy, sw, wl, chunk=chunk), ref, rtol=1e-11
         )
+
+
+HIGHEST = jax.lax.Precision.HIGHEST
+
+
+@pytest.mark.parametrize("n", [12, 13])
+@pytest.mark.parametrize("offset", [0.0, 0.5])
+def test_folded_products_match_dense(n, offset):
+    """Even, odd and half-pixel-offset symmetric grids; arbitrary output grid."""
+    x = (np.arange(n) - (n - 1) / 2.0) * 0.07
+    assert symmetric_grid(x)
+    u = np.linspace(-2.1, 3.3, 9) + offset  # output grid need not be symmetric
+    k = jnp.asarray(np.exp(-2j * np.pi * np.outer(u, x)))
+    kf = fold_kernel(k)
+    assert kf.dtype == jnp.float64 and kf.shape == (9, n)
+    rng = np.random.default_rng(4)
+    f = rng.normal(size=(n, 5)) + 1j * rng.normal(size=(n, 5))
+    np.testing.assert_allclose(fold_left(kf, f, HIGHEST), k @ f, rtol=1e-12, atol=1e-12)
+    g = rng.normal(size=(6, n)) + 1j * rng.normal(size=(6, n))
+    np.testing.assert_allclose(
+        fold_right(g, kf, HIGHEST), g @ k.T, rtol=1e-12, atol=1e-12
+    )
+
+
+def test_symmetric_grid_rejects_shifted_grids():
+    assert not symmetric_grid(np.arange(8) * 0.1)
+    assert symmetric_grid((np.arange(7) - 3) * 0.1)
+
+
+def _odd_inputs():
+    n, m = 41, 15
+    rng = np.random.default_rng(5)
+    x = (np.arange(n) - (n - 1) / 2) / n
+    r = np.hypot(x[None, :], x[:, None])
+    return cds.APLCInputs(
+        pupil=(r < 0.5) * (1 + 0.1 * rng.random((n, n))),
+        apodizer=0.5 + 0.5 * rng.random((n, n)),
+        lyot=((r > 0.1) & (r < 0.45)).astype(float),
+        fpm_open=(rng.random((m, m)) < 0.5).astype(float),
+        x=x,
+        u=np.linspace(-3, 3, m),
+        diameter_m=10.0,
+    )
+
+
+@pytest.mark.parametrize("case", ["even", "odd"])
+def test_fold_option_is_exact(tiny, case):
+    inputs = tiny if case == "even" else _odd_inputs()
+    ratios = [0.96, 1.05]
+    a = cds.DirectAPLC.prepare(inputs, ratios, V, jnp.complex128)
+    b = cds.DirectAPLC.prepare(inputs, ratios, V, jnp.complex128, fold=True)
+    sx, sy = np.array([0.0, 2.5, -1.5]), np.array([0.0, -1.5, 3.0])
+    for iw in range(2):
+        for split in (False, True):
+            ref = np.asarray(a.field(sx, sy, iw))
+            np.testing.assert_allclose(
+                b.field(sx, sy, iw, split=split),
+                ref,
+                rtol=0,
+                atol=1e-12 * np.abs(ref).max(),
+            )
+    args = (sx, sy, np.array([1.0, 2.0, 0.5]), np.array([0.5, 0.5]))
+    np.testing.assert_allclose(
+        b.intensity(*args, chunk=2), a.intensity(*args, chunk=2), rtol=1e-11
+    )
+
+
+def test_fold_requires_symmetric_grids(tiny):
+    shifted = cds.APLCInputs(**{**tiny.__dict__, "u": tiny.u + 0.1})
+    with pytest.raises(ValueError, match="symmetric"):
+        cds.DirectAPLC.prepare(shifted, [1.0], V, fold=True)
+
+
+def test_fold_precision_reaches_every_dot_general(tiny):
+    p = cds.DirectAPLC.prepare(tiny, [1.0], V, jnp.complex64, precision=X3, fold=True)
+    found = _dot_precisions(
+        lambda a, b: p.field(a, b), jnp.array([1.0]), jnp.array([2.0])
+    )
+    assert len(found) >= 6
+    assert all(_has(f, X3) for f in found)
