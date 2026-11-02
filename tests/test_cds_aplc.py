@@ -17,6 +17,7 @@ from physicaloptix.transforms.cmft import (
     symmetric_grid,
 )
 from physicaloptix.transforms.czt import CZT
+from physicaloptix.transforms.lowrank import fourier_basis
 
 
 @pytest.fixture(scope="module")
@@ -352,3 +353,159 @@ def test_fold_precision_reaches_every_dot_general(tiny):
     )
     assert len(found) >= 6
     assert all(_has(f, X3) for f in found)
+
+
+def _star_and_planets():
+    return np.array([0.0, 0.3, 2.0, -1.5]), np.array([0.0, 0.2, 1.0, 2.5])
+
+
+def _worst_relative_error(a, b):
+    """Largest over sources of ``max |a - b| / max |b|`` for fields ``(S, vy, vx)``."""
+    a, b = np.asarray(a), np.asarray(b)
+    return max(np.abs(x - y).max() / np.abs(y).max() for x, y in zip(a, b, strict=True))
+
+
+def test_fourier_basis_is_orthonormal_and_spans_the_kernels():
+    x = (np.arange(60) - 29.5) / 60
+    low, high = fourier_basis(x, 4.0, 1e-4), fourier_basis(x, 4.0, 1e-10)
+    assert low.shape[1] < high.shape[1] < 60
+    np.testing.assert_allclose(high.T @ high, np.eye(high.shape[1]), atol=1e-12)
+    for t in (-3.7, 0.4, 3.9):
+        row = np.exp(-2j * np.pi * t * x)
+        np.testing.assert_allclose(row @ high @ high.T, row, atol=1e-8)
+
+
+@pytest.mark.parametrize("contract", [False, True])
+@pytest.mark.parametrize("crop", [False, True])
+def test_rank_option_matches_dense_in_complex128(tiny, contract, crop):
+    ratios = [0.96, 1.05]
+    dense = cds.DirectAPLC.prepare(tiny, ratios, V, jnp.complex128)
+    fast = cds.DirectAPLC.prepare(
+        tiny, ratios, V, jnp.complex128, rank_tol=1e-13, contract=contract, crop=crop
+    )
+    assert fast.lowrank.rank_mask < 40 and fast.lowrank.rank_detector < 40
+    sx, sy = _star_and_planets()
+    for iw in range(2):
+        for split in (False, True):
+            err = _worst_relative_error(
+                fast.field(sx, sy, iw, split=split), dense.field(sx, sy, iw)
+            )
+            assert err < 1e-11
+    np.testing.assert_allclose(
+        fast.lyot_field(2.0, -1.0, 1), dense.lyot_field(2.0, -1.0, 1), atol=1e-11
+    )
+    args = (sx, sy, np.array([1.0, 2.0, 0.5, 1.5]), np.array([0.5, 0.5]))
+    np.testing.assert_allclose(
+        fast.intensity(*args, chunk=3), dense.intensity(*args, chunk=3), rtol=1e-9
+    )
+
+
+def test_crop_is_exact_and_skips_the_zero_margins(tiny):
+    dense = cds.DirectAPLC.prepare(tiny, [0.97], V, jnp.complex128)
+    cropped = cds.DirectAPLC.prepare(tiny, [0.97], V, jnp.complex128, crop=True)
+    (r0, r1), (c0, c1) = cropped.lbox
+    assert (r1 - r0, c1 - c0) < (40, 40)
+    assert not np.asarray(tiny.lyot)[:r0].any()
+    sx, sy = _star_and_planets()
+    np.testing.assert_allclose(
+        cropped.field(sx, sy), dense.field(sx, sy), rtol=1e-12, atol=1e-14
+    )
+    np.testing.assert_allclose(
+        cropped.lyot_field(1.0, 2.0), dense.lyot_field(1.0, 2.0), atol=1e-14
+    )
+
+
+def test_rank_options_are_validated(tiny):
+    with pytest.raises(ValueError, match="rank_tol"):
+        cds.DirectAPLC.prepare(tiny, [1.0], V, contract=True)
+    with pytest.raises(ValueError, match="fold"):
+        cds.DirectAPLC.prepare(tiny, [1.0], V, crop=True, fold=True)
+
+
+def test_rank_option_compiles_once_and_keeps_the_precision(tiny):
+    p = cds.DirectAPLC.prepare(
+        tiny, [1.0], V, jnp.complex64, precision=X3, rank_tol=1e-6, contract=True
+    )
+    traces = []
+
+    @jax.jit
+    def f(sx, sy):
+        traces.append(1)
+        return p.intensity(sx, sy, jnp.ones(1), jnp.ones(1), chunk=1)
+
+    a, b = f(jnp.array([0.0]), jnp.array([0.0])), f(jnp.array([2.0]), jnp.array([1.0]))
+    assert len(traces) == 1 and not np.allclose(a, b)
+    for contract in (False, True):
+        q = cds.DirectAPLC.prepare(
+            tiny,
+            [1.0],
+            V,
+            jnp.complex64,
+            precision=X3,
+            rank_tol=1e-6,
+            contract=contract,
+        )
+        found = _dot_precisions(
+            lambda a, b, q=q: q.field(a, b), jnp.array([1.0]), jnp.array([2.0])
+        )
+        assert len(found) >= 6
+        assert all(_has(f, X3) for f in found)
+
+
+@pytest.fixture(scope="module")
+def aplc_a():
+    pytest.importorskip("cds_pipeline")
+    try:
+        return cds.load_aplc_a()
+    except FileNotFoundError:
+        pytest.skip("APLC-A delivery files not available")
+
+
+def test_rank_options_on_aplc_a_complex128(aplc_a):
+    """The exact path: rank_tol 1e-12 is within 1e-11 of the field maximum."""
+    ratios = [0.95, 1.05]
+    v = cds.detector_axis()
+    sx = np.array([0.0, 0.3, 2.0, 4.3, 8.0, 16.0, -10.0])
+    sy = np.array([0.0, 0.2, 1.0, -2.7, 3.0, 0.0, 7.0])
+    dense = cds.DirectAPLC.prepare(aplc_a, ratios, v, jnp.complex128)
+    fast = cds.DirectAPLC.prepare(
+        aplc_a, ratios, v, jnp.complex128, rank_tol=1e-12, contract=True, crop=True
+    )
+    assert fast.lowrank.rank_mask < 40 and fast.lowrank.rank_detector < 64
+    for iw in range(2):
+        err = _worst_relative_error(
+            fast.field(sx, sy, iw, split=True), dense.field(sx, sy, iw, split=True)
+        )
+        assert err < 1e-11
+
+
+def _c64_error(inputs, ratios, s, t, ref, **opt):
+    """Complex64 intensity error of a planet window against the complex128 ``ref``."""
+    args = (np.array([s[0]]), np.array([s[1]]), np.ones(1), np.ones(len(ratios)))
+    p = cds.DirectAPLC.prepare(
+        inputs, ratios, s[0] + t, jnp.complex64, vy=s[1] + t, **opt
+    )
+    a = ref.intensity(*args)
+    return float(jnp.abs(a - p.intensity(*args)).max() / a.max())
+
+
+def test_rank_options_on_aplc_a_complex64_planets(aplc_a):
+    """Complex64 within 1e-5 of the local planet peak against complex128.
+
+    Inside the mask edge (the 2.2 lambda0/D planet; local peak 6e-7 of the
+    unmasked one) the subtraction of the Babinet terms is 1e5 deep and even the
+    dense complex64 path misses 1e-5, so there the factored paths only have to
+    stay within a factor of three of the dense complex64 error.
+    """
+    ratios = [0.95, 1.0, 1.05]
+    t = (np.arange(65) - 32) / 16.0
+    for s in ((2.0, 1.0), (4.3, -2.7), (8.0, 3.0), (16.0, 0.0)):
+        ref = cds.DirectAPLC.prepare(
+            aplc_a, ratios, s[0] + t, jnp.complex128, vy=s[1] + t
+        )
+        limit = max(1e-5, 3 * _c64_error(aplc_a, ratios, s, t, ref))
+        for opt in (
+            {"rank_tol": 1e-8},
+            {"rank_tol": 1e-8, "contract": True, "crop": True},
+        ):
+            assert _c64_error(aplc_a, ratios, s, t, ref, **opt) < limit
