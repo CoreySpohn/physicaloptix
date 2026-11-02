@@ -18,6 +18,7 @@ from physicaloptix.transforms.cmft import (
 )
 from physicaloptix.transforms.czt import CZT
 from physicaloptix.transforms.lowrank import fourier_basis
+from physicaloptix.transforms.pixel import box_filter, fine_axis, integrate_pixels
 
 
 @pytest.fixture(scope="module")
@@ -531,3 +532,105 @@ def test_rank_options_on_aplc_a_complex64_planets(aplc_a):
             {"rank_tol": 1e-8, "contract": True, "crop": True},
         ):
             assert _c64_error(aplc_a, ratios, s, t, ref, **opt) < limit
+
+
+def _scaled_pupil(inputs, factor):
+    """Copy of ``inputs`` whose pupil is multiplied by a real map."""
+    return cds.APLCInputs(**{**inputs.__dict__, "pupil": inputs.pupil * factor})
+
+
+def _mode_maps(tiny):
+    n = tiny.pupil.shape[0]
+    x = tiny.x
+    xx, yy = np.meshgrid(x, x)
+    return np.stack([np.sin(3 * xx + yy), np.cos(2 * yy) * xx, np.ones((n, n))])
+
+
+@pytest.mark.parametrize(
+    "opt",
+    [{}, {"rank_tol": 1e-13, "contract": True, "crop": True}, {"rank_tol": 1e-13}],
+)
+def test_mode_fields_are_exactly_linear_in_the_pupil(tiny, opt):
+    """Fields of complex pupil multipliers equal propagations of the modified pupils."""
+    maps = _mode_maps(tiny)
+    mods = np.stack([maps[0] + 0.7j * maps[1], 0.3 * maps[1] - 1j * maps[2]])
+    sx, sy = _star_and_planets()
+    p = cds.DirectAPLC.prepare(tiny, [0.97, 1.04], V, jnp.complex128, **opt)
+    for iw in range(2):
+        got = np.asarray(p.mode_fields(sx, sy, mods, iw))
+        assert got.shape == (4, 2, V.size, V.size)
+        for j in range(2):
+            parts = []
+            for part in (mods[j].real, mods[j].imag):
+                other = cds.DirectAPLC.prepare(
+                    _scaled_pupil(tiny, part), [0.97, 1.04], V, jnp.complex128, **opt
+                )
+                parts.append(np.asarray(other.field(sx, sy, iw)))
+            ref = parts[0] + 1j * parts[1]
+            np.testing.assert_allclose(
+                got[:, j], ref, rtol=0, atol=1e-12 * np.abs(ref).max()
+            )
+
+
+def test_first_order_wavefront_response_error_is_second_order(tiny):
+    """Taylor-1 in a phase mode: halving the amplitude quarters the field error."""
+    m = _mode_maps(tiny)[0]
+    p = cds.DirectAPLC.prepare(tiny, [1.0], V, jnp.complex128, rank_tol=1e-13)
+    sx, sy = np.array([2.0]), np.array([1.0])
+    e0 = np.asarray(p.mode_fields(sx, sy, np.ones((1, *m.shape)))[0, 0])
+    ek = np.asarray(p.mode_fields(sx, sy, 1j * m[None])[0, 0])
+    errs = []
+    for a in (0.02, 0.01):
+        full = np.asarray(p.mode_fields(sx, sy, np.exp(1j * a * m)[None])[0, 0])
+        errs.append(np.abs(e0 + a * ek - full).max())
+    assert errs[0] / errs[1] == pytest.approx(4.0, rel=0.05)
+
+
+def test_box_filter_matches_the_box_transfer_function_in_band():
+    band = 0.3
+    for subsample, taps in ((1, 9), (2, 6), (4, 8)):
+        w, err = box_filter(subsample, band, taps)
+        assert w.shape == (taps,)
+        np.testing.assert_allclose(w, w[::-1])
+        nu = np.linspace(0.0, band, 50) / subsample
+        pos = np.arange(taps) - (taps - 1) / 2.0
+        resp = np.cos(2 * np.pi * np.outer(nu, pos)) @ w
+        np.testing.assert_allclose(resp, np.sinc(nu * subsample), atol=1.01 * err)
+        assert err < 1e-4
+    with pytest.raises(ValueError, match="Nyquist"):
+        box_filter(1, 0.5, 5)
+    with pytest.raises(ValueError, match="parity"):
+        box_filter(2, 0.3, 5)
+
+
+@pytest.mark.parametrize("subsample,taps", [(1, 11), (2, 8), (4, 8)])
+def test_fir_pixel_means_match_gauss_legendre_quadrature(tiny, subsample, taps):
+    """Pixel means from fine point samples against a Gauss-Legendre rule per pixel."""
+    pitch, npix, ratio = 0.25, 8, 0.95
+    sx, sy = np.array([1.3]), np.array([-0.4])
+    band = pitch / ratio
+    if band >= subsample / 2:
+        pytest.skip("pixel too coarse for this subsample")
+    g, err = box_filter(subsample, band, taps)
+    fine = fine_axis(npix, pitch, subsample, taps)
+    p = cds.DirectAPLC.prepare(tiny, [ratio], fine, jnp.complex128, vy=fine)
+    e = np.asarray(p.field(sx, sy, 0))
+    means = np.asarray(integrate_pixels(np.abs(e) ** 2, g, subsample))[0]
+    assert means.shape == (npix, npix)
+    t, wt = np.polynomial.legendre.leggauss(12)
+    centers = (np.arange(npix) - (npix - 1) / 2) * pitch
+    nodes = (centers[:, None] + 0.5 * pitch * t[None]).ravel()
+    q = cds.DirectAPLC.prepare(tiny, [ratio], nodes, jnp.complex128, vy=nodes)
+    i = np.abs(np.asarray(q.field(sx, sy, 0))[0]) ** 2
+    i = i.reshape(npix, 12, npix, 12)
+    truth = np.einsum("aybz,y,z->ab", i, wt / wt.sum(), wt / wt.sum())
+    assert np.abs(means - truth).max() / truth.max() < max(30 * err, 1e-9)
+
+
+def test_fine_axis_centers_the_filter_windows():
+    for subsample, taps in ((1, 5), (2, 6), (4, 8)):
+        n, pitch = 5, 0.5
+        ax = fine_axis(n, pitch, subsample, taps)
+        assert ax.size == (n - 1) * subsample + taps
+        centers = [ax[j * subsample : j * subsample + taps].mean() for j in range(n)]
+        np.testing.assert_allclose(centers, (np.arange(n) - (n - 1) / 2) * pitch)

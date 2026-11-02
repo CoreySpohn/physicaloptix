@@ -21,6 +21,8 @@ shared real bases of the finite Fourier transform (numerical rank about 30
 and 55 of 250 and 128 rows, Landau-Pollak), ``contract`` additionally folds
 the Babinet correction and the Lyot stop into one fixed real tensor, and
 ``crop`` skips the exactly-zero margins of the pupil and the Lyot stop.
+``mode_fields`` returns the (exactly linear) responses of complex pupil-field
+modes, the building block of wavefront time series.
 
 Precision: the large products run in the dtype of the prepared kernels
 (complex64 or complex128). Kernels and tilt phases are always built in
@@ -726,6 +728,46 @@ class DirectAPLC(eqx.Module):
     def field(self, sx, sy, iw=0, split=False, method="gemm"):
         """Detector fields ``(S, vy, vx)`` for sources ``sx``, ``sy`` (length S)."""
         return self._field(self._slice(iw), sx, sy, method, split)
+
+    def mode_fields(self, sx, sy, modes, iw=0, method="gemm"):
+        """Detector fields of complex pupil-field modes ``(S, J, vy, vx)``.
+
+        Mode ``j`` is the pupil field ``q * modes[j]`` (before the source tilt)
+        and the fields are linear in it, so for any pupil field
+        ``q * (m0 + sum_j c_j modes[j])`` the detector field is
+        ``E0 + sum_j c_j E_j`` with ``E0`` the response of ``m0`` (``m0 = 1`` is
+        ``field``). Exact up to rounding: use it once per source and wavelength
+        to turn a perturbation of the pupil (``i * phase_mode`` for a small
+        wavefront change, an amplitude change, an actuator influence function)
+        into a stack of responses, then combine them with the time-dependent
+        coefficients. Modes are processed one at a time (``split`` is not
+        offered: the modes are complex).
+
+        Args:
+            sx: Source x positions in lambda0/D (length S).
+            sy: Source y positions (length S).
+            modes: Complex (or real) multipliers of the pupil, ``(J, n, n)``.
+            iw: Wavelength index.
+            method: ``"gemm"`` or ``"czt"``, as in ``field``.
+        """
+        modes = jnp.asarray(modes)
+        if self.lowrank is not None and self.lowrank.theta is not None:
+            lq = self.lowrank.lq
+        else:
+            lq = None
+
+        def one(m):
+            m = m.astype(self.cdtype)
+            q = self.q * m
+            if lq is None:
+                mod = eqx.tree_at(lambda s: s.q, self, q)
+            else:
+                mod = eqx.tree_at(
+                    lambda s: (s.q, s.lowrank.lq), self, (q, self.lowrank.lq * m)
+                )
+            return mod._field(mod._slice(iw), sx, sy, method, False)
+
+        return jnp.swapaxes(jax.lax.map(one, modes), 0, 1)
 
     def intensity(
         self, sx, sy, src_weights, wl_weights, chunk=None, split=False, method="gemm"
