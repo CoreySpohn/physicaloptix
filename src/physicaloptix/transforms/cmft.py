@@ -15,7 +15,9 @@ forward-model primitive (semi-analytic Lyot chains), not just a gradient.
 Leading batch axes (e.g. wavelength) broadcast through the matrix products.
 """
 
+import equinox as eqx
 import jax.numpy as jnp
+import numpy as np
 
 
 def cmft_fwd(f, x, u):
@@ -48,3 +50,59 @@ def cmft_bwd(field, x, u):
     k = jnp.exp(2j * jnp.pi * jnp.outer(x, u))  # (npup, nfoc)
     du = u[1] - u[0]
     return du**2 * (k @ field @ k.T)
+
+
+class PreparedMFT(eqx.Module):
+    """Continuous-FT MFT pair with its kernel built once.
+
+    ``cmft_fwd`` and ``cmft_bwd`` rebuild the complex exponential every call.
+    This module stores the forward kernel for one (pupil, focal, scale) triple
+    and one dtype, so repeated propagations only pay for the matrix products.
+    A leading axis on ``kernel`` (e.g. wavelength) broadcasts through ``fwd``
+    and ``bwd``.
+
+    Attributes:
+        kernel: ``exp(-2j pi u x / scale)``, shape ``(..., n_focal, n_pupil)``.
+        dx2: Input-plane integration weight (pupil spacing squared).
+        du2: Output-plane integration weight (focal spacing squared, divided
+            by ``scale`` squared when the focal coordinates are scaled).
+    """
+
+    kernel: jnp.ndarray
+    dx2: jnp.ndarray
+    du2: jnp.ndarray
+
+    @classmethod
+    def build(cls, x, u, scale=1.0, dtype=jnp.complex128):
+        """Build the kernel in float64 on the host, then cast to ``dtype``.
+
+        Args:
+            x: 1D pupil coordinates in pupil diameters (float64).
+            u: 1D focal coordinates in lambda/D.
+            scale: Focal coordinate divisor (wavelength ratio); scalar or a
+                1D array that becomes a leading axis.
+            dtype: Complex dtype of the stored kernel.
+        """
+        x = np.asarray(x, dtype=np.float64)
+        u = np.asarray(u, dtype=np.float64)
+        scale = np.asarray(scale, dtype=np.float64)
+        us = u / scale[..., None]  # (..., n_focal)
+        phase = -2.0 * np.pi * us[..., :, None] * x[None, :]
+        kernel = jnp.asarray(np.exp(1j * phase), dtype=dtype)
+        dx = float(x[1] - x[0])
+        du = float(u[1] - u[0])
+        return cls(
+            kernel=kernel,
+            dx2=jnp.asarray(dx**2),
+            du2=jnp.asarray((du / scale) ** 2),
+        )
+
+    def fwd(self, f):
+        """Pupil field ``(..., n, n)`` to focal field."""
+        k = self.kernel
+        return self.dx2 * (k @ f @ jnp.swapaxes(k, -1, -2))
+
+    def bwd(self, field):
+        """Adjoint: focal field to pupil field."""
+        kc = jnp.conj(self.kernel)
+        return self.du2 * (jnp.swapaxes(kc, -1, -2) @ field @ kc)

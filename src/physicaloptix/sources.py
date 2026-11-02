@@ -8,6 +8,7 @@ wavelength. Downstream, a ``Fraunhofer`` stage with the same reference
 wavelength projects every slice onto one fixed angular grid.
 """
 
+import jax
 import jax.numpy as jnp
 
 from physicaloptix.core import Field
@@ -59,7 +60,12 @@ def point_source(
     if position_lod is None:
         position_lod = (separation_lod, 0.0)
     px, py = position_lod
-    off_axis = px != 0.0 or py != 0.0
+    # Traced offsets cannot be compared in Python: always apply the tilt then
+    # (a zero offset gives the identity phasor, so the result is unchanged).
+    if isinstance(px, jax.core.Tracer) or isinstance(py, jax.core.Tracer):
+        off_axis = True
+    else:
+        off_axis = px != 0.0 or py != 0.0
 
     def tilt(scale):
         phase = px * x[jnp.newaxis, :] + py * x[:, jnp.newaxis]
