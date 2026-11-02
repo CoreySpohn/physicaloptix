@@ -21,20 +21,26 @@ import jax.numpy as jnp
 import numpy as np
 
 
-def resolve_precision(precision, dtype):
+def resolve_precision(precision, dtype, factored=False):
     """Matmul precision for products in a complex ``dtype``.
 
     ``None`` selects the default policy, decided here and never inherited from
     ``jax_default_matmul_precision``: full precision for complex128 and, for
-    complex64, the three-pass bfloat16 algorithm ``BF16_BF16_F32_X3`` on a GPU
-    (the default TF32 products are too coarse) and full float32 elsewhere
-    (CPU rejects the multi-pass presets). An explicit value may be a
-    ``jax.lax.Precision``, a ``jax.lax.DotAlgorithmPreset`` or the name of
+    complex64 on a GPU, a three-pass split algorithm (the default TF32 products
+    are too coarse): ``BF16_BF16_F32_X3`` for the dense transforms and
+    ``TF32_TF32_F32_X3`` when ``factored`` is true. The rank-factored products
+    work on reduced coefficients whose rounding errors do not average out as
+    much, and the bfloat16 split misses 1e-5 of the local peak there (about
+    2e-5 measured) while the TF32 split reaches about 1e-6. On a CPU complex64
+    uses full float32 (it rejects the multi-pass presets). An explicit value may
+    be a ``jax.lax.Precision``, a ``jax.lax.DotAlgorithmPreset`` or the name of
     either.
     """
     if precision is None:
         gpu = jax.default_backend() == "gpu"
         if jnp.dtype(dtype) == jnp.complex64 and gpu:
+            if factored:
+                return jax.lax.DotAlgorithmPreset.TF32_TF32_F32_X3
             return jax.lax.DotAlgorithmPreset.BF16_BF16_F32_X3
         return jax.lax.Precision.HIGHEST
     if isinstance(precision, str):

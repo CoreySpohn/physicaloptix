@@ -506,7 +506,8 @@ class DirectAPLC(eqx.Module):
             precision: Matmul precision for every product (``Precision``,
                 ``DotAlgorithmPreset`` or a name). ``None`` resolves the
                 default policy now: full precision for complex128, and for
-                complex64 ``BF16_BF16_F32_X3`` on a GPU, full float32 elsewhere.
+                complex64 on a GPU ``BF16_BF16_F32_X3`` (dense transforms) or
+                ``TF32_TF32_F32_X3`` (with ``rank_tol``), full float32 elsewhere.
             chunk: Default sources per product in ``intensity``; ``None`` is 16
                 on a GPU and 1 elsewhere.
             fold: Use the symmetry of the pupil and mask grids (both must be
@@ -527,7 +528,7 @@ class DirectAPLC(eqx.Module):
         """
         cdt = jnp.dtype(dtype)
         rdt = jnp.float32 if cdt == jnp.complex64 else jnp.float64
-        prec = resolve_precision(precision, cdt)
+        prec = resolve_precision(precision, cdt, factored=rank_tol is not None)
         if chunk is None:
             chunk = 16 if jax.default_backend() == "gpu" else 1
         w = np.atleast_1d(np.asarray(wavelength_ratios, dtype=np.float64))

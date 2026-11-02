@@ -248,14 +248,36 @@ def test_global_matmul_precision_is_not_inherited(tiny):
     assert all(_has(f, jax.lax.Precision.HIGHEST) for f in found)
 
 
+TF32X3 = jax.lax.DotAlgorithmPreset.TF32_TF32_F32_X3
+
+
+def test_default_gpu_policy_depends_on_the_path(monkeypatch):
+    """Complex64 on a GPU: bfloat16 split for dense, TF32 split for factored."""
+    monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
+    assert resolve_precision(None, jnp.complex64) == X3
+    assert resolve_precision(None, jnp.complex64, factored=True) == TF32X3
+    for factored in (False, True):
+        assert (
+            resolve_precision(None, jnp.complex128, factored=factored)
+            == jax.lax.Precision.HIGHEST
+        )
+    assert resolve_precision("highest", jnp.complex64, factored=True) == (
+        jax.lax.Precision.HIGHEST
+    )
+
+
 @pytest.mark.gpu
-def test_complex64_default_policy_within_target_on_gpu(tiny):
+@pytest.mark.parametrize(
+    "opt,policy",
+    [({}, X3), ({"rank_tol": 1e-8, "contract": True, "crop": True}, TF32X3)],
+)
+def test_complex64_default_policy_within_target_on_gpu(tiny, opt, policy):
     if jax.default_backend() != "gpu":
         pytest.skip("needs a GPU backend")
     sx, sy = np.array([2.0]), np.array([1.0])
     p128 = cds.DirectAPLC.prepare(tiny, [1.0], V, jnp.complex128)
-    p64 = cds.DirectAPLC.prepare(tiny, [1.0], V, jnp.complex64)
-    assert p64.precision == X3
+    p64 = cds.DirectAPLC.prepare(tiny, [1.0], V, jnp.complex64, **opt)
+    assert p64.precision == policy
     a = np.asarray(p128.field(sx, sy)[0])
     b = np.asarray(p64.field(sx, sy)[0])
     assert np.abs(b - a).max() / np.abs(a).max() < 1e-5
