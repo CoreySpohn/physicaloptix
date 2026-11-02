@@ -662,3 +662,13 @@ def test_complex64_error_follows_the_cancellation_depth(tiny):
     err = err / (np.abs(a) ** 2).max(axis=(1, 2))
     u32 = 2.0**-24
     assert np.all(err <= u32 * (20 + 30 * depth))
+
+
+def test_real_modes_use_the_real_path_and_match_complex_modes(tiny):
+    maps = _mode_maps(tiny)[:2]
+    sx, sy = np.array([2.0, 0.0]), np.array([1.0, 0.0])
+    for opt in ({}, {"rank_tol": 1e-13, "contract": True, "crop": True}):
+        p = cds.DirectAPLC.prepare(tiny, [1.0], V, jnp.complex128, **opt)
+        real = np.asarray(p.mode_fields(sx, sy, maps))
+        cplx = np.asarray(p.mode_fields(sx, sy, maps + 0j))
+        np.testing.assert_allclose(real, cplx, rtol=0, atol=1e-14 * np.abs(cplx).max())

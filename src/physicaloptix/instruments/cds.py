@@ -752,8 +752,9 @@ class DirectAPLC(eqx.Module):
         to turn a perturbation of the pupil (``i * phase_mode`` for a small
         wavefront change, an amplitude change, an actuator influence function)
         into a stack of responses, then combine them with the time-dependent
-        coefficients. Modes are processed one at a time (``split`` is not
-        offered: the modes are complex).
+        coefficients. Modes are processed one at a time; real modes use the
+        faster real-pupil products (multiply the response by ``1j`` for a phase
+        mode). ``split`` is not offered: complex modes need the unsplit products.
 
         Args:
             sx: Source x positions in lambda0/D (length S).
@@ -763,13 +764,14 @@ class DirectAPLC(eqx.Module):
             method: ``"gemm"`` or ``"czt"``, as in ``field``.
         """
         modes = jnp.asarray(modes)
+        complex_modes = jnp.iscomplexobj(modes)
         if self.lowrank is not None and self.lowrank.theta is not None:
             lq = self.lowrank.lq
         else:
             lq = None
 
         def one(m):
-            m = m.astype(self.cdtype)
+            m = m.astype(self.cdtype if complex_modes else self.q.dtype)
             q = self.q * m
             if lq is None:
                 mod = eqx.tree_at(lambda s: s.q, self, q)
