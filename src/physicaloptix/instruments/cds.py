@@ -67,6 +67,18 @@ APLC_A_FPM_PIXELS = 250
 APLC_A_DIAMETER_M = 15.0
 APLC_A_PIXEL_M = 0.015
 
+# Largest Babinet cancellation depth (``DirectAPLC.babinet_depth``) at which complex64
+# stayed within 4.3e-6 of the local source peak against complex128 on APLC-A
+# (315 positions from 0 to 16 lambda0/D, three wavelengths over the 10 percent band,
+# rank_tol 1e-8, full float32 products): a margin of 2.3 against the 1e-5 target.
+# Empirical for that design; recheck with ``babinet_depth`` for another one.
+COMPLEX64_DEPTH_LIMIT = 20.0
+
+
+def prefers_complex64(depth, limit=COMPLEX64_DEPTH_LIMIT):
+    """Whether a source with Babinet cancellation ``depth`` can run in complex64."""
+    return np.asarray(depth) <= limit
+
 
 def gray_disk(radius, n, oversample=8):
     """Grayscale disk on an ``n x n`` window of width ``2 * radius``.
@@ -768,6 +780,31 @@ class DirectAPLC(eqx.Module):
             return mod._field(mod._slice(iw), sx, sy, method, False)
 
         return jnp.swapaxes(jax.lax.map(one, modes), 0, 1)
+
+    def babinet_depth(self, sx, sy, iw=0):
+        """Cancellation depth of the Babinet subtraction for each source.
+
+        The detector field is the difference of the direct term (the
+        Lyot-stopped apodized pupil alone) and the Babinet correction. The ratio
+        of the largest direct-term amplitude on the detector grid to the largest
+        coronagraphic amplitude (``1`` far from the mask, large inside it) is
+        how many digits the subtraction loses, so the rounding error of a
+        complex64 run grows with it (see ``COMPLEX64_DEPTH_LIMIT``). The grid
+        should contain the source (the maximum is then the source's own peak).
+        Costs about two ``field`` calls.
+
+        Args:
+            sx: Source x positions in lambda0/D (length S).
+            sy: Source y positions (length S).
+            iw: Wavelength index.
+
+        Returns:
+            Array ``(S,)``.
+        """
+        bare = eqx.tree_at(lambda s: s.cb, self, jnp.zeros_like(self.cb))
+        direct = jnp.abs(bare.field(sx, sy, iw))
+        total = jnp.abs(self.field(sx, sy, iw))
+        return direct.max(axis=(1, 2)) / total.max(axis=(1, 2))
 
     def intensity(
         self, sx, sy, src_weights, wl_weights, chunk=None, split=False, method="gemm"

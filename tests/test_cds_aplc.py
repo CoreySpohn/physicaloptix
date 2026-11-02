@@ -634,3 +634,31 @@ def test_fine_axis_centers_the_filter_windows():
         assert ax.size == (n - 1) * subsample + taps
         centers = [ax[j * subsample : j * subsample + taps].mean() for j in range(n)]
         np.testing.assert_allclose(centers, (np.arange(n) - (n - 1) / 2) * pitch)
+
+
+VW = np.linspace(-12, 12, 49)
+
+
+def test_babinet_depth_is_large_inside_the_mask_and_one_outside(tiny):
+    sx = np.array([0.0, 1.0, 10.0])
+    for opt in ({}, {"rank_tol": 1e-12, "contract": True, "crop": True}):
+        p = cds.DirectAPLC.prepare(tiny, [1.0], VW, jnp.complex128, **opt)
+        depth = np.asarray(p.babinet_depth(sx, np.zeros(3)))
+        assert depth[0] > 5.0 and depth[1] > 2.0
+        assert abs(depth[2] - 1.0) < 0.1
+    flags = cds.prefers_complex64([1.0, 15.0, 25.0, 2e3])
+    assert list(flags) == [True, True, False, False]
+
+
+def test_complex64_error_follows_the_cancellation_depth(tiny):
+    """Complex64 stays within a small multiple of roundoff times the depth."""
+    sx = np.array([0.0, 1.0, 2.5, 10.0])
+    sy = np.zeros(4)
+    p128 = cds.DirectAPLC.prepare(tiny, [1.0], VW, jnp.complex128)
+    p64 = cds.DirectAPLC.prepare(tiny, [1.0], VW, jnp.complex64)
+    depth = np.asarray(p128.babinet_depth(sx, sy))
+    a, b = np.asarray(p128.field(sx, sy)), np.asarray(p64.field(sx, sy))
+    err = np.abs(np.abs(b) ** 2 - np.abs(a) ** 2).max(axis=(1, 2))
+    err = err / (np.abs(a) ** 2).max(axis=(1, 2))
+    u32 = 2.0**-24
+    assert np.all(err <= u32 * (20 + 30 * depth))
