@@ -1670,12 +1670,13 @@ class TestSingleBandImpropriety:
         assert np.isfinite(float(jax.grad(total)(1.0)))
 
     def test_jit_compatible(self):
+        # Jit and eager agree to rounding; XLA fusion may differ in the last bit.
         key = jax.random.PRNGKey(0)
         g = jax.random.normal(key, (3, 4, 4, 2)) @ jnp.array([1.0, 1j])
         proc = self._mono(g)
         got = jax.jit(lambda p: p.moments().impropriety())(proc)
         np.testing.assert_allclose(
-            np.asarray(got), np.asarray(proc.moments().impropriety()), rtol=0, atol=0
+            np.asarray(got), np.asarray(proc.moments().impropriety()), rtol=1e-14
         )
 
 

@@ -143,6 +143,7 @@ def test_viz_extra_hwostyle_interface_is_present():
     interface-over-presence rewrite the R2 gate needed.
     """
     import hwostyle
+    import matplotlib.colors
 
     # The active mode is process-wide state, so it is restored: R2 shipped a
     # test that leaked style state and left the suite passing only by filename
@@ -152,7 +153,8 @@ def test_viz_extra_hwostyle_interface_is_present():
     try:
         for mode in ("dark", "light", "paper", "barbie"):
             hwostyle.use(mode)
-            assert isinstance(hwostyle.cmaps.opd, str)
+            # A colormap name or a Colormap: viz resolves either at call time.
+            assert isinstance(hwostyle.cmaps.opd, (str, matplotlib.colors.Colormap))
             for role in ("star", "planet", "measured", "model"):
                 assert isinstance(getattr(hwostyle.roles, role), str)
     finally:
