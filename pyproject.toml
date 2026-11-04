@@ -106,6 +106,13 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+filterwarnings = [
+    "error",
+    # tol_colors calls deprecated Colormap.set_bad while constructing its palettes.
+    "ignore:The set_bad function will be deprecated in a future version[.]:PendingDeprecationWarning:tol_colors",
+    # JAX 0.8.1 dot_general reverse mode projects complex cotangents to real inputs.
+    "ignore:Casting complex values to real discards the imaginary part:numpy.exceptions.ComplexWarning:jax[.]_src[.]lax[.]lax$:5518",
+]
 # The default run is COMPLETE: the external-reference gates are the point of
 # this suite, so nothing is deselected without the caller asking. A handful of
 # gates rebuild a full yield package or a full EAC-1 chain and dominate the

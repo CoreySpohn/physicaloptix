@@ -64,7 +64,8 @@ def chain():
 class TestRenderPath:
     def test_renders_one_panel_per_stage_plus_input(self, chain):
         path, field = chain
-        fig = render_path(path, field, title="test chain")
+        with pytest.warns(DeprecationWarning, match="render_path is deprecated"):
+            fig = render_path(path, field, title="test chain")
         # rail + one intensity panel per (input + 4 stages)
         panels = [ax for ax in fig.axes if ax.get_images()]
         assert len(panels) == 5
@@ -72,14 +73,16 @@ class TestRenderPath:
 
     def test_show_phase_adds_a_row(self, chain):
         path, field = chain
-        fig = render_path(path, field, show_phase=True)
+        with pytest.warns(DeprecationWarning, match="render_path is deprecated"):
+            fig = render_path(path, field, show_phase=True)
         panels = [ax for ax in fig.axes if ax.get_images()]
         assert len(panels) == 10
         matplotlib.pyplot.close(fig)
 
     def test_writes_a_figure_file(self, chain, tmp_path):
         path, field = chain
-        fig = render_path(path, field)
+        with pytest.warns(DeprecationWarning, match="render_path is deprecated"):
+            fig = render_path(path, field)
         out = tmp_path / "chain.png"
         fig.savefig(out, dpi=60)
         assert out.exists() and out.stat().st_size > 0
@@ -87,7 +90,8 @@ class TestRenderPath:
 
     def test_kind_overrides_are_accepted(self, chain):
         path, field = chain
-        fig = render_path(path, field, kinds={"apodizer": "pupil_mask"})
+        with pytest.warns(DeprecationWarning, match="render_path is deprecated"):
+            fig = render_path(path, field, kinds={"apodizer": "pupil_mask"})
         assert fig is not None
         matplotlib.pyplot.close(fig)
 
@@ -101,4 +105,5 @@ class TestRenderPath:
         # _panel passes field.data straight through with no wavelength
         # reduction, so the (nlam, y, x) chromatic data reaches imshow, which
         # rejects the extra axis.
-        render_path(small_path, chromatic_field)
+        with pytest.warns(DeprecationWarning, match="render_path is deprecated"):
+            render_path(small_path, chromatic_field)
