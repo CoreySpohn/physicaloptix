@@ -22,6 +22,9 @@ from physicaloptix.elements import ModeBasis, MultiScaleVortex, SampledOptic
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.transforms import Fraunhofer, cmft_fwd
 
+# Full-resolution comparisons require external reference data and a larger machine.
+pytestmark = pytest.mark.slow
+
 WL_NM = 1000.0
 KR_LO, KR_HI = 3.0, 25.0
 N_MODES = 220

@@ -24,6 +24,9 @@ from physicaloptix.elements import MultiScaleVortex, SampledOptic
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.transforms import Fraunhofer, cmft_fwd
 
+# Full-resolution comparisons require external reference data and a larger machine.
+pytestmark = pytest.mark.slow
+
 _FITS_CANDIDATES = (
     Path(__file__).parents[1] / "data" / "pupil_eac1_2048.fits.gz",
     # Development-workspace clone of the design-survey pipeline.

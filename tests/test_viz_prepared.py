@@ -624,6 +624,8 @@ def test_matplotlib_hides_a_missing_trace_datum_without_losing_handles():
     plt.close("all")
 
 
+# Manim rendering needs system libraries available on the self-hosted slow runner.
+@pytest.mark.slow
 def test_manim_hides_a_missing_trace_datum_without_losing_handles(tmp_path):
     # The render job sets EYEPIECE_REQUIRE_MANIM=1; there a missing Manim
     # fails this test instead of skipping it.

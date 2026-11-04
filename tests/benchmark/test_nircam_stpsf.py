@@ -60,6 +60,9 @@ from physicaloptix.instruments import (
     nircam_band_image,
 )
 
+# Full-resolution comparisons require external reference data and a larger machine.
+pytestmark = pytest.mark.slow
+
 fits = pytest.importorskip("astropy.io.fits")
 
 NO_MASK = {"max_abs_diff_over_U": 1e-12, "total_rel": 1e-12, "peak_rel": 1e-12}

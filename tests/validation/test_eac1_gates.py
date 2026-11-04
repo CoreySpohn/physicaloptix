@@ -21,6 +21,9 @@ from physicaloptix.elements import MultiScaleVortex, SampledOptic
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.transforms import Fraunhofer, cmft_fwd
 
+# Full-resolution comparisons require external reference data and a larger machine.
+pytestmark = pytest.mark.slow
+
 
 def scale_fit_residual(ours, reference):
     """Least-squares scale of ours onto reference and the relative residual."""

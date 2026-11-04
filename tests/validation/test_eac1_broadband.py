@@ -17,6 +17,9 @@ from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.sources import broadcast_to_spectrum, point_source
 from physicaloptix.transforms import Fraunhofer, cmft_fwd
 
+# Full-resolution comparisons require external reference data and a larger machine.
+pytestmark = pytest.mark.slow
+
 REF_NM = 1000.0
 
 
