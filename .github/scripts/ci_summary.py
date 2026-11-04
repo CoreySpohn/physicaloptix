@@ -22,6 +22,9 @@ def main():
     parser.add_argument("--allow-skips", action="store_true")
     args = parser.parse_args()
 
+    if not os.path.exists(args.junit):
+        print(f"{args.junit} not found: the test step did not run")
+        return 1
     root = ET.parse(args.junit).getroot()
     cases = []
     skipped = []
