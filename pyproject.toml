@@ -1,5 +1,5 @@
 [build-system]
-requires = ['hatchling', "hatch-fancy-pypi-readme", "hatch-vcs"]
+requires = ['hatchling>=1.27.0', "hatch-fancy-pypi-readme>=25.1.0", "hatch-vcs>=0.4.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -20,46 +20,48 @@ classifiers = [
 # reader, and scipy (scipy.special.j1) of its round band-limited mask; both
 # were only transitive (optixstuff, jax) before and are declared here.
 dependencies = [
-    "astropy",
-    "equinox>=0.12.0",
-    "hwoutils",
-    "pyyaml",
-    "jax>=0.4.1",
-    "jaxlib>=0.4.1",
-    "jaxtyping",
-    "numpy",
+    "astropy>=6.1",
+    "equinox>=0.13.2",
+    "hwoutils>=1.10.0",
+    "pyyaml>=6.0.1",
+    "jax>=0.8.1",
+    "jaxlib>=0.8.1",
+    "jaxtyping>=0.3.3",
+    "numpy>=2.0",
     "optixstuff>=3.0.0",
-    "scipy",
+    "scipy>=1.13",
 ]
 
 [project.optional-dependencies]
-dev = ["pre-commit"]
+dev = ["pre-commit>=3.7.0"]
 docs = [
-    "sphinx",
-    "myst-nb",
-    "sphinx-book-theme",
-    "sphinx-autoapi",
-    "sphinx_autodoc_typehints",
-    "sphinxcontrib-mermaid",
-    "ipython",
-    "matplotlib",
-    "eyepiece",
-    "imageio-ffmpeg",
+    "sphinx>=8.2.3",
+    "myst-nb>=1.2.0",
+    "sphinx-book-theme>=1.1.4",
+    "sphinx-autoapi>=3.6.0",
+    "sphinx_autodoc_typehints>=3.0.1",
+    "sphinxcontrib-mermaid>=1.0.0",
+    "ipython>=8.24.0",
+    "matplotlib>=3.11.0",
+    "eyepiece>=0.7.0",
+    "imageio-ffmpeg>=0.5.1",
 ]
 test = [
-    "matplotlib",
-    "pytest",
-    "hypothesis",
-    "pytest-cov",
-    "pytest-xdist",
-    "pytest-testmon",
-    "pytest-markdown-docs",
-    "pytest-timeout",
-    "pytest-fail-slow",
-    "scipy",
-    "yippy",
-    "lod-unit",
-    "hcipy",
+    "matplotlib>=3.11.0",
+    "pytest>=7.3.2",
+    "hypothesis>=6.79.1",
+    "pytest-cov>=1.0",
+    # The optional budget plugin uses psutil for portable memory measurements.
+    "psutil>=5.9.4",
+    "pytest-xdist>=2.5",
+    "pytest-testmon>=2.0.7",
+    "pytest-markdown-docs>=0.5.0",
+    "pytest-timeout>=1.3.1",
+    "pytest-fail-slow>=0.1.0",
+    "scipy>=1.13",
+    "yippy>=2.10.6",
+    "lod-unit>=1.8.0",
+    "hcipy>=0.7.0",
 ]
 # hwostyle is a DIRECT import of viz/train.py and viz/modes.py (cmaps.opd,
 # palette, roles), so it is declared here rather than relied on transitively
@@ -70,7 +72,7 @@ test = [
 # which viz/fresnel.py calls; eyepiece.prepared (viz/_prepare.py,
 # viz/boiling.py) arrived in 0.5.0.
 # Visualization modules import matplotlib directly as well as through eyepiece.
-viz = ["eyepiece>=0.7.0", "hwostyle>=1.4.0", "matplotlib"]
+viz = ["eyepiece>=0.7.0", "hwostyle>=1.4.0", "matplotlib>=3.11.0"]
 
 [project.urls]
 Homepage = "https://github.com/CoreySpohn/physicaloptix"
