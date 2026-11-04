@@ -7,7 +7,7 @@ name = "physicaloptix"
 description = "Physical optics (PSFs and diffraction) for the HWO direct imaging simulation suite"
 authors = [{ name = "Corey Spohn", email = "corey.a.spohn@nasa.gov" }]
 dynamic = ['readme', 'version']
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = { file = "LICENSE" }
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
