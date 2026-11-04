@@ -507,6 +507,7 @@ class RomanCompact(eqx.Module):
         return data
 
     def _focal_mask(self, field, wl, stages):
+        assert self.fpm is not None, "fpm must be present when applying a focal mask"
         m = self.fpm.shape[0]
         dout = self.fpm_sampling_lod * self.fpm_lam0_nm / wl
         focal = Grid.focal(m, dout)

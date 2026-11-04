@@ -67,11 +67,16 @@ def test_entrance_is_normalized_to_unit_total_intensity():
     assert np.sum(np.abs(stages["entrance"]) ** 2) == pytest.approx(1.0, rel=1e-12)
 
 
-def test_clear_train_conserves_energy_over_the_full_image():
+@pytest.mark.parametrize("kind", ["spc", "hlc"])
+def test_clear_train_conserves_energy_over_the_full_image(kind):
     n = 257  # odd full grid: the image transform is then unitary on the full frame
-    model = _clear_model(pupil=_disk(n, D_PIX), lyot=np.ones((n, n)), n_small=n)
+    model = _clear_model(
+        pupil=_disk(n, D_PIX), lyot=np.ones((n, n)), n_small=n, kind=kind
+    )
     stages = model.propagate(825.0, 0.0, 0.0, output_dim=n)
     assert np.sum(np.abs(stages["image"]) ** 2) == pytest.approx(1.0, rel=1e-9)
+    with pytest.raises(AssertionError, match="fpm must be present"):
+        model._focal_mask(model._as_field(model.pupil, n), 825.0, {})
 
 
 def _centroid(img, cx0, cy0, radius=4):
