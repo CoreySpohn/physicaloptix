@@ -41,12 +41,23 @@ autoapi_options = [
     "undoc-members",
     "show-inheritance",
     "show-module-summary",
-    # document top-level re-exports so ``{class}`~physicaloptix.X``` roles
-    # resolve; the only cost is one benign duplicate-object warning where the
-    # ``linearize`` function shares its name with the ``linearize`` module.
+    # Document top-level re-exports so ``{class}`~physicaloptix.X``` roles resolve.
     "imported-members",
 ]
 autodoc_typehints = "description"
+
+
+def _skip_linearize_reexport(app, what, name, obj, skip, options):
+    """Document the function in its module to avoid the module-name collision."""
+    if what == "function" and name == "physicaloptix.linearize":
+        return True
+    return None
+
+
+def setup(app):
+    """Keep other re-exports while excluding only the conflicting function alias."""
+    app.connect("autoapi-skip-member", _skip_linearize_reexport)
+
 
 # Render Google-style ``Attributes:`` sections as inline ``:ivar:`` fields, so
 # they do not collide with the ``py:attribute`` directives autoapi generates

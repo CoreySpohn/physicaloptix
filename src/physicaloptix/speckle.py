@@ -1096,7 +1096,7 @@ class SpeckleProcess(eqx.Module):
         per focal-plane pixel, with ``Gamma = sum_k rms_k^2 |g_k|^2``,
         ``P = sum_k rms_k^2 g_k^2``, ``I_C = |e_nom|^2``,
         ``phi_C = angle(e_nom)`` and pinning-quadrature variance
-        ``Var(X) = (Gamma + Re[P e^{-2 i phi_C}]) / 2``,
+        ``Var(X) = (Gamma + Re[P e^{-2 i phi_C}]) / 2``::
 
             E[delta]   = Gamma / norm
             Var[delta] = (4 I_C Var(X) + Gamma^2 + |P|^2) / norm^2

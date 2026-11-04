@@ -33,7 +33,7 @@ reference.
 - **A coronagraph backend.** {class}`~physicaloptix.PathCoronagraph` is the
   live-propagation counterpart to {mod}`yippy`'s sampled tables; both fill the
   same optixstuff `AbstractCoronagraph` slot.
-- **A speckle model.** {func}`~physicaloptix.linearize` reduces any path to the
+- **A speckle model.** {func}`~physicaloptix.linearize.linearize` reduces any path to the
   linear `(E_nom, G)` speckle generator that feeds
   {class}`~physicaloptix.SpeckleProcess` and `physicaloptix.stats`. The same
   `(E_nom, G)` product is what the `tiptilt` wavefront-control library builds

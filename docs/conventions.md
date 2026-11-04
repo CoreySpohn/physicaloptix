@@ -282,7 +282,7 @@ over-aperture RMS is smaller by the square root of the segment-to-aperture
 area ratio. Several unit coefficients add in quadrature.
 
 An OPD of $h$ nanometers is a phase of $2\pi h/\lambda$;
-{func}`~physicaloptix.linearize` applies that factor when it builds the
+{func}`~physicaloptix.linearize.linearize` applies that factor when it builds the
 sensitivity `G`, and it injects the perturbation **at the input field's
 plane** -- linearizing about an interior stage means linearizing the
 sub-path from that stage onward. Coefficient units follow the basis kind:

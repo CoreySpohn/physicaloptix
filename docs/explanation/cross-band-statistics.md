@@ -22,7 +22,7 @@ $$
 $$
 
 with $G_k(x)$ the (generally complex) sensitivity of pixel $r$ at wavelength
-$\lambda$ to mode $k$, computed once by {func}`~physicaloptix.linearize` and
+$\lambda$ to mode $k$, computed once by {func}`~physicaloptix.linearize.linearize` and
 stacked across channels. Because {meth}`~physicaloptix.SpeckleProcess.draw`
 synthesizes one $\epsilon(t)$ with no wavelength axis at all and only
 {meth}`~physicaloptix.AnalyticSpeckleField.realize` selects the per-channel

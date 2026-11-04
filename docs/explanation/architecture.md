@@ -123,7 +123,7 @@ central phase singularity.
 ## The speckle layer
 
 Deep contrast is limited by residual starlight -- speckles -- not by the ideal
-PSF. {func}`~physicaloptix.linearize` reduces any path to its first-order
+PSF. {func}`~physicaloptix.linearize.linearize` reduces any path to its first-order
 model about an operating point: a nominal field `E_nom` and a Jacobian `G`
 that maps small wavefront perturbations to focal-field changes. That linear
 `(E_nom, G)` pair is the generator behind
