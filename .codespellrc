@@ -1,0 +1,5 @@
+[codespell]
+skip = .git,*.ipynb,uv.lock,*/_build,*.fits
+# PROPER array sizes (dout, nin), lambda/D unit (lod), neutral density (ND),
+# and the existing list of image arrays (datas).
+ignore-words-list = dout,nin,lod,nd,datas

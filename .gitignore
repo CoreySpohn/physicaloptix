@@ -220,3 +220,6 @@ __marimo__/
 
 # hatch-vcs generated version file
 *_version.py
+.claude/
+.jax_cache/
+.DS_Store
