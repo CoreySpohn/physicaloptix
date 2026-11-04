@@ -35,7 +35,9 @@ tapped by name in `OpticalPath.propagate`, and
 {func}`~physicaloptix.instruments.mask_plane_field` forms the field just after
 the mask from the `inversion` tap.
 
-```python
+Requires a user-supplied NIRCam prescription bundle.
+
+```python notest
 import json
 from pathlib import Path
 
@@ -319,7 +321,9 @@ and its data are not distributed with physicaloptix: a caller transcribes the
 steps from the `roman_preflight_proper` package and loads its pupil, mask, map
 and DM calibration files.
 
-```python
+Requires user-supplied Roman steps and calibration arrays.
+
+```python notest
 from physicaloptix.instruments.roman_full import RomanFull, compile_train
 
 plan = compile_train(steps, lam_m=575e-9, n=1024, beam_diameter_m=2.363114,

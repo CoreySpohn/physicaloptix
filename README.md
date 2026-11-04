@@ -25,7 +25,9 @@ The key piece is `PathCoronagraph`, which implements optixstuff's
 wrap it, and hand it to any downstream tool. Its IWA and scalar performance
 curves are derived from the propagated PSFs at construction, never declared.
 
-```python
+Requires a configured optical path, pupil field, and output sampling.
+
+```python notest
 import physicaloptix as po
 
 coro = po.PathCoronagraph.from_path(

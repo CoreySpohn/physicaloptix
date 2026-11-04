@@ -313,7 +313,9 @@ with a profile sized for slides. The code below is shown rather than run,
 because rendering Manim media needs system libraries a documentation builder
 does not have.
 
-```python
+Requires the prepared sequence above and native Manim system libraries.
+
+```python notest
 import manim
 import eyepiece.manim as em
 from matplotlib.colors import to_hex
