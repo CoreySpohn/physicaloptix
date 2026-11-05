@@ -66,7 +66,7 @@ config = NIRCamConfig(
 )
 path, field = build_nircam(config, inputs)
 out, _ = path.propagate(field)
-energy = out.intensity() * out.grid.weights   # fraction of pupil energy per sample
+energy = out.intensity() * out.grid.weights  # fraction of pupil energy per sample
 pixels = integrate_detector_pixels(energy, config.oversample)
 ```
 
@@ -326,13 +326,20 @@ Requires user-supplied Roman steps and calibration arrays.
 ```python notest
 from physicaloptix.instruments.roman_full import RomanFull, compile_train
 
-plan = compile_train(steps, lam_m=575e-9, n=1024, beam_diameter_m=2.363114,
-                     pupil_diam_pix=309.0)
+plan = compile_train(
+    steps, lam_m=575e-9, n=1024, beam_diameter_m=2.363114, pupil_diam_pix=309.0
+)
 # build the element arrays, using plan.beams[i].dx for any array that step i
 # applies on the propagation grid
-model = RomanFull(arrays=arrays, program=plan.program, n=1024, lam_m=575e-9,
-                  pupil_diam_pix=309.0, final_dx_m=plan.final.dx)
-fields = model(taps=("FPM", "LYOT STOP"))   # fields["end"] is the last plane
+model = RomanFull(
+    arrays=arrays,
+    program=plan.program,
+    n=1024,
+    lam_m=575e-9,
+    pupil_diam_pix=309.0,
+    final_dx_m=plan.final.dx,
+)
+fields = model(taps=("FPM", "LYOT STOP"))  # fields["end"] is the last plane
 ```
 
 Propagation follows PROPER (Krist 2007). A Gaussian pilot beam travels with the

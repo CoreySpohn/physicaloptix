@@ -33,8 +33,8 @@ import physicaloptix as po
 coro = po.PathCoronagraph.from_path(
     core_path, pupil_field, diameter_m=6.0, owa_lod=32.0
 )
-psf = coro.on_axis_psf(600.0, pixel_scale_rad, npix)   # unit-flux PSF out
-eta = coro.throughput(6.0, 600.0)                      # derived, not declared
+psf = coro.on_axis_psf(600.0, pixel_scale_rad, npix)  # unit-flux PSF out
+eta = coro.throughput(6.0, 600.0)  # derived, not declared
 ```
 
 ## What physicaloptix is *not*
