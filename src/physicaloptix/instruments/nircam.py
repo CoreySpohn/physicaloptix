@@ -216,7 +216,7 @@ class BandLimitedRoundMask(eqx.Module):
         xr, yr = np.broadcast_arrays(xr, yr)
         r = np.sqrt(xr**2 + yr**2)
         s = np.clip(self.sigma_per_arcsec * r, np.finfo(float).tiny, self.clip)
-        t = 1.0 - (2.0 * j1(s) / s) ** 2
+        t = np.array(1.0 - (2.0 * j1(s) / s) ** 2)
         t[r == 0] = 0.0
         for x_lo, x_hi, y_lo, y_hi, amplitude in self.regions:
             inside = np.ones(t.shape, dtype=bool)

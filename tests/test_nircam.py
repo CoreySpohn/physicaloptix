@@ -945,6 +945,13 @@ class TestRoundMaskProfile:
         assert got[4] == 0.0  # inside the half-plane region only
         assert got[5] == pytest.approx(want[5])  # boundary is open: not in region
 
+    def test_scalar_position_returns_a_scalar_transmission(self):
+        mask = _occulter(regions=BOX_REGION)
+        assert mask.transmission(0.0, 0.0) == 0.0
+        assert mask.transmission(3.0, 0.0) == 1.0
+        assert mask.transmission(0.3, 0.5) == 0.3  # inside the box region
+        assert np.ndim(mask.transmission(0.2, 0.1)) == 0
+
     def test_default_clip_is_the_second_zero_of_j1(self):
         assert _occulter().clip == pytest.approx(J1_ZERO2, rel=1e-15)
 
