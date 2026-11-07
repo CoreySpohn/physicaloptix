@@ -23,6 +23,7 @@ import hashlib
 import json
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -33,10 +34,12 @@ from hwoutils.conversions import arcsec_to_rad
 from physicaloptix.core import PlaneKind
 from physicaloptix.instruments import (
     BandLimitedRoundMask,
+    NIRCamBand,
     NIRCamConfig,
     NIRCamInputs,
     build_nircam,
     mask_plane_field,
+    nircam_band_image,
 )
 
 ARCSEC_TO_RAD = np.pi / (180.0 * 3600.0)
@@ -1125,3 +1128,97 @@ class TestFromBundleMasked:
         np.testing.assert_allclose(
             tilted[: n - 3, : n - 2], flat[3:, 2:], rtol=0, atol=FLOOR * flat.max()
         )
+
+
+def _fft_mft_configs(npup, mask_oversample, **extra):
+    common = {
+        "focal_mask": True,
+        "lyot_stop": True,
+        "ote_opd": True,
+        "mask_oversample": mask_oversample,
+        "source": (0.07, -0.04),
+        **extra,
+    }
+    return tuple(
+        _config(9, 2, mask_transform=transform, **common)
+        for transform in ("fft", "mft")
+    )
+
+
+def _fft_inputs(npup):
+    region_mask = _occulter(regions=(*BOX_REGION, (None, None, -1.2, -1.0, 0.0)))
+    return _inputs(
+        npup,
+        opd_nm=_asymmetric_opd_nm(npup),
+        focal_mask=region_mask,
+        lyot_amplitude=jnp.asarray(_exit_lyot(npup)),
+    )
+
+
+class TestFullBandFFT:
+    """The NIRCam path with the FFT mask stage against the MFT stage.
+
+    The stage itself is tested in ``test_focal_mask.py``. Fails if the NIRCam
+    selection wires the FFT pair differently from the MFT pair (window,
+    sampled transmission, orientation) so that the band image or its gradient
+    with respect to the OTE OPD differs, for odd or even pupil size and mask
+    oversample 2 or 3. Measured (x64): relative residuals <= 7e-15.
+    """
+
+    TOL = 1e-12
+
+    @pytest.mark.parametrize(("npup", "mask_oversample"), [(15, 3), (16, 2)])
+    def test_band_image_and_gradient_match_the_mft(self, npup, mask_oversample):
+        inputs = _fft_inputs(npup)
+        cfg_fft, cfg_mft = _fft_mft_configs(npup, mask_oversample)
+        band = NIRCamBand(wavelengths_nm=(3200.0, 3500.0), weights=(1.0, 2.0))
+        images = [
+            np.asarray(nircam_band_image(cfg, inputs, band))
+            for cfg in (cfg_fft, cfg_mft)
+        ]
+        np.testing.assert_allclose(
+            images[0], images[1], rtol=0, atol=self.TOL * images[1].max()
+        )
+        weight = jnp.asarray(
+            np.random.default_rng(0).uniform(0.5, 1.5, images[0].shape)
+        )
+
+        def loss(opd, cfg):
+            image = nircam_band_image(
+                cfg, eqx.tree_at(lambda i: i.ote_opd_nm, inputs, opd), band
+            )
+            return jnp.sum(weight * image)
+
+        grads = [
+            np.asarray(jax.grad(loss)(inputs.ote_opd_nm, cfg))
+            for cfg in (cfg_fft, cfg_mft)
+        ]
+        assert np.abs(grads[1]).max() > 0
+        np.testing.assert_allclose(
+            grads[0], grads[1], rtol=0, atol=1e-10 * np.abs(grads[1]).max()
+        )
+
+    def test_auto_picks_fft_on_the_full_band_and_mft_on_a_window(self):
+        inputs = _fft_inputs(16)
+        for extent, name in ((None, "FullBandFraunhofer"), (8.0, "Fraunhofer")):
+            path, _ = build_nircam(
+                _config(9, 2, focal_mask=True, mask_extent_lod=extent), inputs
+            )
+            assert type(path.stages[2].op.transform).__name__ == name
+
+    @pytest.mark.parametrize(
+        ("kwargs", "match"),
+        [
+            ({"mask_extent_lod": 8.0}, "full-band"),
+            ({"mask_extent_lod": 2.0 * 16}, "full-band"),
+            ({"mask_oversample": 2.5}, "integer"),
+        ],
+    )
+    def test_fft_is_refused_where_it_does_not_apply(self, kwargs, match):
+        config = _config(9, 2, focal_mask=True, mask_transform="fft", **kwargs)
+        with pytest.raises(ValueError, match=match):
+            build_nircam(config, _fft_inputs(16))
+
+    def test_unknown_mask_transform_is_rejected(self):
+        with pytest.raises(ValueError, match="mask_transform"):
+            _config(9, 2, focal_mask=True, mask_transform="dft")

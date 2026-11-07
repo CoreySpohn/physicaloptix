@@ -16,8 +16,10 @@ are separate optics; folding them into one entrance screen changes the
 coronagraphic image, because only light that reaches the mask plane with the
 OTE error is redistributed by the occulter.
 
-Focal-plane mask propagation (``FocalPlaneMask``): the pupil field ``E`` is
-carried to a mask-plane window by the continuous-FT MFT, and the field
+Focal-plane mask propagation (``FocalPlaneMask``, the generic stage in
+``physicaloptix.elements``, re-exported here): the pupil field ``E`` is
+carried to a mask-plane window by the continuous-FT pair (the dense MFT, or on
+the full band a zero-padded FFT that equals it to roundoff), and the field
 returned to the Lyot plane is ``E + B[(M - 1) F E]`` (a Babinet form), with
 ``F`` / ``B`` the MFT pair and ``M`` the amplitude transmission sampled on the
 window. The unperturbed field ``E`` is carried through exactly on any window,
@@ -34,6 +36,17 @@ it ``B F`` is the identity to roundoff and the Babinet form equals the direct
 propagation ``B[M F E]``: every part of the mask the sampled pupil can resolve
 is applied. Narrower windows (``mask_extent_lod``) are for convergence
 studies, not for masks with extended regions.
+
+Transform choice (``NIRCamConfig.mask_transform``): on the full band the window
+is the complete conjugate grid of the pupil raster, so ``F`` and ``B`` are
+length-``npup * mask_oversample`` DFTs with exact phase ramps for the
+half-sample centering (``physicaloptix.transforms.FullBandFraunhofer``). That
+costs ``O(N**2 log N)`` time and ``O(N**2)`` memory, against the dense MFT's
+``(N, npup)`` kernel matrices, and reproduces the MFT (forward map, adjoint and
+round trip) to roundoff with the same weights. ``"auto"`` (the default) uses
+the FFT on the full band and the MFT on any other window; ``"mft"`` forces the
+MFT, and ``"fft"`` raises where it does not apply (a window other than the full
+band, or a non-integer ``mask_oversample``).
 
 Frames and signs:
 
@@ -99,7 +112,14 @@ from hwoutils.transforms import downsample_psf
 from jaxtyping import Array
 
 from physicaloptix.core import Field, Grid, PlaneKind, validate_field
-from physicaloptix.elements import ModeBasis, PhaseScreen, SampledOptic
+from physicaloptix.elements import (
+    FocalPlaneMask,
+    ModeBasis,
+    PhaseScreen,
+    SampledOptic,
+    mask_window,
+    select_mask_transform,
+)
 from physicaloptix.elements.base import Element
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.sources import point_source
@@ -229,77 +249,6 @@ class BandLimitedRoundMask(eqx.Module):
         return t
 
 
-class FocalPlaneMask(eqx.Module):
-    """Pupil -> focal-plane mask -> Lyot pupil, in the Babinet form.
-
-    ``__call__`` returns ``E + B[(M - 1) F E]``: ``F`` / ``B`` are the
-    continuous-FT MFT pair between the pupil grid and the mask-plane window
-    (``transform``), ``M`` the amplitude transmission sampled on the window.
-    The unperturbed field passes through exactly on any window, and only
-    ``(M - 1)`` outside the window is dropped, so a narrower window is exact
-    only for a compactly supported perturbation (not for masks with extended
-    regions such as a holder half-plane). On the full Nyquist band of the
-    pupil raster (window of ``npup`` lambda/D) ``B F`` is the identity and the
-    result equals ``B[M F E]``. A composite pupil-to-pupil
-    stage, so it carries ``plane_in`` / ``plane_out`` like a propagator.
-
-    Attributes:
-        transform: The ``Fraunhofer`` pair, pupil grid -> mask-plane window.
-        transmission: Mask amplitude transmission on the window, ``(n, n)``,
-            rows y; sampled at one wavelength, so the stage is monochromatic.
-    """
-
-    transform: Fraunhofer
-    transmission: Array
-    plane_in: PlaneKind = eqx.field(static=True, default=PlaneKind.PUPIL)
-    plane_out: PlaneKind = eqx.field(static=True, default=PlaneKind.PUPIL)
-
-    def __check_init__(self):
-        """Validate that the transmission matches the window grid."""
-        npix = self.transform.grid_out.npix
-        if self.transmission.shape != (npix, npix):
-            raise ValueError(
-                f"transmission shape {self.transmission.shape} does not match "
-                f"the mask-plane window ({npix}, {npix})"
-            )
-
-    def _check_mono(self, field):
-        if field.spectrum is not None:
-            raise ValueError(
-                "FocalPlaneMask is sampled at one wavelength; propagate each "
-                "wavelength through its own path"
-            )
-
-    def mask_plane(self, field):
-        """The field just after the mask, on the mask-plane window (focal)."""
-        self._check_mono(field)
-        focal = self.transform.forward(field)
-        return Field(
-            data=focal.data * self.transmission,
-            grid=focal.grid,
-            plane=focal.plane,
-            spectrum=focal.spectrum,
-        )
-
-    def __call__(self, field):
-        """Return the field arriving at the Lyot plane (same pupil grid)."""
-        self._check_mono(field)
-        focal = self.transform.forward(field)
-        perturbation = Field(
-            data=focal.data * (self.transmission - 1.0),
-            grid=focal.grid,
-            plane=focal.plane,
-            spectrum=focal.spectrum,
-        )
-        returned = self.transform.backward(perturbation)
-        return Field(
-            data=field.data + returned.data,
-            grid=field.grid,
-            plane=self.plane_out,
-            spectrum=field.spectrum,
-        )
-
-
 class NIRCamConfig(eqx.Module):
     """What to compute: wavelength, source position, stages and sampling.
 
@@ -320,6 +269,10 @@ class NIRCamConfig(eqx.Module):
         mask_extent_lod: Full width of the mask-plane window in lambda/D;
             ``None`` is the pupil raster's full Nyquist band (``npup``), the
             only exact choice for masks whose ``M - 1`` is not compact.
+        mask_transform: How the mask stage propagates: ``"auto"`` (FFT on the
+            full band, MFT on a narrower window), ``"fft"`` (full band only;
+            needs a window of exactly ``npup`` lambda/D, checked at build) or
+            ``"mft"`` (dense matrix transform on any window).
     """
 
     wavelength_nm: float = eqx.field(static=True)
@@ -335,6 +288,7 @@ class NIRCamConfig(eqx.Module):
     si_wfe: bool = eqx.field(static=True, default=False)
     mask_oversample: int = eqx.field(static=True, default=4)
     mask_extent_lod: float | None = eqx.field(static=True, default=None)
+    mask_transform: str = eqx.field(static=True, default="auto")
 
     def __check_init__(self):
         """Reject non-physical values at construction."""
@@ -363,6 +317,10 @@ class NIRCamConfig(eqx.Module):
         if self.mask_extent_lod is not None and not self.mask_extent_lod > 0:
             raise ValueError(
                 f"mask_extent_lod must be positive, got {self.mask_extent_lod}"
+            )
+        if self.mask_transform not in ("auto", "fft", "mft"):
+            raise ValueError(
+                f"mask_transform must be auto, fft or mft, got {self.mask_transform!r}"
             )
 
 
@@ -689,17 +647,13 @@ def _read_focal_mask(read, entry):
 
 
 def _focal_mask_stage(config, inputs, pupil_grid):
-    """The mask-plane window, its sampled transmission and the MFT pair."""
-    npup = pupil_grid.npix
-    extent = npup if config.mask_extent_lod is None else config.mask_extent_lod
-    n_mask = round(extent * config.mask_oversample)
-    if n_mask < 1:
-        raise ValueError(
-            f"mask-plane window of {extent} lambda/D at {config.mask_oversample} "
-            "samples per lambda/D holds no sample"
-        )
-    window = Grid.focal(n_mask, 1.0 / config.mask_oversample)
-    transform = Fraunhofer(pupil_grid, window, on_undersampled="raise")
+    """The mask-plane window, its sampled transmission and the transform pair."""
+    window = mask_window(
+        pupil_grid, config.mask_oversample, extent_lod=config.mask_extent_lod
+    )
+    transform = select_mask_transform(
+        pupil_grid, window, config.mask_oversample, config.mask_transform
+    )
     theta = np.asarray(
         lambda_d_to_arcsec(
             window.coords, config.wavelength_nm, inputs.pupil_diameter_m

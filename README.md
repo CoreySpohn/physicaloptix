@@ -65,7 +65,8 @@ Built on [JAX](https://github.com/google/jax) and
   offset, continuous-FT weights), `PlaneKind`-tagged `Field` pytrees, and
   `Spectrum` for chromatic fields.
 - **Propagators** (`physicaloptix.transforms`) -- the validated `cmft_fwd` /
-  `cmft_bwd` continuous-FT MFT pair and the plane-aware `Fraunhofer` wrapper,
+  `cmft_bwd` continuous-FT MFT pair and the plane-aware `Fraunhofer` wrapper
+  (plus `FullBandFraunhofer`, its zero-padded FFT form on the full band),
   with sampling diagnostics evaluated at construction time.
 - **Elements** (`physicaloptix.elements`) -- grid-stamped `SampledOptic` for
   ingested masks and the `MultiScaleVortex` ladder (hcipy port; reaches the

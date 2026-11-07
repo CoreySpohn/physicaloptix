@@ -133,13 +133,25 @@ of $J_1$, followed by rectangular override regions (the ND squares, the opaque
 holder edge and the glass edge). It is evaluated analytically at each
 wavelength.
 
-The mask stage carries the pupil field $E$ to a mask-plane window with the MFT
+The mask stage ({class}`physicaloptix.elements.FocalPlaneMask`, generic and
+re-exported by the NIRCam module) carries the pupil field $E$ to a mask-plane window with the MFT
 pair $F$ / $B$ and returns $E + B[(M - 1) F E]$ to the Lyot plane (a Babinet
 form). The NIRCam masks are not compactly supported (the holder and glass
 edges run across any window), so the default window is the pupil raster's full
 Nyquist band, on which $B F$ is the identity and the result equals the direct
 propagation $B[M F E]$. Narrower windows (`mask_extent_lod`) are for
 convergence studies only.
+
+On the full band the window is the complete conjugate grid of the pupil raster,
+so $F$ and $B$ are zero-padded FFTs of `npup * mask_oversample` samples with
+exact phase ramps for the half-sample centering
+({class}`physicaloptix.transforms.FullBandFraunhofer`). The FFT form reproduces
+the dense MFT to roundoff and avoids its `(npup * mask_oversample, npup)` kernel
+matrices, which dominate time and memory at large `npup`. The
+`NIRCamConfig.mask_transform` field selects it: `"auto"` (default) uses the FFT
+on the full band and the MFT on a narrower window, `"mft"` forces the MFT, and
+`"fft"` raises where it does not apply (a narrower window, or a non-integer
+`mask_oversample`).
 
 ## The prescription bundle
 
