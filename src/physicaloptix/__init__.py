@@ -80,6 +80,7 @@ from physicaloptix.multichannel import (
     ncpa_differential_opd,
 )
 from physicaloptix.path import OpticalPath, Stage
+from physicaloptix.polychromatic import PolychromaticPath
 from physicaloptix.robustness import (
     SensitivityBudget,
     SensitivityOperators,
@@ -132,6 +133,7 @@ __all__ = [
     "Photometry",
     "PlaneKind",
     "PointSource",
+    "PolychromaticPath",
     "QuadratureAudit",
     "SampledOptic",
     "SampledPhaseScreen",
