@@ -4,6 +4,7 @@ import dataclasses
 
 import equinox as eqx
 import jax.numpy as jnp
+from jaxtyping import Array
 
 from physicaloptix.core import (
     AbstractChromaticOp,
@@ -92,3 +93,73 @@ class PhaseScreen(Element, AbstractChromaticOp):
             A ``PhaseScreen`` sharing this one's basis and grid.
         """
         return dataclasses.replace(self, wavelength_nm=wavelength_nm)
+
+
+class SampledPhaseScreen(Element, AbstractChromaticOp):
+    """A dense OPD map as a phasor ``exp(i 2 pi opd / lambda)``, wavelength bound late.
+
+    The OPD array itself is the differentiable leaf, so a shared offset
+    (an aberration being fitted, say) is one array that every wavelength
+    node reads. The wavelength is not stored by the caller: build the screen
+    with ``wavelength_nm=None`` and bind it with ``at_wavelength`` (or
+    ``OpticalPath.at_wavelength``). A chromatic field converts the OPD per
+    field wavelength instead, as ``PhaseScreen`` does, and needs no binding.
+
+    Attributes:
+        opd_nm: OPD map in nanometers, ``(n, n)`` on ``grid``.
+        grid: The plane grid the map and the incoming field live on.
+        plane: The plane the screen acts in (default pupil).
+        wavelength_nm: Wavelength for a monochromatic field, or ``None`` while
+            unbound.
+    """
+
+    opd_nm: Array
+    grid: Grid
+    plane: PlaneKind = eqx.field(static=True, default=PlaneKind.PUPIL)
+    wavelength_nm: float | None = eqx.field(static=True, default=None)
+
+    def __check_init__(self):
+        """Validate that the OPD map matches the grid."""
+        npix = self.grid.npix
+        if self.opd_nm.shape != (npix, npix):
+            raise ValueError(
+                f"opd_nm shape {self.opd_nm.shape} does not match grid ({npix}, {npix})"
+            )
+
+    def at_wavelength(self, wavelength_nm):
+        """The same screen bound to ``wavelength_nm``.
+
+        Args:
+            wavelength_nm: Wavelength in nanometers (a concrete float).
+
+        Returns:
+            A ``SampledPhaseScreen`` sharing this one's OPD array.
+        """
+        return dataclasses.replace(self, wavelength_nm=float(wavelength_nm))
+
+    def __call__(self, field):
+        """Apply the OPD phasor to the field (same plane and grid).
+
+        Raises:
+            ValueError: A monochromatic field arrives while the wavelength is
+                unbound.
+        """
+        validate_field(
+            field, plane=self.plane, grid=self.grid, context="SampledPhaseScreen"
+        )
+        if field.spectrum is None:
+            if self.wavelength_nm is None:
+                raise ValueError(
+                    "SampledPhaseScreen has no wavelength; bind it with "
+                    "at_wavelength() or propagate a chromatic field"
+                )
+            phasor = jnp.exp(1j * 2.0 * jnp.pi * self.opd_nm / self.wavelength_nm)
+        else:
+            wavelengths = field.spectrum.wavelengths_nm[:, jnp.newaxis, jnp.newaxis]
+            phasor = jnp.exp(1j * 2.0 * jnp.pi * self.opd_nm[jnp.newaxis] / wavelengths)
+        return Field(
+            data=field.data * phasor,
+            grid=field.grid,
+            plane=field.plane,
+            spectrum=field.spectrum,
+        )

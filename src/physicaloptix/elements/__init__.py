@@ -15,7 +15,7 @@ from physicaloptix.elements.modes import (
     zernike_basis,
     zernike_name,
 )
-from physicaloptix.elements.phase_screen import PhaseScreen
+from physicaloptix.elements.phase_screen import PhaseScreen, SampledPhaseScreen
 from physicaloptix.elements.vortex import MultiScaleVortex
 from physicaloptix.elements.zernike_wfs import ZernikeWavefrontSensor
 
@@ -27,6 +27,7 @@ __all__ = [
     "MultiScaleVortex",
     "PhaseScreen",
     "SampledOptic",
+    "SampledPhaseScreen",
     "ZernikeWavefrontSensor",
     "fourier_dm_basis",
     "mask_window",

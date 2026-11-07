@@ -5,9 +5,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax.test_util import check_grads
 
 from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
-from physicaloptix.elements import ModeBasis, PhaseScreen
+from physicaloptix.elements import ModeBasis, PhaseScreen, SampledPhaseScreen
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.sources import broadcast_to_spectrum
 from physicaloptix.transforms import Fraunhofer
@@ -104,3 +105,77 @@ class TestPhaseScreen:
         )
         out, _ = path.propagate(_pupil_field(npix))
         assert out.data.shape == (16, 16)
+
+
+class TestSampledPhaseScreen:
+    """A dense OPD leaf with a late-bound wavelength.
+
+    Truth sources: the closed-form phasor ``exp(+2j pi opd / lambda)`` (the
+    library convention: a positive OPD is a delayed wavefront), identity with
+    ``PhaseScreen`` at unit coefficients, and central differences for the
+    gradient.
+    """
+
+    NPIX = 8
+
+    def _opd(self):
+        rng = np.random.default_rng(0)
+        return jnp.asarray(40.0 * rng.standard_normal((self.NPIX, self.NPIX)))
+
+    def test_phasor_matches_the_closed_form_and_phase_screen(self):
+        """Tolerance basis: exact-algebra against ``PhaseScreen`` (the same
+        expression on the same array); floating-point 1e-12 against NumPy."""
+        grid = Grid.pupil(self.NPIX)
+        opd = self._opd()
+        screen = SampledPhaseScreen(opd, grid).at_wavelength(WL)
+        out = screen(_pupil_field(self.NPIX))
+        expected = np.exp(2j * np.pi * np.asarray(opd) / WL)
+        np.testing.assert_allclose(np.asarray(out.data), expected, rtol=1e-12)
+        basis = ModeBasis(B=opd[None], coeffs=jnp.ones(1))
+        ref = PhaseScreen(basis, grid, wavelength_nm=WL)(_pupil_field(self.NPIX))
+        np.testing.assert_array_equal(np.asarray(out.data), np.asarray(ref.data))
+
+    def test_positive_opd_is_a_positive_phase(self):
+        """Only a sign error can fail this: +lambda/4 of OPD is phase +pi/2."""
+        grid = Grid.pupil(self.NPIX)
+        opd = jnp.full((self.NPIX, self.NPIX), WL / 4.0)
+        out = SampledPhaseScreen(opd, grid, wavelength_nm=WL)(_pupil_field(self.NPIX))
+        np.testing.assert_allclose(np.asarray(out.data), 1j, atol=1e-12)
+
+    def test_chromatic_field_converts_per_wavelength_without_binding(self):
+        grid = Grid.pupil(self.NPIX)
+        opd = self._opd()
+        spectrum = Spectrum.tophat(500.0, 0.2, 3)
+        chrom = broadcast_to_spectrum(_pupil_field(self.NPIX), spectrum)
+        out = SampledPhaseScreen(opd, grid)(chrom)
+        for k, wl in enumerate(np.asarray(spectrum.wavelengths_nm)):
+            np.testing.assert_allclose(
+                np.asarray(out.data[k]),
+                np.exp(2j * np.pi * np.asarray(opd) / wl),
+                rtol=1e-12,
+            )
+
+    def test_unbound_monochromatic_use_raises(self):
+        screen = SampledPhaseScreen(self._opd(), Grid.pupil(self.NPIX))
+        with pytest.raises(ValueError, match="no wavelength"):
+            screen(_pupil_field(self.NPIX))
+
+    def test_shape_mismatch_raises(self):
+        with pytest.raises(ValueError, match="does not match grid"):
+            SampledPhaseScreen(jnp.zeros((4, 4)), Grid.pupil(self.NPIX))
+
+    def test_opd_gradient_matches_central_differences(self):
+        """``check_grads`` (order 1, reverse mode) of a real functional of the
+        output field with respect to the OPD leaf. Tolerance basis:
+        finite-difference error, rtol 1e-5."""
+        grid = Grid.pupil(self.NPIX)
+        base = SampledPhaseScreen(self._opd(), grid, wavelength_nm=WL)
+        weights = jnp.asarray(
+            np.random.default_rng(1).standard_normal((self.NPIX, self.NPIX))
+        )
+
+        def loss(opd):
+            screen = eqx.tree_at(lambda s: s.opd_nm, base, opd)
+            return jnp.sum(weights * jnp.real(screen(_pupil_field(self.NPIX)).data))
+
+        check_grads(loss, (base.opd_nm,), order=1, modes=["rev"], rtol=1e-5)
