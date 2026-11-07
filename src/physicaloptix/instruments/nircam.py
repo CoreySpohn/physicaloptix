@@ -111,18 +111,20 @@ from hwoutils.conversions import arcsec_to_lambda_d, lambda_d_to_arcsec
 from hwoutils.transforms import downsample_psf
 from jaxtyping import Array
 
-from physicaloptix.core import Field, Grid, PlaneKind, validate_field
+from physicaloptix.core import ChromaticTable, Field, Grid, PlaneKind, validate_field
 from physicaloptix.elements import (
     FocalPlaneMask,
     ModeBasis,
     PhaseScreen,
     SampledOptic,
+    SampledPhaseScreen,
     mask_window,
     select_mask_transform,
 )
 from physicaloptix.elements.base import Element
 from physicaloptix.path import OpticalPath, Stage
-from physicaloptix.sources import point_source
+from physicaloptix.polychromatic import PolychromaticPath
+from physicaloptix.sources import PointSource, point_source
 from physicaloptix.transforms import Fraunhofer
 
 STPSF_PHASOR = "exp(+i*2*pi*OPD/lambda)"
@@ -1026,6 +1028,102 @@ def nircam_band_image(config, inputs, band):
         image = weight * out.intensity() * out.grid.weights
         total = image if total is None else total + image
     return total
+
+
+def build_nircam_band(config, inputs, band):
+    """Build the band as one late-bound path with shared fitting seams.
+
+    ``nircam_band_image`` builds a separate path per wavelength node, so a
+    parameter that is shared across the band exists once per node. This
+    builder returns the same computation as one ``PolychromaticPath``: the
+    stages whose data depend on the wavelength (the focal mask sampled at
+    each node's lambda/D scale, the per-node SI phasor, the science output
+    grid) are ``ChromaticTable`` stages built exactly as ``build_nircam``
+    builds them for that node, and the fixed OTE OPD screen binds its
+    wavelength late. Everything else is one object read by every node.
+
+    Stages, in order (optional ones only when their toggle is set):
+    ``entrance_pupil``, ``ote_opd``, ``ote_offset``, ``inversion``,
+    ``focal_mask``, ``lyot_stop``, ``si_wfe``, ``si_offset``,
+    ``science_focal``. Four stages carry shared leaves, all zero (no effect)
+    as built:
+
+    - ``ote_offset``: ``SampledPhaseScreen`` OPD map in the entrance pupil
+      (pre-mask), nanometers, same frame as the OTE OPD.
+    - ``si_offset``: ``SampledPhaseScreen`` OPD map in the exit pupil (post
+      mask), nanometers, same frame as the SI OPD.
+    - ``lyot_stop`` (when set): ``shift_px`` ``(x, y)``, a rigid shift of the
+      stop in samples (order 1; see ``SampledOptic``).
+    - The returned ``PointSource`` carries the source position.
+
+    Select them for fitting by stage name, for example
+    ``lambda m: m.path.stage("ote_offset").opd_nm``.
+
+    With every seam at zero, ``image((source,))`` equals
+    ``nircam_band_image(config, inputs, band)``.
+
+    Args:
+        config: Everything but the wavelength, which each node replaces. Its
+            ``source_position_arcsec`` becomes the returned source's position.
+        inputs: The prescription; its SI OPD is replaced per node when
+            ``band.si_opd_nm`` is given, as in ``nircam_band_image``.
+        band: The nodes and weights.
+
+    Returns:
+        ``(model, source)``: the ``PolychromaticPath`` (with the NIRCam y
+        reflection as its source parity) and the ``PointSource`` at the
+        configured position.
+    """
+    nodes = band.wavelengths_nm
+    node_paths = []
+    entrance = None
+    for k, wavelength_nm in enumerate(nodes):
+        node_config = dataclasses.replace(
+            config, wavelength_nm=wavelength_nm, source_position_arcsec=(0.0, 0.0)
+        )
+        node_inputs = inputs
+        if band.si_opd_nm is not None:
+            node_inputs = dataclasses.replace(
+                inputs, si_opd_nm=band.si_opd_nm[k], si_wavelength_nm=wavelength_nm
+            )
+        path, field = build_nircam(node_config, node_inputs)
+        node_paths.append({stage.name: stage.op for stage in path.stages})
+        if entrance is None:
+            entrance = field
+    first = node_paths[0]
+    pupil_grid = first["entrance_pupil"].grid
+    zero_opd = jnp.zeros((pupil_grid.npix, pupil_grid.npix))
+
+    def table(name):
+        return ChromaticTable(tuple(ops[name] for ops in node_paths), nodes)
+
+    stages = [Stage("entrance_pupil", first["entrance_pupil"])]
+    if "ote_opd" in first:
+        stages.append(Stage("ote_opd", first["ote_opd"]))
+    stages.append(Stage("ote_offset", SampledPhaseScreen(zero_opd, pupil_grid)))
+    stages.append(Stage("inversion", first["inversion"]))
+    if "focal_mask" in first:
+        stages.append(Stage("focal_mask", table("focal_mask")))
+    if "lyot_stop" in first:
+        stages.append(
+            Stage(
+                "lyot_stop",
+                dataclasses.replace(first["lyot_stop"], shift_px=jnp.zeros(2)),
+            )
+        )
+    if "si_wfe" in first:
+        stages.append(Stage("si_wfe", table("si_wfe")))
+    stages.append(Stage("si_offset", SampledPhaseScreen(zero_opd, pupil_grid)))
+    stages.append(Stage("science_focal", table("science_focal")))
+    model = PolychromaticPath(
+        OpticalPath(stages=tuple(stages)),
+        entrance,
+        nodes,
+        band.weights,
+        inputs.pupil_diameter_m,
+        source_parity=(1, -1),
+    )
+    return model, PointSource(jnp.asarray(config.source_position_arcsec, dtype=float))
 
 
 def integrate_detector_pixels(image, oversample):
