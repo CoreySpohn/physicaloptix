@@ -58,6 +58,30 @@ class OpticalPath(eqx.Module):
                 )
             current = plane_out
 
+    def stage(self, name):
+        """The op of the stage called ``name``.
+
+        Plain attribute access over the static stage names, so it can be
+        used inside the selector of ``eqx.tree_at`` (for example
+        ``eqx.tree_at(lambda p: p.stage("lyot_stop").transmission, path,
+        new)``) without reaching into ``stages[i]``.
+
+        Args:
+            name: The stage name.
+
+        Returns:
+            The stage's op.
+
+        Raises:
+            KeyError: No stage has that name.
+        """
+        for stage in self.stages:
+            if stage.name == name:
+                return stage.op
+        raise KeyError(
+            f"no stage named {name!r}; stages are {[s.name for s in self.stages]}"
+        )
+
     def propagate(self, field, *, taps=()):
         """Fold the field through every stage.
 

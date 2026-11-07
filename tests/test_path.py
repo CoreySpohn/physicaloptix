@@ -121,3 +121,30 @@ class TestOpticalPath:
         np.testing.assert_allclose(
             np.asarray(jitted), np.asarray(eager.data), atol=1e-15
         )
+
+
+class TestStageByName:
+    """``OpticalPath.stage`` addresses a stage's op by name."""
+
+    def test_stage_returns_the_op_and_works_inside_tree_at(self):
+        """Truth source: identity (the op object is the stage's op) and the
+        ``tree_at`` replacement landing on the named stage only. Exact.
+        """
+        grid = Grid.pupil(8)
+        first = SampledOptic(jnp.ones((8, 8)), grid, PlaneKind.PUPIL)
+        second = SampledOptic(2.0 * jnp.ones((8, 8)), grid, PlaneKind.PUPIL)
+        path = OpticalPath((Stage("a", first), Stage("b", second)))
+        assert path.stage("a") is first
+        assert path.stage("b") is second
+        new = jnp.full((8, 8), 5.0)
+        swapped = eqx.tree_at(lambda p: p.stage("b").transmission, path, new)
+        np.testing.assert_array_equal(swapped.stage("b").transmission, new)
+        np.testing.assert_array_equal(swapped.stage("a").transmission, 1.0)
+
+    def test_unknown_stage_raises(self):
+        grid = Grid.pupil(8)
+        path = OpticalPath(
+            (Stage("a", SampledOptic(jnp.ones((8, 8)), grid, PlaneKind.PUPIL)),)
+        )
+        with pytest.raises(KeyError, match="no stage named"):
+            path.stage("missing")
