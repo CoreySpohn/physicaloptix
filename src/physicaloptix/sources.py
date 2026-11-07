@@ -8,7 +8,10 @@ wavelength. Downstream, a ``Fraunhofer`` stage with the same reference
 wavelength projects every slice onto one fixed angular grid.
 """
 
+import equinox as eqx
 import jax.numpy as jnp
+from hwoutils.conversions import arcsec_to_lambda_d
+from jaxtyping import Array
 
 from physicaloptix.core import Field
 
@@ -96,3 +99,75 @@ def point_source(
 
     data = jnp.stack([slice_for(wl) for wl in wavelengths])
     return Field(data=data, grid=field.grid, plane=field.plane, spectrum=spectrum)
+
+
+def _optional_array(value):
+    return None if value is None else jnp.asarray(value)
+
+
+class PointSource(eqx.Module):
+    """A point source: its sky position, flux and spectral shape.
+
+    The position belongs to the source, not to the optical path, so several
+    sources can share one path and each carry its own position. All three
+    fields are dynamic leaves, so position and flux can be fitted.
+
+    Attributes:
+        position_arcsec: ``(x, y)`` sky offset in arcseconds from the
+            optical axis, shape ``(2,)``.
+        flux: Scale of the source's image (a fraction of the entrance
+            energy when 1).
+        spectral_weights: Optional per-wavelength-node factors, one per node
+            of the path that images the source, multiplying the node weights;
+            ``None`` means one at every node.
+    """
+
+    position_arcsec: Array = eqx.field(converter=jnp.asarray)
+    flux: Array = eqx.field(default=1.0, converter=jnp.asarray)
+    spectral_weights: Array | None = eqx.field(default=None, converter=_optional_array)
+
+    def __check_init__(self):
+        """Validate the position and weight shapes."""
+        if self.position_arcsec.shape != (2,):
+            raise ValueError(
+                f"position_arcsec must have shape (2,) as (x, y), got "
+                f"{self.position_arcsec.shape}"
+            )
+        if self.spectral_weights is not None and self.spectral_weights.ndim != 1:
+            raise ValueError(
+                "spectral_weights must be 1D (one per wavelength node), got "
+                f"shape {self.spectral_weights.shape}"
+            )
+
+    def entrance_field(self, entrance, wavelength_nm, pupil_diameter_m, parity=(1, 1)):
+        """The entrance field tilted to this source at one wavelength.
+
+        The angle is converted to lambda/D at ``wavelength_nm``, so a source
+        at a fixed sky angle moves with the wavelength in lambda/D units.
+        The tilt is ``exp(2j pi (px x + py y))`` on the entrance grid, which
+        puts the image at ``+position`` on a focal grid whose coordinates
+        increase with column (x) and row (y).
+
+        Args:
+            entrance: The untilted entrance-plane ``Field`` (mono).
+            wavelength_nm: Wavelength in nanometers.
+            pupil_diameter_m: Pupil diameter in meters, the lambda/D scale.
+            parity: ``(x, y)`` signs applied to the position before the tilt,
+                for paths whose optics reflect an axis between the entrance
+                and the detector; ``(1, -1)`` for a path with one reflection
+                in y.
+
+        Returns:
+            The tilted entrance ``Field``.
+        """
+        x = jnp.asarray(entrance.grid.coords)
+        lod = arcsec_to_lambda_d(self.position_arcsec, wavelength_nm, pupil_diameter_m)
+        phase = (parity[0] * lod[0]) * x[jnp.newaxis, :] + (parity[1] * lod[1]) * x[
+            :, jnp.newaxis
+        ]
+        return Field(
+            data=entrance.data * jnp.exp(2j * jnp.pi * 1.0 * phase),
+            grid=entrance.grid,
+            plane=entrance.plane,
+            spectrum=entrance.spectrum,
+        )

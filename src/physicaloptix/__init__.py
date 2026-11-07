@@ -85,7 +85,7 @@ from physicaloptix.robustness import (
     SensitivityOperators,
     pastis_matrix,
 )
-from physicaloptix.sources import broadcast_to_spectrum, point_source
+from physicaloptix.sources import PointSource, broadcast_to_spectrum, point_source
 from physicaloptix.speckle import (
     AnalyticSpeckleField,
     CrossBandMoments,
@@ -131,6 +131,7 @@ __all__ = [
     "PhaseScreen",
     "Photometry",
     "PlaneKind",
+    "PointSource",
     "QuadratureAudit",
     "SampledOptic",
     "SampledPhaseScreen",
