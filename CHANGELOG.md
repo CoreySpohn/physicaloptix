@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.4.0](https://github.com/CoreySpohn/physicaloptix/compare/v2.3.1...v2.4.0) (2026-11-07)
+
+
+### Features
+
+* **nircam:** zero-padded FFT focal-mask path on the full band, selected by mask_transform ([fcc8638](https://github.com/CoreySpohn/physicaloptix/commit/fcc8638e6d721ef61362f4c11e5533bde8c71356))
+
+
+### Bug Fixes
+
+* **nircam:** accept scalar positions in BandLimitedRoundMask.transmission ([205c43c](https://github.com/CoreySpohn/physicaloptix/commit/205c43c32345f6caac1f0bc418a844568ba011ba))
+
 ## [2.3.1](https://github.com/CoreySpohn/physicaloptix/compare/v2.3.0...v2.3.1) (2026-11-05)
 
 
