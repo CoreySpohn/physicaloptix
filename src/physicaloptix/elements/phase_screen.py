@@ -1,14 +1,22 @@
 """PhaseScreen: a mode-basis phase stage (a deformable mirror or a fixed aberration)."""
 
+import dataclasses
+
 import equinox as eqx
 import jax.numpy as jnp
 
-from physicaloptix.core import Field, Grid, PlaneKind, validate_field
+from physicaloptix.core import (
+    AbstractChromaticOp,
+    Field,
+    Grid,
+    PlaneKind,
+    validate_field,
+)
 from physicaloptix.elements.base import Element
 from physicaloptix.elements.basis import ModeBasis
 
 
-class PhaseScreen(Element):
+class PhaseScreen(Element, AbstractChromaticOp):
     """A pupil-plane phasor ``exp(i 2 pi (coeffs . B) / lambda)`` from a mode basis.
 
     The mode basis is the programmable state: its ``coeffs`` are the
@@ -73,3 +81,14 @@ class PhaseScreen(Element):
             plane=field.plane,
             spectrum=field.spectrum,
         )
+
+    def at_wavelength(self, wavelength_nm):
+        """The same screen with the OPD-to-phase wavelength rebound.
+
+        Args:
+            wavelength_nm: Wavelength in nanometers (a concrete float).
+
+        Returns:
+            A ``PhaseScreen`` sharing this one's basis and grid.
+        """
+        return dataclasses.replace(self, wavelength_nm=wavelength_nm)

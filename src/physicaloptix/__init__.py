@@ -29,7 +29,7 @@ from physicaloptix.apertures import (
     rasterize_segments,
 )
 from physicaloptix.coatings import multilayer_response, sellmeier, thickness_kernel
-from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
+from physicaloptix.core import AbstractChromaticOp, Field, Grid, PlaneKind, Spectrum
 from physicaloptix.detector import read_detector
 from physicaloptix.diagnostics import (
     QuadratureAudit,
@@ -99,6 +99,7 @@ from physicaloptix.transforms import Fraunhofer, Fresnel, cmft_bwd, cmft_fwd
 
 __all__ = [
     "REFLECTION_OPD_FACTOR",
+    "AbstractChromaticOp",
     "AnalyticSpeckleField",
     "BeamSplitter",
     "Branch",

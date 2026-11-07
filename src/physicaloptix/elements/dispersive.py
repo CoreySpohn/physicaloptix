@@ -1,17 +1,25 @@
 """DispersiveScreen: a mode-basis stage with a chromatic complex response."""
 
+import dataclasses
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
 from jaxtyping import Array
 
-from physicaloptix.core import Field, Grid, PlaneKind, validate_field
+from physicaloptix.core import (
+    AbstractChromaticOp,
+    Field,
+    Grid,
+    PlaneKind,
+    validate_field,
+)
 from physicaloptix.elements.base import Element
 from physicaloptix.elements.basis import ModeBasis
 
 
-class DispersiveScreen(Element):
+class DispersiveScreen(Element, AbstractChromaticOp):
     """A pupil-plane response ``exp(sum_k c_k D_k(lambda) B_k)`` from a mode basis.
 
     The chromatic generalization of ``PhaseScreen``: instead of the OPD law
@@ -133,3 +141,14 @@ class DispersiveScreen(Element):
             plane=field.plane,
             spectrum=field.spectrum,
         )
+
+    def at_wavelength(self, wavelength_nm):
+        """The same screen evaluated at a new monochromatic wavelength.
+
+        Args:
+            wavelength_nm: Wavelength in nanometers (a concrete float).
+
+        Returns:
+            A ``DispersiveScreen`` sharing this one's basis, kernel and grid.
+        """
+        return dataclasses.replace(self, wavelength_nm=wavelength_nm)

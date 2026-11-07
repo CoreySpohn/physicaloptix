@@ -15,6 +15,7 @@ renderer consumes them directly).
 
 import equinox as eqx
 
+from physicaloptix.core.chromatic import AbstractChromaticOp
 from physicaloptix.linearize import linearize as _linearize
 
 
@@ -57,6 +58,28 @@ class OpticalPath(eqx.Module):
                     f"plane but the chain is in the {current.value} plane"
                 )
             current = plane_out
+
+    def at_wavelength(self, wavelength_nm):
+        """The path with every late-bound stage bound to ``wavelength_nm``.
+
+        Stages that derive from ``AbstractChromaticOp`` are replaced by
+        ``op.at_wavelength(wavelength_nm)``; every other stage is kept as is.
+        Dynamic leaves stay shared with this path.
+
+        Args:
+            wavelength_nm: Wavelength in nanometers (a concrete float).
+
+        Returns:
+            A new ``OpticalPath`` with the same stage names.
+        """
+        return OpticalPath(
+            stages=tuple(
+                Stage(stage.name, stage.op.at_wavelength(wavelength_nm))
+                if isinstance(stage.op, AbstractChromaticOp)
+                else stage
+                for stage in self.stages
+            )
+        )
 
     def stage(self, name):
         """The op of the stage called ``name``.
