@@ -29,7 +29,14 @@ from physicaloptix.apertures import (
     rasterize_segments,
 )
 from physicaloptix.coatings import multilayer_response, sellmeier, thickness_kernel
-from physicaloptix.core import AbstractChromaticOp, Field, Grid, PlaneKind, Spectrum
+from physicaloptix.core import (
+    AbstractChromaticOp,
+    ChromaticTable,
+    Field,
+    Grid,
+    PlaneKind,
+    Spectrum,
+)
 from physicaloptix.detector import read_detector
 from physicaloptix.diagnostics import (
     QuadratureAudit,
@@ -104,6 +111,7 @@ __all__ = [
     "BeamSplitter",
     "Branch",
     "ChannelLinearization",
+    "ChromaticTable",
     "CrossBandMoments",
     "DispersiveScreen",
     "Field",

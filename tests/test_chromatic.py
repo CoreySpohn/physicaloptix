@@ -10,8 +10,15 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
-from physicaloptix.core import AbstractChromaticOp, Field, Grid, PlaneKind
+from physicaloptix.core import (
+    AbstractChromaticOp,
+    ChromaticTable,
+    Field,
+    Grid,
+    PlaneKind,
+)
 from physicaloptix.elements import (
     DispersiveScreen,
     ModeBasis,
@@ -108,3 +115,60 @@ def test_unknown_wavelength_bind_is_a_noop_on_a_path_without_chromatic_stages():
         (Stage("stop", SampledOptic(jnp.ones((NPIX, NPIX)), grid, PlaneKind.PUPIL)),)
     )
     assert path.at_wavelength(900.0).stage("stop") is path.stage("stop")
+
+
+class TestChromaticTable:
+    NODES = (500.0, 700.0)
+
+    def _table(self):
+        grid = Grid.pupil(NPIX)
+        ops = tuple(
+            SampledOptic(jnp.full((NPIX, NPIX), 0.5 + 0.25 * k), grid, PlaneKind.PUPIL)
+            for k in range(2)
+        )
+        return ops, ChromaticTable(ops, self.NODES)
+
+    def test_lookup_is_exact_and_returns_the_node_op(self):
+        ops, table = self._table()
+        assert table.at_wavelength(500.0) is ops[0]
+        assert table.at_wavelength(700.0) is ops[1]
+
+    def test_off_node_wavelength_raises(self):
+        _, table = self._table()
+        with pytest.raises(KeyError, match="not a table node"):
+            table.at_wavelength(500.0 + 1e-9)
+
+    def test_unbound_table_refuses_to_propagate(self):
+        _, table = self._table()
+        with pytest.raises(ValueError, match="unbound"):
+            table(_field())
+
+    def test_path_with_a_table_binds_to_the_node_op(self):
+        """Truth source: identity. The bound path equals a path holding the
+        node's op directly. Exact.
+        """
+        ops, table = self._table()
+        path = OpticalPath((Stage("mask", table),))
+        out_table, _ = path.at_wavelength(700.0).propagate(_field())
+        out_direct, _ = OpticalPath((Stage("mask", ops[1]),)).propagate(_field())
+        np.testing.assert_array_equal(out_table.data, out_direct.data)
+        with pytest.raises(ValueError, match="unbound"):
+            path.propagate(_field())
+
+    def test_planes_follow_the_ops(self):
+        _, table = self._table()
+        assert table.plane_in is PlaneKind.PUPIL
+        assert table.plane_out is PlaneKind.PUPIL
+
+    def test_construction_rejects_bad_tables(self):
+        grid = Grid.pupil(NPIX)
+        pupil = SampledOptic(jnp.ones((NPIX, NPIX)), grid, PlaneKind.PUPIL)
+        with pytest.raises(ValueError, match="at least one"):
+            ChromaticTable((), ())
+        with pytest.raises(ValueError, match="one wavelength per op"):
+            ChromaticTable((pupil,), (500.0, 700.0))
+        with pytest.raises(ValueError, match="distinct"):
+            ChromaticTable((pupil, pupil), (500.0, 500.0))
+        focal = Fraunhofer(grid, Grid.focal(24, 0.5))
+        with pytest.raises(ValueError, match="same planes"):
+            ChromaticTable((pupil, focal), self.NODES)
