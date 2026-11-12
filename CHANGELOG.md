@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.4.0](https://github.com/CoreySpohn/physicaloptix/compare/v2.3.1...v2.4.0) (2026-11-12)
+
+
+### Features
+
+* **elements:** add a differentiable shift_px to SampledOptic ([5e7bb7d](https://github.com/CoreySpohn/physicaloptix/commit/5e7bb7db0104bf76021d3f4fac93c8e60e0f08a7))
+* **elements:** add SampledPhaseScreen, a dense OPD leaf with a late-bound wavelength ([aee6c63](https://github.com/CoreySpohn/physicaloptix/commit/aee6c63ee490f95bd61a69c5d60e37ac97b32a6d))
+* **nircam:** add build_nircam_band, the band as one path with shared seams ([189d401](https://github.com/CoreySpohn/physicaloptix/commit/189d4013228183573b9c9c3141a2176479d96a2f))
+* **nircam:** zero-padded FFT focal-mask path on the full band, selected by mask_transform ([fcc8638](https://github.com/CoreySpohn/physicaloptix/commit/fcc8638e6d721ef61362f4c11e5533bde8c71356))
+* **path:** add ChromaticTable for per-node ops selected by wavelength ([c09271f](https://github.com/CoreySpohn/physicaloptix/commit/c09271f33670e0dcdef519be9890cd61edbcf58d))
+* **path:** add PolychromaticPath folding one late-bound path over nodes and sources ([739af5c](https://github.com/CoreySpohn/physicaloptix/commit/739af5ca79f250a22d1f3f3c0b609ace22e6c077))
+* **path:** address a stage by name with OpticalPath.stage ([1a5228c](https://github.com/CoreySpohn/physicaloptix/commit/1a5228cf5a66de4da17d0c286d84a2d2cb95238c))
+* **path:** bind the wavelength late with AbstractChromaticOp and OpticalPath.at_wavelength ([0794b98](https://github.com/CoreySpohn/physicaloptix/commit/0794b9889aea6803198acc06410ab5576f991714))
+* **sources:** add PointSource owning its position, flux and spectral weights ([8ef333b](https://github.com/CoreySpohn/physicaloptix/commit/8ef333b8e48e178878fa117164c28b27b7fc1afd))
+
+
+### Bug Fixes
+
+* **nircam:** accept scalar positions in BandLimitedRoundMask.transmission ([205c43c](https://github.com/CoreySpohn/physicaloptix/commit/205c43c32345f6caac1f0bc418a844568ba011ba))
+
 ## [2.3.1](https://github.com/CoreySpohn/physicaloptix/compare/v2.3.0...v2.3.1) (2026-11-05)
 
 
