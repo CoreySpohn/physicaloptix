@@ -28,7 +28,7 @@ dependencies = [
     "jaxlib>=0.8.1",
     "jaxtyping>=0.3.3",
     "numpy>=2.0",
-    "optixstuff>=3.0.0",
+    "optixstuff>=4.0.0",
     "scipy>=1.13",
 ]
 
