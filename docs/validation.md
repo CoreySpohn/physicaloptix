@@ -434,10 +434,10 @@ Environment variables:
 | `PHYSICALOPTIX_NIRCAM_REFERENCE` | Directory of the STPSF references: one `<case>.fits` per monochromatic case (extensions `OVERSAMP`, `DET_SAMP`) and `band/manifest.json` with the band references |
 | `PHYSICALOPTIX_REQUIRE_REFERENCES` | `1` makes an absent bundle or reference a failure (not a skip) and makes a run in which no benchmark case executed a failure |
 
-The terminal summary always reports how many benchmark cases executed and
-lists them, so a green run that compared nothing is visible. **Scope of the
-gate:** `PHYSICALOPTIX_REQUIRE_REFERENCES` is implemented in
-`tests/benchmark/conftest.py` and governs only `tests/benchmark/`. It does
+Whenever benchmark cases are collected, the terminal summary reports how many
+executed and lists them, so a green run that compared nothing is visible.
+**Scope of the gate:** `PHYSICALOPTIX_REQUIRE_REFERENCES` is implemented in
+`tests/conftest.py` and governs only tests collected under `tests/benchmark/`. It does
 not make the design-survey tests in `tests/validation/` required; those
 still skip when their cache is absent.
 
