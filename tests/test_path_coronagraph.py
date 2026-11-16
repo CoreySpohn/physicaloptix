@@ -525,3 +525,7 @@ def test_public_coronagraph_reconstruction(vortex_coronagraph):
         ):
             assert image.reconstruction == expected
         assert c.background_transmission(600.0, grid=grid).reconstruction == "linear"
+        # Halo and transmission continue past the field; source cores do not.
+        assert c.stellar_map(600.0, 0.0, grid=grid).outside == "reflect"
+        assert c.background_transmission(600.0, grid=grid).outside == "reflect"
+        assert c.off_axis_psf(600.0, 6.0, grid).outside == "zero"

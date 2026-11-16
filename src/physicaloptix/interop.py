@@ -104,7 +104,7 @@ class PathCoronagraph(AbstractCoronagraph):
         lyot, _ = core_path.propagate(input_field)
         science = Fraunhofer(input_field.grid, grid)
 
-        def psf(field):
+        def psf(field, outside="zero"):
             return Image(
                 science(field).intensity().data * grid.pixel_area / energy,
                 grid,
@@ -112,9 +112,11 @@ class PathCoronagraph(AbstractCoronagraph):
                 "per_pixel",
                 "stellar_flux_fraction",
                 reconstruction="band_limited",
+                outside=outside,
             )
 
-        stellar = psf(lyot)
+        # The stellar halo continues past the field; off-axis cores do not.
+        stellar = psf(lyot, "reflect")
         seps = np.arange(0.0, outer_working_angle_lod + 2 * sep_step_lod, sep_step_lod)
         images = tuple(
             psf(core_path.propagate(_tilted_xy(input_field, s, 0.0))[0]) for s in seps
@@ -161,7 +163,7 @@ class PathCoronagraph(AbstractCoronagraph):
             self.curve_occulter_transmission,
         )
 
-    def _psf(self, field, grid):
+    def _psf(self, field, grid, outside="zero"):
         direct = (
             grid.unit == "lod"
             and grid.frame == self.grid.frame
@@ -182,12 +184,14 @@ class PathCoronagraph(AbstractCoronagraph):
             "per_pixel",
             "stellar_flux_fraction",
             reconstruction="band_limited",
+            outside=outside,
         )
         return _on_grid(native, grid)
 
     def stellar_map(self, wavelength_nm, stellar_diam_lod, *, grid):
         """Point-star per-pixel flux fraction; finite diameters remain unsupported."""
-        return self._psf(self.lyot_field, grid)
+        # The stellar halo continues past the field.
+        return self._psf(self.lyot_field, grid, outside="reflect")
 
     def source_psfs(self, wavelength_nm, x_lod, y_lod, *, grid):
         """Per-pixel source flux fractions with leading axis 'source'."""
@@ -209,6 +213,7 @@ class PathCoronagraph(AbstractCoronagraph):
             "per_unit_area",
             "transmission",
             reconstruction="linear",
+            outside="reflect",
         )
         return _on_grid(native, grid)
 

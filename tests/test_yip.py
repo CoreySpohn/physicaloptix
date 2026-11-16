@@ -99,6 +99,9 @@ class TestEmittedPackage:
         assert package["stellar_intens"].reconstruction == "band_limited"
         assert package["offax_psf"].reconstruction == "band_limited"
         assert package["sky_trans"].reconstruction == "linear"
+        assert package["stellar_intens"].outside == "reflect"
+        assert package["sky_trans"].outside == "reflect"
+        assert package["offax_psf"].outside == "zero"
         np.testing.assert_array_equal(package["stellar_intens_diam_list"], [0.0, 0.1])
 
     def test_offax_peaks_track_offsets(self, emitted):

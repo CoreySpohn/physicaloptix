@@ -336,6 +336,7 @@ def emit_yip(
             "per_pixel",
             "stellar_flux_fraction",
             reconstruction="band_limited",
+            outside="reflect",
         ),
         "stellar_intens_diam_list": stellar_diams_lod,
         "offax_psf": Image(
@@ -355,5 +356,6 @@ def emit_yip(
             "per_unit_area",
             "transmission",
             reconstruction="linear",
+            outside="reflect",
         ),
     }
