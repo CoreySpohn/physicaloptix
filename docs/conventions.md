@@ -314,10 +314,9 @@ phases, after which `realize` is deterministic and differentiable in time --
 realizations vary by key, never by repeated calls at the same time. The
 temporal PSD is the knee form $(1 + (f/f_{\mathrm{knee}})^2)^{s/2}$, and a
 decorrelation time $\tau$ maps to $f_{\mathrm{knee}} = 1/(2\pi\tau)$ (the
-Ornstein-Uhlenbeck identification, exact for $s = -2$). `epoch_jd` anchors
-the clock: set it at or near the first observation -- the J2000 default puts
-current-epoch observations $\sim 10^9$ seconds from the origin, which
-destroys phase precision under float32 downstream.
+Ornstein-Uhlenbeck identification, exact for $s = -2$). `epoch_d` anchors
+the clock in days from the scene epoch and defaults to 0.0. Set it at or near
+the first observation to preserve phase precision under float32 downstream.
 
 Two draw statistics exist, and the defaults straddle them:
 `draw(renormalize=True)` (the default) honors the wavefront-error budget

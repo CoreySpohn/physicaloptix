@@ -13,7 +13,7 @@ from physicaloptix.speckle import SpeckleProcess, lambda_scaled_channels
 jax.config.update("jax_enable_x64", True)
 
 _DIMS, _M, _F = 8, 3, 4
-_EPOCH_JD = 2451545.0
+_EPOCH_D = 0.0
 
 
 def _e_in(norm, du=0.25):
@@ -61,7 +61,7 @@ def _field(coherent=False):
         phases,
         input_energy=_e_in(10.0),
         pixel_scale_lod=0.25,
-        epoch_jd=_EPOCH_JD,
+        epoch_d=_EPOCH_D,
         coherent=coherent,
     )
 
@@ -172,7 +172,7 @@ class TestSpeckleProcess:
             knee_hz=1e-4,
             input_energy=_e_in(10.0),
             pixel_scale_lod=0.25,
-            epoch_jd=_EPOCH_JD,
+            epoch_d=_EPOCH_D,
         )
         defaults.update(kwargs)
         return SpeckleProcess(**defaults)
@@ -186,7 +186,7 @@ class TestSpeckleProcess:
         assert jnp.array_equal(field.input_energy, proc.input_energy)
         assert field.normalization == proc.normalization
         assert field.pixel_scale_lod == proc.pixel_scale_lod
-        assert field.epoch_jd == proc.epoch_jd
+        assert field.epoch_d == proc.epoch_d
         assert field.coherent == proc.coherent
         m = field.realize(wavelength_nm=1000.0, time_s=10.0)
         assert m.shape == (_DIMS, _DIMS)
@@ -263,7 +263,7 @@ class TestInterface:
         )
         assert op.speckle is sp
         assert op.speckle.pixel_scale_lod == 0.25
-        assert op.speckle.epoch_jd == _EPOCH_JD
+        assert op.speckle.epoch_d == _EPOCH_D
 
 
 class TestChromaticField:

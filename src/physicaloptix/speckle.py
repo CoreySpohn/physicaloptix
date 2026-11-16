@@ -34,8 +34,6 @@ from optixstuff.speckle import AbstractSpeckleField
 
 from physicaloptix.transforms.fraunhofer import Fraunhofer
 
-J2000_JD = 2451545.0
-
 
 def telescope_peak(field, grid_out):
     """Peak intensity density of the unocculted telescope PSF.
@@ -180,7 +178,7 @@ class AnalyticSpeckleField(AbstractSpeckleField):
     input_energy: Array
     normalization: Array
     pixel_scale_lod: float
-    epoch_jd: float
+    epoch_d: float
     wavelengths_nm: Array | None
     coherent: bool = eqx.field(static=True)
 
@@ -194,7 +192,7 @@ class AnalyticSpeckleField(AbstractSpeckleField):
         *,
         input_energy,
         pixel_scale_lod=0.25,
-        epoch_jd=J2000_JD,
+        epoch_d=0.0,
         coherent=False,
         wavelengths_nm=None,
     ):
@@ -220,7 +218,7 @@ class AnalyticSpeckleField(AbstractSpeckleField):
             pixel_scale_lod: Native pixel scale in lambda/D per pixel
                 (shared by every channel: the maps live in lambda/D units,
                 where the morphology is achromatic).
-            epoch_jd: Julian Date mapping to ``time_s = 0``. Default J2000.
+            epoch_d: Days from the scene epoch mapping to ``time_s = 0``. Default 0.0.
             coherent: Include the pinning cross term. Default ``False``
                 (incoherent halo).
             wavelengths_nm: Channel wavelengths, shape ``(w,)``, enabling
@@ -240,7 +238,7 @@ class AnalyticSpeckleField(AbstractSpeckleField):
         # input_energy does not re-derive this; rebuild the field to change
         # photometry.
         self.normalization = self.input_energy / pixel_scale_lod**2
-        self.epoch_jd = epoch_jd
+        self.epoch_d = epoch_d
         self.wavelengths_nm = (
             None if wavelengths_nm is None else jnp.asarray(wavelengths_nm, dtype=float)
         )
@@ -271,7 +269,7 @@ class AnalyticSpeckleField(AbstractSpeckleField):
         already contracted against ``G``.
 
         Args:
-            time_s: Time since ``epoch_jd`` in seconds.
+            time_s: Time since ``epoch_d`` in seconds.
 
         Returns:
             The coefficients in the basis's own length unit.
@@ -290,7 +288,7 @@ class AnalyticSpeckleField(AbstractSpeckleField):
         Args:
             wavelength_nm: Wavelength in nanometers (chromatic fields select
                 the nearest channel, as in :meth:`realize`).
-            time_s: Time since ``epoch_jd`` in seconds.
+            time_s: Time since ``epoch_d`` in seconds.
 
         Returns:
             Complex 2D array, shape ``(y, x)``, in the same field units as
@@ -332,7 +330,7 @@ class AnalyticSpeckleField(AbstractSpeckleField):
                 telescope PSF on this field's grid.
             wavelength_nm: Wavelength in nanometers (chromatic fields select
                 the nearest channel, as in :meth:`realize`).
-            time_s: Time since ``epoch_jd`` in seconds.
+            time_s: Time since ``epoch_d`` in seconds.
 
         Returns:
             2D contrast-delta array (dimensionless, peak-referenced).
@@ -382,7 +380,7 @@ class AnalyticSpeckleField(AbstractSpeckleField):
             self.phases,
             input_energy=self.input_energy,
             pixel_scale_lod=self.pixel_scale_lod,
-            epoch_jd=self.epoch_jd,
+            epoch_d=self.epoch_d,
             coherent=self.coherent,
             wavelengths_nm=wavelengths_nm,
         )
@@ -612,7 +610,7 @@ class SpeckleProcess(eqx.Module):
     input_energy: Array
     normalization: Array
     pixel_scale_lod: float
-    epoch_jd: float
+    epoch_d: float
     wavelengths_nm: Array | None
     coherent: bool = eqx.field(static=True)
     n_freq: int = eqx.field(static=True)
@@ -631,7 +629,7 @@ class SpeckleProcess(eqx.Module):
         input_energy,
         slope=-2.0,
         pixel_scale_lod=0.25,
-        epoch_jd=J2000_JD,
+        epoch_d=0.0,
         coherent=False,
         n_freq=64,
         decades_below=1.7,
@@ -664,7 +662,7 @@ class SpeckleProcess(eqx.Module):
             pixel_scale_lod: Native pixel scale in lambda/D per pixel
                 (shared by every channel: the maps live in lambda/D units,
                 where the morphology is achromatic).
-            epoch_jd: Julian Date mapping to ``time_s = 0``. Default J2000.
+            epoch_d: Days from the scene epoch mapping to ``time_s = 0``. Default 0.0.
             coherent: Drawn fields include the pinning cross term.
             n_freq: Number of spectral-synthesis frequencies.
             decades_below: Frequency-grid extent below the knee (decades).
@@ -704,7 +702,7 @@ class SpeckleProcess(eqx.Module):
         # re-derive it.
         self.normalization = self.input_energy / pixel_scale_lod**2
         self.pixel_scale_lod = pixel_scale_lod
-        self.epoch_jd = epoch_jd
+        self.epoch_d = epoch_d
         self.wavelengths_nm = (
             None if wavelengths_nm is None else jnp.asarray(wavelengths_nm, dtype=float)
         )
@@ -966,7 +964,7 @@ class SpeckleProcess(eqx.Module):
             phases,
             input_energy=self.input_energy,
             pixel_scale_lod=self.pixel_scale_lod,
-            epoch_jd=self.epoch_jd,
+            epoch_d=self.epoch_d,
             coherent=self.coherent,
             wavelengths_nm=self.wavelengths_nm,
         )
