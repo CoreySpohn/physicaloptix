@@ -171,7 +171,9 @@ def test_image_equals_independent_per_node_paths_summed():
     shift = jnp.asarray([0.3, -0.4])
     model = _with_seams(_fold(), offset, shift)
     sources = _sources()
-    image = model.image(sources).data
+    product = model.image(sources)
+    assert product.reconstruction == "band_limited"
+    image = product.data
     weights = np.asarray(RAW_WEIGHTS) / np.sum(RAW_WEIGHTS)
     expected = 0.0
     for k, wl in enumerate(NODES):

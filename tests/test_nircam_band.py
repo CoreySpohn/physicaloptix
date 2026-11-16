@@ -26,6 +26,7 @@ midpoint rule; the measured orders are listed in that test.
 
 import hashlib
 import json
+from dataclasses import replace
 
 import jax.numpy as jnp
 import numpy as np
@@ -233,7 +234,18 @@ class TestBandImage:
             source_position_arcsec=self.SOURCE,
             ote_opd=True,
         )
-        image = np.asarray(nircam_band_image(config, _inputs(opd_nm=opd_nm), band).data)
+        optical = nircam_band_image(config, _inputs(opd_nm=opd_nm), band)
+        assert optical.reconstruction == "band_limited"
+        rebinned = integrate_detector_pixels(optical, oversample)
+        assert rebinned.reconstruction == "linear"
+        assert integrate_detector_pixels(optical, 1).reconstruction == "band_limited"
+        assert (
+            integrate_detector_pixels(
+                replace(optical, reconstruction="cubic"), oversample
+            ).reconstruction
+            == "cubic"
+        )
+        image = np.asarray(optical.data)
         weights = np.asarray(self.RAW_WEIGHTS) / np.sum(self.RAW_WEIGHTS)
         expected = sum(
             w

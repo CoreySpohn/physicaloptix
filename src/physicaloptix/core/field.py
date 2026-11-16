@@ -109,11 +109,24 @@ class Field(GridArray):
         return result
 
     def intensity(self):
-        """Intensity Image in field power per grid-unit area, summed over wavelength."""
+        """Intensity in field power per grid-unit area, summed over wavelength.
+
+        Focal optical samples use band-limited reconstruction. Other planes
+        use linear reconstruction, including hard-edged pupil intensities.
+        """
         abs2 = self.data.real**2 + self.data.imag**2
         if self.spectrum is not None:
             abs2 = jnp.tensordot(self.spectrum.weights, abs2, axes=1)
-        return Image(abs2, self.grid, (), "per_unit_area", "field_power")
+        return Image(
+            abs2,
+            self.grid,
+            (),
+            "per_unit_area",
+            "field_power",
+            reconstruction="band_limited"
+            if self.plane is PlaneKind.FOCAL
+            else "linear",
+        )
 
     def energy(self):
         """Integrated power, per wavelength for a chromatic field."""

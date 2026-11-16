@@ -335,11 +335,25 @@ def emit_yip(
             ("stellar_diameter",),
             "per_pixel",
             "stellar_flux_fraction",
+            reconstruction="band_limited",
         ),
         "stellar_intens_diam_list": stellar_diams_lod,
         "offax_psf": Image(
-            offax, science_grid, ("source",), "per_pixel", "stellar_flux_fraction"
+            offax,
+            science_grid,
+            ("source",),
+            "per_pixel",
+            "stellar_flux_fraction",
+            reconstruction="band_limited",
         ),
         "offax_psf_offset_list": offsets_lod,
-        "sky_trans": Image(sky, science_grid, (), "per_unit_area", "transmission"),
+        # A ratio of stochastic sky/reference intensities is not band-limited.
+        "sky_trans": Image(
+            sky,
+            science_grid,
+            (),
+            "per_unit_area",
+            "transmission",
+            reconstruction="linear",
+        ),
     }

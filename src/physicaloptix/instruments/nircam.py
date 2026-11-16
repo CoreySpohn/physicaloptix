@@ -1036,7 +1036,14 @@ def nircam_band_image(config, inputs, band):
         image = weight * out.intensity().data * out.grid.pixel_area
         total = image if total is None else total + image
     grid = out.grid.to_arcsec(out.grid.frame.reference_wavelength_nm)
-    return Image(total, grid, (), "per_pixel", "stellar_flux_fraction")
+    return Image(
+        total,
+        grid,
+        (),
+        "per_pixel",
+        "stellar_flux_fraction",
+        reconstruction="band_limited",
+    )
 
 
 def build_nircam_band(config, inputs, band):
@@ -1159,6 +1166,8 @@ def integrate_detector_pixels(image, oversample):
 
     Returns:
         The per_pixel Image on the coarser detector grid, retaining quantity.
+        Coarsening a band-limited source declares linear reconstruction;
+        oversample=1 retains its declaration, as do other reconstructions.
 
     Raises:
         ValueError: The image is not square 2D or does not tile into pixels.
@@ -1183,4 +1192,9 @@ def integrate_detector_pixels(image, oversample):
         center_y=(source.grid.center_y + 0.5) / oversample - 0.5,
         basis=tuple(tuple(v * oversample for v in row) for row in source.grid.basis),
     )
-    return Image(pixels, grid, (), "per_pixel", source.quantity)
+    reconstruction = source.reconstruction
+    if oversample > 1 and reconstruction == "band_limited":
+        reconstruction = "linear"
+    return Image(
+        pixels, grid, (), "per_pixel", source.quantity, reconstruction=reconstruction
+    )

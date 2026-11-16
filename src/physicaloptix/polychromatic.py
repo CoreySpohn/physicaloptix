@@ -35,6 +35,7 @@ def _node_image(path, entrance, source, scale, wavelength_nm, pupil_diameter_m, 
         (),
         "per_pixel",
         "stellar_flux_fraction",
+        reconstruction="band_limited",
     )
 
 
@@ -153,4 +154,5 @@ class PolychromaticPath(eqx.Module):
             (),
             "per_pixel",
             "stellar_flux_fraction",
+            reconstruction="band_limited",
         )

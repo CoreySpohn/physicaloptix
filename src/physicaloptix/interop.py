@@ -111,6 +111,7 @@ class PathCoronagraph(AbstractCoronagraph):
                 (),
                 "per_pixel",
                 "stellar_flux_fraction",
+                reconstruction="band_limited",
             )
 
         stellar = psf(lyot)
@@ -180,6 +181,7 @@ class PathCoronagraph(AbstractCoronagraph):
             (),
             "per_pixel",
             "stellar_flux_fraction",
+            reconstruction="band_limited",
         )
         return _on_grid(native, grid)
 
@@ -192,13 +194,13 @@ class PathCoronagraph(AbstractCoronagraph):
 
         def one(x, y):
             lyot, _ = self.core_path.propagate(_tilted_xy(self.input_field, x, y))
-            return self._psf(lyot, grid).data
+            return self._psf(lyot, grid)
 
-        data = jax.vmap(one)(jnp.atleast_1d(x_lod), jnp.atleast_1d(y_lod))
-        return Image(data, grid, ("source",), "per_pixel", "stellar_flux_fraction")
+        images = jax.vmap(one)(jnp.atleast_1d(x_lod), jnp.atleast_1d(y_lod))
+        return replace(images, leading_axes=("source",))
 
     def background_transmission(self, wavelength_nm, *, grid):
-        """Sample dimensionless sky transmission without a pixel-area factor."""
+        """Sample sky transmission with linear reconstruction of the radial table."""
         x, y = self.grid.coordinates()
         native = Image(
             self.occulter_transmission(jnp.hypot(x, y)),
@@ -206,6 +208,7 @@ class PathCoronagraph(AbstractCoronagraph):
             (),
             "per_unit_area",
             "transmission",
+            reconstruction="linear",
         )
         return _on_grid(native, grid)
 

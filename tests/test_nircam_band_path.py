@@ -128,7 +128,9 @@ def test_zero_seam_band_equals_nircam_band_image():
     config, inputs, band = _config(), _inputs(), _band()
     reference = np.asarray(nircam_band_image(config, inputs, band).data)
     model, source = build_nircam_band(config, inputs, band)
-    eager = np.asarray(model.image((source,)).data)
+    optical = model.image((source,))
+    assert optical.reconstruction == "band_limited"
+    eager = np.asarray(optical.data)
     np.testing.assert_array_equal(eager, reference)
     assert reference.max() > 0.0
 

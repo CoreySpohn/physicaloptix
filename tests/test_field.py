@@ -106,6 +106,7 @@ class TestFieldPhysics:
         image = field.intensity()
         assert isinstance(field, GridArray) and isinstance(image, Image)
         assert image.measure == "per_unit_area"
+        assert image.reconstruction == "linear"
         intensity = np.asarray(image.data)
         assert intensity.shape == (64, 64)
         np.testing.assert_allclose(
@@ -125,5 +126,6 @@ class TestFieldPhysics:
         image = field.intensity()
         assert isinstance(field, GridArray) and isinstance(image, Image)
         assert image.measure == "per_unit_area"
+        assert image.reconstruction == "band_limited"
         intensity = np.asarray(image.data)
         np.testing.assert_allclose(intensity, 0.25 * 1.0 + 0.75 * 4.0, rtol=1e-14)

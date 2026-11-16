@@ -1,12 +1,14 @@
 """Tests for PathCoronagraph: the OpticalPath-backed AbstractCoronagraph."""
 
+from dataclasses import replace
+
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TEST_FRAME
 from hwoutils.constants import s2d
-from hwoutils.grids import Image, PixelGrid
+from hwoutils.grids import Image, PixelGrid, resample
 from optixstuff import SimplePrimary
 from optixstuff.coronagraph import AbstractCoronagraph
 
@@ -287,12 +289,17 @@ class TestSamplingExplicitContract:
         np.testing.assert_allclose(fine.sum(), coarse.sum(), rtol=0.02)
 
     def test_source_psfs_peak_and_flux(self, vortex_coronagraph):
+        """Fails if batch rendering loses source positions or optical flux.
+
+        A matched 28 lambda/D field isolates band-limited resampling from
+        cropping. The 5e-5 relative bound covers the measured 2.73e-5
+        boundary box-integration versus native-center-sum residual.
+        """
         c = vortex_coronagraph
-        scale, npix = 0.25, 96
+        scale, npix = 0.25, 112
+        detector = _grid((npix, npix), scale).to_arcsec(600.0)
         xs, ys = jnp.asarray([4.0, 0.0]), jnp.asarray([0.0, -6.0])
-        psfs = np.asarray(
-            c.source_psfs(self.WL, xs, ys, grid=_grid((npix, npix), scale)).data
-        )
+        psfs = np.asarray(c.source_psfs(self.WL, xs, ys, grid=detector).data)
         assert psfs.shape == (2, npix, npix)
         coords = (np.arange(npix) - npix / 2 + 0.5) * scale
         for k in range(2):
@@ -301,7 +308,7 @@ class TestSamplingExplicitContract:
             assert abs(coords[iy] - float(ys[k])) < scale
         total = float(psfs[0].sum())
         expected = float(c.occulter_transmission(4.0, self.WL))
-        np.testing.assert_allclose(total, expected, rtol=0.05)
+        np.testing.assert_allclose(total, expected, rtol=5e-5)
 
     def test_background_transmission_matches_occulter_curve(self, vortex_coronagraph):
         c = vortex_coronagraph
@@ -319,11 +326,16 @@ class TestSamplingExplicitContract:
         )
 
     def test_non_square_shape_center_crops(self, vortex_coronagraph):
+        """Cropping commutes with integrating the same band-limited density.
+
+        Both rectangular targets go through resampling; a native direct
+        square render instead contains center samples without a pixel box.
+        """
         c = vortex_coronagraph
         wide = np.asarray(c.stellar_map(self.WL, 0.0, grid=_grid((40, 56), 0.5)).data)
-        square = np.asarray(c.stellar_map(self.WL, 0.0, grid=_grid((56, 56), 0.5)).data)
+        padded = np.asarray(c.stellar_map(self.WL, 0.0, grid=_grid((42, 58), 0.5)).data)
         assert wide.shape == (40, 56)
-        np.testing.assert_allclose(wide, square[8:48, :], rtol=1e-12)
+        np.testing.assert_allclose(wide, padded[1:41, 1:57], rtol=1e-12)
 
     def test_extended_scene_raises(self, vortex_coronagraph):
         with pytest.raises(NotImplementedError, match="extended scenes"):
@@ -462,3 +474,54 @@ def test_rule_records_and_absolute_leakage(bare_telescope):
         np.testing.assert_allclose(
             measured, absolute_sum, rtol=16 * np.finfo(float).eps, atol=0
         )
+
+
+def test_detector_aperture_matches_throughput_at_three_pitches(vortex_coronagraph):
+    """Fails if optical images fall back to linear resampling (9.5% error).
+
+    Spike basis: one 0.4% relative bound for all three detector pitches;
+    measured residuals are 0.019%, 0.055%, 0.336%. This includes finite
+    image padding, detector box integration and fractional aperture coverage
+    versus the record's subpixel quadrature, not a roundoff-only identity.
+    """
+    from yippy import Circular
+
+    c, separation = vortex_coronagraph, 6.0
+    rule = Circular(0.7)
+    expected = c.curves(rule).evaluate("throughput", separation)
+    for pitch in (0.025, 0.05, 0.1):
+        n = round(4 / pitch)
+        lod = PixelGrid.regular(
+            (n, n),
+            pitch,
+            "lod",
+            center=((n - 1) / 2 - separation / pitch, (n - 1) / 2),
+            frame=c.grid.frame,
+        )
+        detector = lod.to_arcsec(600.0)
+        image = c.off_axis_psf(600.0, separation, detector)
+        weights = rule.weights(replace(image, grid=lod), (separation, 0.0))
+        aperture_sum = jnp.sum(image.data * weights)
+        np.testing.assert_allclose(aperture_sum, expected, rtol=0.004, atol=0)
+        # Negative control pins sensitivity to the reconstruction declaration.
+        native = c.off_axis_psf(600.0, separation, c.grid)
+        linear = resample(replace(native, reconstruction="linear"), lod)
+        assert abs(float(jnp.sum(linear.data * weights) / expected) - 1) > 0.09
+
+
+def test_public_coronagraph_reconstruction(vortex_coronagraph):
+    """Fails if optical declarations or resampling coarsening metadata are lost."""
+    c = vortex_coronagraph
+    for grid, expected in (
+        (c.grid, "band_limited"),
+        (_grid((16, 16), 0.25).to_arcsec(600.0), "band_limited"),
+        (_grid((16, 16), 1.0).to_arcsec(600.0), "linear"),
+    ):
+        for image in (
+            c.on_axis_psf(600.0, grid),
+            c.off_axis_psf(600.0, 6.0, grid),
+            c.stellar_map(600.0, 0.0, grid=grid),
+            c.source_psfs(600.0, jnp.array([6.0]), jnp.array([0.0]), grid=grid),
+        ):
+            assert image.reconstruction == expected
+        assert c.background_transmission(600.0, grid=grid).reconstruction == "linear"
