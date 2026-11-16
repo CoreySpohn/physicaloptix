@@ -19,7 +19,7 @@ consumer adding the floor from its own throughput map cannot double count
 it. Displaying the boil normally wants the total, hence
 ``include_floor=True`` by default -- but the floor is precisely what the
 protocol does not carry, so it is recovered from the concrete field's
-``e_nom``/``normalization`` when those exist, or supplied by the caller
+``e_nom``/``input_energy`` when those exist, or supplied by the caller
 through ``floor=``. It is never guessed.
 
 **One scale across time, always.** The display bounds are resolved once
@@ -135,7 +135,7 @@ def _output_quantity(is_field, *, include_floor, floor, quantity):
 def _scalar(value, name):
     """A python float from a 0-d array, or a raise naming the channel axis.
 
-    A chromatic field carries a leading channel axis on ``normalization``
+    A chromatic field carries a leading channel axis on ``input_energy``
     (and on ``e_nom``), and picking a channel is the library's job, not the
     viz layer's guess -- so a chromatic input is rejected with the remedy
     named rather than being silently reduced.
@@ -158,24 +158,23 @@ def _floor_map(field, floor):
     """The deterministic floor in ``realize``'s own flux-fraction units.
 
     ``floor=`` wins when given. Otherwise the floor is reconstructed as
-    ``|E_nom|^2 / normalization`` from the concrete field, which both
-    shipping implementations carry even though the protocol does not
-    require it.
+    ``|E_nom|^2 / input_energy`` from a shared linear field. A pure halo
+    has e_nom=0; pass floor= to display a separate deterministic leakage map.
 
     Raises:
-        ValueError: Neither ``floor=`` nor the ``e_nom``/``normalization``
+        ValueError: Neither ``floor=`` nor the ``e_nom``/``input_energy``
             pair is available, or the field is chromatic.
     """
     if floor is not None:
         return np.asarray(floor, dtype=float)
 
     e_nom = getattr(field, "e_nom", None)
-    normalization = getattr(field, "normalization", None)
-    if e_nom is None or normalization is None:
+    input_energy = getattr(field, "input_energy", None)
+    if e_nom is None or input_energy is None:
         msg = (
             "boiling: include_floor=True needs the deterministic floor, which "
             "realize() deliberately excludes and the speckle-field protocol "
-            "does not carry. Pass floor= (the |E_nom|^2 / normalization map, "
+            "does not carry. Pass floor= (the |E_nom|^2 / input_energy map, "
             "in realize's flux-fraction units), or include_floor=False to "
             "show the drift delta alone."
         )
@@ -189,46 +188,36 @@ def _floor_map(field, floor):
             "showing."
         )
         raise ValueError(msg)
-    return np.abs(e) ** 2 / _scalar(normalization, "normalization")
+    return np.abs(e) ** 2 / _scalar(input_energy, "input_energy")
 
 
 def _contrast_scale(field, telescope_peak):
-    """The ``normalization / telescope_peak`` factor onto peak-referenced units.
+    """Convert flux fractions with input energy divided by peak-pixel energy.
 
     Raises:
-        ValueError: The field carries no ``normalization``.
+        ValueError: The field carries no ``input_energy``.
     """
-    normalization = getattr(field, "normalization", None)
-    if normalization is None:
+    input_energy = getattr(field, "input_energy", None)
+    if input_energy is None:
         msg = (
-            "boiling: telescope_peak= needs the field's normalization to "
+            "boiling: telescope_peak= needs the field's input_energy to "
             "convert flux fractions into peak-referenced contrast, and the "
             "speckle-field protocol does not carry one. Pass precomputed "
             "frames already in contrast units instead."
         )
         raise ValueError(msg)
-    return _scalar(normalization, "normalization") / float(telescope_peak)
+    return _scalar(input_energy, "input_energy") / (
+        float(telescope_peak) * field.grid.pixel_area
+    )
 
 
 def _protocol_cube(
     field, times_s, *, wavelength_nm, telescope_peak, include_floor, floor
 ):
-    """Evaluate the field once per epoch into one preallocated cube.
+    """Evaluate Image.data once per epoch, retaining Image.grid coordinates.
 
-    With ``telescope_peak=`` and no floor, this routes through the field's
-    own ``peak_contrast`` when it has one -- the exact conversion, done by
-    the library. Otherwise the same conversion is applied as a factor, which
-    is what lets the floor be added first: ``peak_contrast`` rescales the
-    delta alone and cannot carry a floor with it. A test pins the two routes
-    against each other.
-
-    Every precondition (wavelength, floor, normalization) is checked before
-    the first evaluation, and the output is allocated once from the first
-    frame's shape and dtype, then filled frame by frame.
-
-    Raises:
-        ValueError: ``wavelength_nm`` is None, the floor or normalization is
-            unavailable, or an evaluated frame is not 2D (a chromatic field).
+    The nominal floor and peak-pixel conversion use the interpolated node's
+    photometry for chromatic fields. All frames must use the same grid.
     """
     if wavelength_nm is None:
         msg = (
@@ -237,50 +226,37 @@ def _protocol_cube(
         )
         raise ValueError(msg)
 
-    peak_contrast = None
-    if telescope_peak is not None and not include_floor:
-        peak_contrast = getattr(field, "peak_contrast", None)
-    floor_map = None
-    factor = None
-    if peak_contrast is None:
-        floor_map = _floor_map(field, floor) if include_floor else None
-        if telescope_peak is not None:
-            factor = _contrast_scale(field, telescope_peak)
+    # A chromatic table supplies the nominal floor and energy at this node.
+    photometry = (
+        field.at_wavelength(wavelength_nm) if hasattr(field, "at_wavelength") else field
+    )
+    floor_map = _floor_map(photometry, floor) if include_floor else None
+    factor = (
+        _contrast_scale(photometry, telescope_peak)
+        if telescope_peak is not None
+        else 1.0
+    )
 
     def evaluate(t):
-        if peak_contrast is not None:
-            return np.asarray(
-                peak_contrast(
-                    telescope_peak=float(telescope_peak),
-                    wavelength_nm=wavelength_nm,
-                    time_d=getattr(field, "epoch_d", 0.0) + float(t) * s2d,
-                )
-            )
-        frame = np.asarray(
-            field.realize(
-                wavelength_nm=wavelength_nm,
-                time_d=getattr(field, "epoch_d", 0.0) + float(t) * s2d,
-            )
+        image = field.realize(
+            wavelength_nm=wavelength_nm,
+            time_d=getattr(field, "epoch_d", 0.0) + float(t) * s2d,
         )
+        frame = np.asarray(image.data)
         if floor_map is not None:
             frame = frame + floor_map
-        if factor is not None:
-            frame = frame * factor
-        return frame
+        return frame * factor, image.grid
 
-    first = evaluate(times_s[0])
+    first, grid = evaluate(times_s[0])
     if first.ndim != 2:
-        msg = (
-            f"boiling: the field evaluates to shape {first.shape}, not (y, x) "
-            "-- this looks like a chromatic field. Select a channel first, or "
-            "pass precomputed frames."
-        )
-        raise ValueError(msg)
+        raise ValueError("boiling: select a scalar wavelength for a 2D frame")
     cube = np.empty((len(times_s), *first.shape), dtype=first.dtype)
     cube[0] = first
     for index in range(1, len(times_s)):
-        cube[index] = evaluate(times_s[index])
-    return cube
+        cube[index], frame_grid = evaluate(times_s[index])
+        if frame_grid != grid:
+            raise ValueError("boiling: all frames must share one grid")
+    return cube, grid
 
 
 # --- the bare-array branch: borrow unless a transformation is asked for -----
@@ -427,9 +403,21 @@ def _time_unit(times_s):
     return next(((u, d) for u, d in _SECONDS if span >= 2.0 * d), _SECONDS[-1])
 
 
-def _image_axes(shape, pixel_scale_lod):
+def _image_axes(shape, pixel_scale_lod, grid=None):
     """Pixel-edge extent: lambda/D centered on zero, or bare pixel indices."""
     ny, nx = shape
+    if grid is not None:
+        basis = np.asarray(grid.basis)
+        if basis[0, 1] != 0 or basis[1, 0] != 0:
+            raise ValueError(
+                "boiling: resample a rotated or sheared grid before display"
+            )
+        x, y = (np.asarray(v) for v in grid.coordinates())
+        return AxisSpec(
+            *_LOD_LABELS,
+            (float(x[0, 0] - basis[0, 0] / 2), float(x[0, -1] + basis[0, 0] / 2)),
+            (float(y[0, 0] - basis[1, 1] / 2), float(y[-1, 0] + basis[1, 1] / 2)),
+        )
     if pixel_scale_lod is None:
         return AxisSpec("", "", (-0.5, nx - 0.5), (-0.5, ny - 0.5), show_ticks=False)
     scale = float(pixel_scale_lod)
@@ -453,7 +441,7 @@ def _annulus_series(cube, valid, annulus):
     return series
 
 
-def _trace_series(trace, cube, valid, pixel_scale_lod):
+def _trace_series(trace, cube, valid, pixel_scale_lod, grid=None):
     """The companion trace: a supplied series, or a dark-zone mean per frame.
 
     A TUPLE is read as ``(iwa_lod, owa_lod)`` and the series is computed as
@@ -471,14 +459,18 @@ def _trace_series(trace, cube, valid, pixel_scale_lod):
             length does not match the frame count.
     """
     if isinstance(trace, tuple):
-        if pixel_scale_lod is None:
+        if pixel_scale_lod is None and grid is None:
             msg = (
                 "boiling: trace=(iwa_lod, owa_lod) needs a pixel scale to "
                 "place the annulus; pass a precomputed (n_t,) series instead"
             )
             raise ValueError(msg)
         iwa_lod, owa_lod = (float(v) for v in trace)
-        radius = np.asarray(radial_distance(cube.shape[-2:])) * float(pixel_scale_lod)
+        radius = (
+            np.hypot(*grid.coordinates())
+            if grid is not None
+            else np.asarray(radial_distance(cube.shape[-2:])) * float(pixel_scale_lod)
+        )
         annulus = (radius >= iwa_lod) & (radius <= owa_lod)
         return _annulus_series(cube, valid, annulus), (iwa_lod, owa_lod)
 
@@ -525,7 +517,7 @@ def prepare_speckles(
 
     Args:
         field_or_cube: A speckle field implementing ``realize(wavelength_nm=,
-            time_d=)`` (and, for lambda/D axes, ``pixel_scale_lod``); or a
+            time_d=) -> Image`` with its own grid; or a
             precomputed ``(n_t, y, x)`` array (a ``numpy.ma.MaskedArray``'s
             mask is captured as validity). A field is evaluated once per
             epoch into one allocated cube; a bare array is borrowed as given
@@ -537,20 +529,20 @@ def prepare_speckles(
             the clock label and the trace axis share.
         wavelength_nm: Wavelength passed to ``realize``. Required for a
             field, unused for a bare array.
-        telescope_peak: Peak intensity of the unocculted telescope PSF on
-            this grid. Given, frames are peak-referenced contrast (through
-            the field's own ``peak_contrast`` where that applies; a bare
-            array is divided by it). None leaves flux fractions.
+        telescope_peak: Peak intensity density of the unocculted telescope
+            PSF on this grid. Field Images are converted through peak-pixel
+            energy; a bare array is divided by the supplied value.
+            None leaves flux fractions.
         include_floor: For a field, add the deterministic floor ``|E_nom|^2 /
-            normalization`` that ``realize`` excludes by contract (True, the
+            input_energy`` that ``realize`` excludes by contract (True, the
             default, prepares a total intensity; False the signed delta).
             Does not apply to a bare array.
         floor: The floor map in ``realize``'s flux-fraction units,
-            overriding the reconstruction from ``e_nom``/``normalization``;
+            overriding the reconstruction from ``e_nom``/``input_energy``;
             on a bare array it is added as given and makes the frames a
             total.
-        pixscale_lod: Pixel scale in lambda/D per pixel, for a bare array
-            or to override a field's own. With a pixel scale the image has
+        pixscale_lod: Pixel scale in lambda/D for a bare array. Fields use
+            Image.grid. With a pixel scale the image has
             lambda/D pixel-edge extents centered on zero; without one it
             keeps pixel-index edges with no tick labels.
         trace: Optional companion trace under the image. A TUPLE
@@ -591,8 +583,8 @@ def prepare_speckles(
             ``times_s`` (checked before any evaluation); undeclared or
             unsupported sample semantics, a missing or
             contradictory quantity, a missing ``wavelength_nm``, an
-            unavailable floor under ``include_floor=True``, a chromatic
-            field, a malformed cube or trace, invalid bounds, or a sequence
+            unavailable floor under ``include_floor=True``, a nonscalar
+            wavelength, a malformed cube or trace, invalid bounds, or a sequence
             with no valid sample to scale.
     """
     is_field = hasattr(field_or_cube, "realize")
@@ -604,8 +596,9 @@ def prepare_speckles(
     clock = Clock(CLOCK_ID) if clock_fmt is None else Clock(CLOCK_ID, fmt=clock_fmt)
     times_s = _check_times(times_s)
 
+    grid = None
     if is_field:
-        cube = _protocol_cube(
+        cube, grid = _protocol_cube(
             field_or_cube,
             times_s,
             wavelength_nm=wavelength_nm,
@@ -614,8 +607,6 @@ def prepare_speckles(
             floor=floor,
         )
         valid = None
-        if pixscale_lod is None:
-            pixscale_lod = getattr(field_or_cube, "pixel_scale_lod", None)
     else:
         data, valid = _split_mask(field_or_cube)
         cube = _bare_cube(
@@ -631,7 +622,7 @@ def prepare_speckles(
 
     series = radii = None
     if trace is not None:
-        series, radii = _trace_series(trace, cube, valid, pixscale_lod)
+        series, radii = _trace_series(trace, cube, valid, pixscale_lod, grid)
 
     marks = [Label(CLOCK_ID, clock_text, _CLOCK_XY, space="panel")]
     if radii is not None:
@@ -647,7 +638,7 @@ def prepare_speckles(
     image = ImageView(
         IMAGE_ID,
         cube[0],
-        _image_axes(cube.shape[-2:], pixscale_lod),
+        _image_axes(cube.shape[-2:], pixscale_lod, grid),
         scale,
         label,
         valid=None if valid is None else valid[0],

@@ -33,7 +33,7 @@ def _times(n=4):
 def _cube_from(field, times):
     return np.stack(
         [
-            np.asarray(field.realize(wavelength_nm=500.0, time_d=float(t) * s2d))
+            np.asarray(field.realize(wavelength_nm=500.0, time_d=float(t) * s2d).data)
             for t in times
         ]
     )

@@ -57,14 +57,14 @@ PROFILE = snapshot_profile(
 
 `prepare_speckles` is typed on the speckle-field protocol, not on a concrete
 class: anything with `realize(wavelength_nm=..., time_d=...)` returning a
-`(y, x)` map and a `pixel_scale_lod` drives it. The synthetic field below
+`Image` containing `(y, x)` data and its `grid` drives it. The synthetic field below
 follows that protocol. A static pupil phase error behind an ideal
 coronagraph sets the deterministic field `e_nom`, and twelve sine ripples
 drift on top of it with periods between half an hour and two hours.
 
 As the protocol requires, `realize` returns only the change in intensity over
 the deterministic floor $|E_\mathrm{nom}|^2$, in flux-fraction units. The
-field also carries `e_nom` and `normalization`, which is what lets the
+field also carries per-pixel `e_nom` and `input_energy`, which is what lets the
 preparation add the floor back. The field counts its own evaluations so the
 page can show when the science runs.
 
@@ -87,15 +87,16 @@ def focal(pupil_field):
 
 
 # The peak of the unocculted PSF on this grid, which references contrast.
-TELESCOPE_PEAK = float(np.max(np.abs(focal(pupil)) ** 2))
+TELESCOPE_PEAK = float(np.max(np.abs(focal(pupil)) ** 2)) / PIXSCALE_LOD**2
 
 
 class DriftingSpeckles:
     """A synthetic speckle field that follows the speckle-field protocol."""
 
-    pixel_scale_lod = PIXSCALE_LOD
+    from hwoutils.grids import Frame, PixelGrid
+    grid = PixelGrid.focal(N_PIX, PIXSCALE_LOD, Frame(500.0, 1.0, "circumscribed"))
     # Total focal-plane flux of the clear aperture, in the units of |e_nom|^2.
-    normalization = N_PIX**2 / pupil.sum()
+    input_energy = N_PIX**2 / pupil.sum()
 
     def __init__(self, n_ripples=12, seed=0):
         rng = np.random.default_rng(seed)
@@ -136,7 +137,9 @@ class DriftingSpeckles:
         )
         phase = self.static_rad + np.tensordot(drift, self.ripples, axes=1)
         total = np.abs(self._field(phase)) ** 2
-        return (total - np.abs(self.e_nom) ** 2) / self.normalization
+        from hwoutils.grids import Image
+        return Image((total - np.abs(self.e_nom) ** 2) / self.input_energy,
+                     self.grid, (), "per_pixel", "stellar_flux_fraction")
 
 
 field = DriftingSpeckles()
@@ -146,7 +149,7 @@ field = DriftingSpeckles()
 
 Thirty exposures arrive a few minutes apart, with one forty-minute pause in
 the middle. `prepare_speckles` evaluates the field once per epoch into one
-allocated cube, adds the floor reconstructed from `e_nom` and `normalization`
+allocated cube, adds the floor reconstructed from per-pixel `e_nom` and `input_energy`
 (`include_floor=True` is the default), and divides by `telescope_peak`, the
 peak of the unocculted PSF, so the frames are contrast. `trace=(3.0, 11.0)`
 computes the mean over that annulus in $\lambda/D$ for every frame, from the

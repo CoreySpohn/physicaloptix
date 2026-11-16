@@ -222,7 +222,7 @@ coexist in the stack and must not be mixed:
   $I\,\mathrm{d}u^2/E_{\mathrm{in}}$. An image-simulation consumer
   multiplies these maps by the star's total photon rate. The speckle classes
   derive this normalization at construction from the stored primitives
-  (`input_energy`, `pixel_scale_lod`), which `linearize` records from the
+  (`input_energy`, `grid`), which `linearize` records from the
   field it is handed.
 - **Peak-referenced contrast** (a derived *view*): intensity divided by the
   unaberrated *telescope* PSF peak (the aperture with no coronagraph), so a
@@ -256,16 +256,16 @@ as the peak-pixel fraction are sampling-dependent, and a bare number carries
 no record of which convention it encodes. This is now the implemented
 contract: speckle constructors take `input_energy` (there is no raw
 `normalization` kwarg -- legacy call sites fail loudly), and npz/YIP exports
-record `input_energy` and `pixel_scale_lod` beside their maps.
+record `input_energy` and complete grid/frame provenance beside their maps.
 
 A legacy *call* fails loudly; a legacy *value* does not. Passing a peak
 intensity where a total energy belongs is type-correct, so the process builds
 and runs while every contrast it reports is wrong by the peak-pixel fraction
 (tens of times). {meth}`~physicaloptix.SpeckleProcess.photometry` is the
-one-line check for this: it prints the primitives and the derived divisor,
+one-line check for this: it prints the energy and grid,
 and warns on two conditions -- a nominal field carrying more energy than
 `input_energy` claims entered (impossible, so `input_energy` is not an
-energy), and a `normalization / telescope_peak` of exactly 1 (which means
+energy), and a `input_energy / (telescope_peak * grid.pixel_area)` of exactly 1 (which means
 `input_energy` was back-computed from a peak rather than measured, so
 `realize` would hand a flux-fraction consumer peak-referenced contrast).
 Call it once when wiring a process up; it is a host-side diagnostic and is
@@ -300,16 +300,28 @@ A speckle realization is a **flux-fraction delta**: the wavefront-error
 excess over the deterministic floor $|E_{\mathrm{nom}}|^2$, expressed as
 per-pixel flux fractions ($\Delta I\,\mathrm{d}u^2/E_{\mathrm{in}}$) -- the
 consumer's stellar-intensity map already carries the floor, so adding it
-here would double count. The divisor is derived **once, at construction**
-from the stored primitives (`normalization = input_energy /
-pixel_scale_lod**2`), so the jitted `realize` hot path carries no unit
-branching; because `eqx.tree_at` bypasses `__init__`, mutating
-`input_energy` structurally does *not* re-derive it -- rebuild the field to
-change photometry. Peak-referenced contrast is the
-{meth}`~physicaloptix.AnalyticSpeckleField.peak_contrast` view. The default
-`coherent=False` returns the strictly positive incoherent halo only; the
-speckle-pinning cross term, which sets the bright-tail statistics, requires
-`coherent=True` and float64.
+here would double count. `SpeckleProcess` and `Linearization` retain density
+amplitudes. `SpeckleProcess.draw` multiplies both nominal and sensitivity
+amplitudes by `sqrt(grid.pixel_area)` exactly once when constructing a field.
+`AnalyticSpeckleField` is a `LinearSpeckleField`: its constructor accepts
+per-pixel amplitudes and its inherited intensity law divides only by
+`input_energy`. A process with `coherent=False` constructs the pure halo
+with `e_nom=0`; use `coherent=True` to retain the pinning cross term.
+`peak_contrast` accepts the telescope peak density and converts it to
+peak-pixel energy using the field's grid.
+
+Mono fields use reference/wavelength phase scaling. Propagated chromatic
+processes draw `ChromaticAnalyticSpeckleField`, retaining every stored
+complex `e_nom` and `G` node and input energy. Queries interpolate amplitudes
+linearly with clamped endpoints, then delegate to the shared law. At stored
+nodes the propagated values are exact; between nodes this is an
+interpolation approximation. `broadened(quadrature=..., time_d=...)` returns
+an `Image` of the normalized node sum at fixed native lambda/D coordinates.
+For detector photometry, resample each node at its wavelength before
+spectral weighting. `coefficients(time_d)` replaces the old coefficient
+accessors; complex increments can be formed by contracting these with `G`
+and applying the wavelength factor. Raw moment kernels are named
+`gamma_pixel_map`, `p_pixel_map`, and `var_x_pixel_map` in energy/pixel units.
 
 The time axis is a frozen spectral synthesis: a draw fixes amplitudes and
 phases, after which `realize` is deterministic and differentiable in time --
@@ -317,8 +329,9 @@ realizations vary by key, never by repeated calls at the same time. The
 temporal PSD is the knee form $(1 + (f/f_{\mathrm{knee}})^2)^{s/2}$, and a
 decorrelation time $\tau$ maps to $f_{\mathrm{knee}} = 1/(2\pi\tau)$ (the
 Ornstein-Uhlenbeck identification, exact for $s = -2$). `epoch_d` anchors
-the clock in days from the scene epoch and defaults to 0.0. Set it at or near
-the first observation to preserve phase precision under float32 downstream.
+the clock in days from the scene epoch and defaults to 0.0. Promote absolute
+timestamps to float64 before adding small offsets; synthesis subtracts the
+static binary64 epoch before converting elapsed days to seconds.
 
 Two draw statistics exist, and the defaults straddle them:
 `draw(renormalize=True)` (the default) honors the wavefront-error budget

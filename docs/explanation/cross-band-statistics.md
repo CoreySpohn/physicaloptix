@@ -23,9 +23,11 @@ $$
 
 with $G_k(x)$ the (generally complex) sensitivity of pixel $r$ at wavelength
 $\lambda$ to mode $k$, computed once by {func}`~physicaloptix.linearize.linearize` and
-stacked across channels. Because {meth}`~physicaloptix.SpeckleProcess.draw`
+stacked across channels, then multiplied by `sqrt(grid.pixel_area)` to
+convert density amplitudes to per-pixel amplitudes. Here $G$, $A$, $\Gamma$
+and $P$ use that per-pixel convention, and $N_i$ is the input energy. Because {meth}`~physicaloptix.SpeckleProcess.draw`
 synthesizes one $\epsilon(t)$ with no wavelength axis at all and only
-{meth}`~physicaloptix.AnalyticSpeckleField.realize` selects the per-channel
+{meth}`~physicaloptix.ChromaticAnalyticSpeckleField.realize` interpolates the per-channel
 $(E_{\mathrm{nom}}, G)$ afterward, this shared-$\epsilon$ structure is not a
 modeling choice: it is how the generator is built, and it holds for any
 chromatic process constructed this way.
@@ -271,7 +273,7 @@ terms are not needed.
 
 An achromatic optical path in native $\lambda/D$ coordinates is the sanity
 anchor for all of the above, and it is worth deriving in full because it also
-explains a real subtlety in {func}`~physicaloptix.lambda_scaled_channels`.
+explains a real subtlety in the inherited reference/wavelength scaling law.
 On such a path the response scales as $G(\lambda) = c_\lambda\,G(\lambda_0)$
 with $c_\lambda = \lambda_0/\lambda$, so both kernels inherit the same scale
 factor at each channel, $\Gamma_{ij} = c_i c_j\,\Gamma_{00}$ and
@@ -279,7 +281,7 @@ $P_{ij} = c_i c_j\,P_{00}$ (writing $c_i \equiv c_{\lambda_i}$ and
 $\Gamma_{00}$, $P_{00}$ for the reference-band values). Write
 $K_2 = |\Gamma_{00}|^2 + |P_{00}|^2$ for the speckle-only weight at the
 reference band and, for a `coherent` process with a **frozen** nominal field
-$A_i \equiv A_0$ (the default {func}`~physicaloptix.lambda_scaled_channels`
+$A_i \equiv A_0$ (the default the inherited reference/wavelength scaling law
 behavior, which does not rescale $E_{\mathrm{nom}}$ with wavelength), write
 $K_1 = 2\,\mathrm{Re}\!\left[|A_0|^2\,\Gamma_{00} + \overline{A_0}^2\,P_{00}\right]$
 for the heterodyne weight. Substituting into the joint law gives, up to the
@@ -311,16 +313,14 @@ the size of it concrete: with $K_1 = K_2$ (heterodyne and speckle-only
 weights equal at the reference band) and a 10% wavelength mismatch, $c_i = 1$
 and $c_j = 0.9$, the formula gives $\rho_{ij} = 1.9 / \sqrt{2 \times 1.81}
 \approx 0.9984$, a small but nonzero and entirely spurious decorrelation
-between two channels of an ideal achromatic instrument. Passing
-`scale_e_nom=True` to {func}`~physicaloptix.lambda_scaled_channels` co-scales
+between two channels of an ideal achromatic instrument. Supplying propagated chromatic nominal fields can instead give
 $A_i = c_i A_0$ along with $G$, which makes the heterodyne term pick up the
 same $c_i c_j$ factor as the speckle-only term (both become
 proportional to $c_i^2 c_j^2$), restoring $\rho_{ij} = 1$ exactly. A spectral
 correlation length measured from a frozen, lambda-scaled simulation with a
 static nominal field is therefore partly measuring this frozen-leakage
-artifact rather than the instrument's own chromaticity, and the default
-stays frozen only for backward compatibility with recorded results that
-predate this fix.
+artifact rather than the instrument's own chromaticity, so propagated chromatic processes retain their node amplitudes instead of
+discarding them for the shared scaling approximation.
 
 ## Two-time statistics and ensemble conventions
 

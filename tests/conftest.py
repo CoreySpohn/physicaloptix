@@ -143,7 +143,7 @@ class ProtocolFake:
     so a test can pin that preparation evaluates each epoch exactly once.
     """
 
-    pixel_scale_lod = 0.25
+    grid = PixelGrid.focal(SPECKLE_NPIX, 0.25, TEST_FRAME)
 
     def __init__(self):
         self.calls = 0
@@ -154,7 +154,17 @@ class ProtocolFake:
         # conflation from a correct one.
         self.calls += 1
         y, x = np.ogrid[:SPECKLE_NPIX, :SPECKLE_NPIX]
-        return 1e-9 * (1.0 + 0.5 * np.sin(time_d * d2s)) * (1.0 + x + 3.0 * y)
+        from hwoutils.grids import Image
+
+        return Image(
+            jnp.asarray(
+                1e-9 * (1.0 + 0.5 * np.sin(time_d * d2s)) * (1.0 + x + 3.0 * y)
+            ),
+            self.grid,
+            (),
+            "per_pixel",
+            "stellar_flux_fraction",
+        )
 
 
 @pytest.fixture
@@ -166,7 +176,6 @@ def protocol_fake():
 @pytest.fixture
 def analytic_speckle_field():
     """Factory for a small real AnalyticSpeckleField (the concrete protocol end)."""
-    from physicaloptix.speckle import AnalyticSpeckleField
 
     def build(*, coherent=False, seed=0):
         rng = np.random.default_rng(seed)
@@ -178,14 +187,15 @@ def analytic_speckle_field():
             rng.normal(size=(3, *shape)) + 1j * rng.normal(size=(3, *shape)),
             dtype=complex,
         )
-        return AnalyticSpeckleField(
+        return analytic_from_density(
             e_nom * 1e-4,
             g * 1e-5,
             amplitudes=jnp.asarray(rng.random((3, 2))),
             frequencies_hz=jnp.asarray([1e-3, 3e-3]),
             phases=jnp.asarray(rng.random((3, 2)) * 2.0 * np.pi),
             input_energy=1.0,
-            pixel_scale_lod=0.25,
+            grid=speckle_grid((e_nom * 0.0001).shape[-2:], 0.25, 500.0),
+            reference_wavelength_nm=500.0,
             coherent=coherent,
         )
 
@@ -203,4 +213,52 @@ def as_image(data):
         (),
         "per_pixel",
         "stellar_flux_fraction",
+    )
+
+
+def speckle_grid(shape, step=0.25, reference=500.0):
+    """Declared geometry for synthetic density-amplitude fixtures."""
+    return PixelGrid.regular(
+        shape, step, "lod", frame=Frame(reference, 1.0, "circumscribed")
+    )
+
+
+def analytic_from_density(
+    e_nom,
+    G,
+    amplitudes,
+    frequencies_hz,
+    phases,
+    *,
+    input_energy,
+    grid,
+    reference_wavelength_nm,
+    epoch_d=0.0,
+    coherent=False,
+    wavelengths_nm=None,
+):
+    """Construct a deterministic synthesis through the density producer boundary."""
+    import equinox as eqx
+    import jax
+
+    from physicaloptix.speckle import SpeckleProcess
+
+    process = SpeckleProcess(
+        e_nom,
+        G,
+        1.0,
+        1e-3,
+        input_energy=input_energy,
+        grid=grid,
+        reference_wavelength_nm=reference_wavelength_nm,
+        epoch_d=epoch_d,
+        coherent=coherent,
+        wavelengths_nm=wavelengths_nm,
+        n_freq=max(2, amplitudes.shape[-1]),
+    )
+    field = process.draw(jax.random.PRNGKey(0))
+    return eqx.tree_at(
+        lambda f: (f.amplitudes, f.frequencies_hz, f.phases),
+        field,
+        (amplitudes, frequencies_hz, phases),
     )

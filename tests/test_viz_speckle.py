@@ -2,6 +2,7 @@
 
 import jax.numpy as jnp
 import matplotlib
+from conftest import speckle_grid
 from hwoutils.constants import s2d
 
 matplotlib.use("Agg")
@@ -64,7 +65,8 @@ def _process(npix=8, m=3, knee_hz=1e-4, slope=-2.0, **kwargs):
         knee_hz=knee_hz,
         slope=slope,
         input_energy=1.0,
-        pixel_scale_lod=0.25,
+        grid=speckle_grid((e_nom).shape[-2:], 0.25, 500.0),
+        reference_wavelength_nm=500.0,
         **kwargs,
     )
 
@@ -261,11 +263,12 @@ def _hand_moments(process, *, gamma, p):
     shape = np.asarray(process.e_nom).shape
     ones = jnp.ones(shape)
     return SpeckleMoments(
+        grid=process.grid,
         mean_map=ones,
         var_map=ones,
-        gamma_map=ones * gamma,
-        p_map=(ones * p).astype(complex),
-        var_x_map=ones,
+        gamma_pixel_map=ones * gamma,
+        p_pixel_map=(ones * p).astype(complex),
+        var_x_pixel_map=ones,
     )
 
 
@@ -284,7 +287,7 @@ def test_process_beats_moments():
     )
     from_process = process.moments()
     assert captured["gamma"] == pytest.approx(
-        float(np.asarray(from_process.gamma_map)[2, 3])
+        float(np.asarray(from_process.gamma_pixel_map)[2, 3])
     )
     assert captured["gamma"] != pytest.approx(123.0)
     plt.close("all")
@@ -305,7 +308,7 @@ def test_explicit_scalars_beat_the_process():
     assert captured["i_c"] == pytest.approx(999.0)
     # Precedence is per parameter: the rest still come from the process.
     assert captured["gamma"] == pytest.approx(
-        float(np.asarray(process.moments().gamma_map)[2, 3])
+        float(np.asarray(process.moments().gamma_pixel_map)[2, 3])
     )
     plt.close("all")
 
@@ -374,11 +377,12 @@ def _improper_draws(gamma, p, n=400_000, seed=17):
 def _moments_at(gamma, p, shape=(4, 4)):
     ones = jnp.ones(shape)
     return SpeckleMoments(
+        grid=speckle_grid(shape),
         mean_map=ones,
         var_map=ones,
-        gamma_map=ones * gamma,
-        p_map=(ones * p).astype(complex),
-        var_x_map=ones,
+        gamma_pixel_map=ones * gamma,
+        p_pixel_map=(ones * p).astype(complex),
+        var_x_pixel_map=ones,
     )
 
 
@@ -476,19 +480,20 @@ def test_cloud_arrow_and_false_alarm_circle():
 def test_map_valued_inputs_are_indexed_by_pixel():
     from physicaloptix.viz import plot_field_ellipse
 
-    gamma_map = jnp.asarray(np.arange(16, dtype=float).reshape(4, 4) + 1.0)
+    gamma_pixel_map = jnp.asarray(np.arange(16, dtype=float).reshape(4, 4) + 1.0)
     ones = jnp.ones((4, 4))
     moments = SpeckleMoments(
+        grid=speckle_grid((1, 1)),
         mean_map=ones,
         var_map=ones,
-        gamma_map=gamma_map,
-        p_map=jnp.zeros((4, 4), dtype=complex),
-        var_x_map=ones,
+        gamma_pixel_map=gamma_pixel_map,
+        p_pixel_map=jnp.zeros((4, 4), dtype=complex),
+        var_x_pixel_map=ones,
     )
     _, ax = plt.subplots()
     result = plot_field_ellipse((2, 3), moments=moments, ax=ax)
     semi_major, _, _ = _geometry(result.artists["ellipse"])
-    assert semi_major == pytest.approx(np.sqrt(float(gamma_map[2, 3]) / 2.0))
+    assert semi_major == pytest.approx(np.sqrt(float(gamma_pixel_map[2, 3]) / 2.0))
     plt.close("all")
 
     with pytest.raises(ValueError, match="pixel="):
@@ -509,7 +514,7 @@ def test_field_ellipse_input_and_axes_validation():
 
 
 def test_viz_speckle_module_never_touches_the_private_eps():
-    """The public accessor is delta_e; _eps is off limits to the viz tier."""
+    """The public accessor is coefficients; _eps is off limits to the viz tier."""
     import pathlib
 
     import physicaloptix.viz.speckle as module
@@ -526,7 +531,10 @@ def test_field_ellipse_consumes_delta_e_from_a_real_field():
     field = process.draw(__import__("jax").random.key(0))
     times = np.linspace(0.0, 3600.0, 64)
     draws = np.stack(
-        [np.asarray(field.delta_e(wavelength_nm=500.0, time_d=t * s2d)) for t in times]
+        [
+            np.asarray(jnp.einsum("m,myx->yx", field.coefficients(t * s2d), field.G))
+            for t in times
+        ]
     )
     _, ax = plt.subplots()
     result = plot_field_ellipse(

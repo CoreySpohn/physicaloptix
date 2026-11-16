@@ -4,6 +4,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import speckle_grid
 
 from physicaloptix import SpeckleProcess
 from physicaloptix.diagnostics import (
@@ -174,6 +175,10 @@ class TestQuadratureAudit:
             rms,
             1e-3,
             input_energy=1.0,
+            grid=speckle_grid(
+                (jnp.zeros(g.shape[-2:], dtype=complex)).shape[-2:], 0.25, 500.0
+            ),
+            reference_wavelength_nm=500.0,
         )
         reference = float(np.median(np.asarray(proc.moments().impropriety())))
         rep = quadrature_audit(modes, _propagate, per_mode_rms=rms)

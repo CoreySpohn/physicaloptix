@@ -25,6 +25,7 @@ for a broadband model.
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from hwoutils.grids import PixelGrid
 from jaxtyping import Array
 
 from physicaloptix.elements import PhaseScreen
@@ -40,13 +41,13 @@ class ChannelLinearization(eqx.Module):
         e_nom: Complex nominal field at the channel's terminal plane.
         g_shared: Shared-mode sensitivity ``d(E_channel)/d(mode)``, shape
             ``(m, y, x)``, per unit mode coefficient.
-        pixel_scale_lod: The terminal grid's pixel scale.
+        grid: The terminal grid including its Frame.
     """
 
     name: str = eqx.field(static=True)
     e_nom: Array
     g_shared: Array
-    pixel_scale_lod: float = eqx.field(static=True)
+    grid: PixelGrid
 
     @property
     def n_modes(self):
@@ -63,8 +64,8 @@ class MultiChannelLinearization(eqx.Module):
         kind: The shared basis kind (``"opd"`` or ``"amplitude"``).
         input_energy: Total energy of the shared entrance field
             (``field.energy()``) -- one photometric reference for every
-            channel; each channel pairs it with its own ``pixel_scale_lod``
-            to derive that channel's flux-fraction normalization.
+            channel; each channel pairs it with its own ``grid``
+            to convert density amplitudes into per-pixel amplitudes.
     """
 
     channels: tuple
@@ -175,7 +176,7 @@ def linearize_shared(
                 name=branch.name,
                 e_nom=out_field.data,
                 g_shared=g_shared,
-                pixel_scale_lod=float(out_field.grid.step),
+                grid=out_field.grid,
             )
         )
     return MultiChannelLinearization(

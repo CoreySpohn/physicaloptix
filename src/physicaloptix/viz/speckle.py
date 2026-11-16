@@ -236,13 +236,17 @@ def _resolve_from_process(process, pixel):
         msg = "plot_speckle_ensemble: process= needs pixel=(iy, ix) to pick a pixel"
         raise ValueError(msg)
     moments = process.moments()
-    e_nom = np.asarray(process.e_nom)[tuple(pixel)]
+    e_nom = (
+        np.asarray(process.e_nom)[tuple(pixel)] * np.sqrt(process.grid.pixel_area)
+        if process.coherent
+        else 0j
+    )
     return {
         "i_c": float(abs(e_nom) ** 2),
         "phi_c": float(np.angle(e_nom)),
-        "gamma": float(np.asarray(moments.gamma_map)[tuple(pixel)]),
-        "p": complex(np.asarray(moments.p_map)[tuple(pixel)]),
-        "normalization": float(np.asarray(process.normalization)),
+        "gamma": float(np.asarray(moments.gamma_pixel_map)[tuple(pixel)]),
+        "p": complex(np.asarray(moments.p_pixel_map)[tuple(pixel)]),
+        "normalization": float(np.asarray(process.input_energy)),
     }
 
 
@@ -257,8 +261,8 @@ def _resolve_from_moments(moments, pixel):
         msg = "plot_speckle_ensemble: moments= needs pixel=(iy, ix) to pick a pixel"
         raise ValueError(msg)
     return {
-        "gamma": float(np.asarray(moments.gamma_map)[tuple(pixel)]),
-        "p": complex(np.asarray(moments.p_map)[tuple(pixel)]),
+        "gamma": float(np.asarray(moments.gamma_pixel_map)[tuple(pixel)]),
+        "p": complex(np.asarray(moments.p_pixel_map)[tuple(pixel)]),
     }
 
 
@@ -529,13 +533,10 @@ def plot_field_ellipse(
     color with the rest of the document: the analytic ellipse takes
     ``roles.model``, the empirical cloud ``roles.measured``.
 
-    The cloud is fed from ``AnalyticSpeckleField.delta_e`` -- the public
-    complex-increment accessor -- and this module never reaches into the
-    field's private mode-coefficient state, which is the reason that public
-    accessor was added. (The private name is deliberately not written
-    anywhere in this module, so a bare source grep for it is a valid gate.)
-    Build ``draws`` as, for example, ``np.stack([field.delta_e(
-    wavelength_nm=w, time_d=field.epoch_d + t * s2d) for t in times])``.
+    At the reference wavelength, build complex increments from the public
+    coefficients as ``np.einsum("tm,myx->tyx", field.coefficients(times_d),
+    field.G)``. For a propagated chromatic field first use
+    ``field.at_wavelength(w)`` and include its reference/w phase factor.
 
     The false-alarm circle is origin-centered with radius
     ``sqrt(i_c + threshold * normalization)``: it is the contour of TOTAL
@@ -547,7 +548,7 @@ def plot_field_ellipse(
         pixel: ``(iy, ix)`` index selecting the pixel from any map-valued
             input. May be None when every input is already per-pixel.
         moments: A ``SpeckleMoments``; supplies the analytic ellipse from
-            ``gamma_map``/``p_map`` at ``pixel``.
+            ``gamma_pixel_map``/``p_pixel_map`` at ``pixel``.
         draws: Complex field increments at the pixel -- ``(n,)``, or
             ``(n, y, x)`` indexed by ``pixel``. Drawn as the cloud, and used
             for the ellipse when ``moments`` is absent.
@@ -585,8 +586,8 @@ def plot_field_ellipse(
     samples = None if draws is None else _at_pixel(draws, pixel, sample_axis=True)
 
     if moments is not None:
-        gamma = float(_at_pixel(moments.gamma_map, pixel))
-        p = complex(_at_pixel(moments.p_map, pixel))
+        gamma = float(_at_pixel(moments.gamma_pixel_map, pixel))
+        p = complex(_at_pixel(moments.p_pixel_map, pixel))
         semi_major, semi_minor, angle = _ellipse_from_moments(gamma, p)
     else:
         semi_major, semi_minor, angle = _ellipse_from_draws(samples)

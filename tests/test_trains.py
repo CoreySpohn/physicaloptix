@@ -242,7 +242,11 @@ class TestSpeckleProcessWiring:
         )
         realization = process.draw(jax.random.PRNGKey(0))
         # the chromatic draw carries every channel through
-        assert np.asarray(realization.e_nom).shape[0] == 3
+        assert realization.grid == focal
+        assert np.asarray(realization.e_nodes).shape[0] == 3
+        np.testing.assert_allclose(
+            realization.g_nodes, lin.G * np.sqrt(focal.pixel_area), rtol=1e-14, atol=0
+        )
 
 
 class TestLoadTrainYaml:

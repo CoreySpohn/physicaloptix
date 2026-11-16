@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from conftest import TEST_FRAME
+from conftest import TEST_FRAME, speckle_grid
 from hwoutils.constants import s2d
 from hwoutils.grids import PixelGrid
 
@@ -102,13 +102,15 @@ class TestMonteCarloConsistency:
             per_mode_rms=rms,
             knee_hz=1e-3,
             input_energy=0.25**2,  # derived normalization 1.0 at default du
+            grid=speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
+            reference_wavelength_nm=1000.0,
         )
         keys = jax.random.split(jax.random.PRNGKey(0), 400)
         # Each draw is one frozen realization; sample its eps at a fixed time.
         total = np.zeros((n, n))
         for key in keys:
             field = process.draw(key)
-            eps = field._eps((0.0) * s2d)
+            eps = field.coefficients((0.0) * s2d)
             e = e_nom + jnp.tensordot(eps, g, axes=1)
             total += np.asarray(jnp.abs(e) ** 2)
         mean = total / len(keys)

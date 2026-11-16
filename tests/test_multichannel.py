@@ -156,6 +156,7 @@ class TestLinearizeShared:
         mcl = linearize_shared(system, field, wavelength_nm=WL, shared_stage="screen")
         outs, _ = system.propagate(field)
         for name in mcl.names:
+            assert mcl[name].grid == outs[name].grid
             np.testing.assert_allclose(
                 np.asarray(mcl[name].e_nom),
                 np.asarray(outs[name].data),

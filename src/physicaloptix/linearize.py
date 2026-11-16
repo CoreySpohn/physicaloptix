@@ -38,6 +38,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.grids import PixelGrid
 from jaxtyping import Array
 
 from physicaloptix.core import Field
@@ -55,7 +56,7 @@ class Linearization(eqx.Module):
 
     Attributes:
         e_nom: Complex nominal focal field, shape ``(y, x)`` mono or
-            ``(w, y, x)`` chromatic.
+            ``(w, y, x)`` chromatic, in density-amplitude units.
         G: Complex sensitivity ``d(E_focal)/d(mode)``, shape ``(m, y, x)``
             mono or ``(w, m, y, x)`` chromatic.
         wavelength_nm: The recorded design wavelength; per-band phase
@@ -64,13 +65,13 @@ class Linearization(eqx.Module):
             is recorded).
         kind: The basis kind the columns were built from (``"opd"`` or
             ``"amplitude"``).
-        pixel_scale_lod: The output plane's pixel scale (lambda/D per pixel for
-            a focal output) -- the grid ``e_nom`` / ``G`` are sampled on, so a
+        grid: The actual output grid, including its Frame, on which
+            ``e_nom`` and ``G`` are sampled. A
             speckle field built from this product carries its true plate scale.
         input_energy: Total energy of the input field at the plane the
             linearization was built from (``field.energy()``): the
             pre-coronagraph photometric reference that, with
-            ``pixel_scale_lod``, converts intensity densities to per-pixel
+            ``grid``, converts intensity densities to per-pixel
             flux fractions. A scalar for a mono field, or one value per
             wavelength band (``field.energy()`` is per-band for a chromatic
             field) as a tuple.
@@ -90,7 +91,7 @@ class Linearization(eqx.Module):
     wavelength_nm: float = eqx.field(static=True)
     method: str = eqx.field(static=True)
     kind: str = eqx.field(static=True)
-    pixel_scale_lod: float = eqx.field(static=True)
+    grid: PixelGrid
     input_energy: float | tuple[float, ...] = eqx.field(static=True)
     wavelengths_nm: Array | None = None
     dispersion: Array | None = None
@@ -115,7 +116,7 @@ class Linearization(eqx.Module):
         Either give the process parameters directly (``per_mode_rms`` +
         ``knee_hz``) or the decorrelation parameterization
         (``decorr_hours`` + ``total_rms``). The process inherits the recorded
-        photometric primitives (``input_energy``, ``pixel_scale_lod``) and,
+        photometric primitives (``input_energy``, ``grid``) and,
         for a chromatic linearization, the recorded ``wavelengths_nm``, so
         realized maps are per-pixel flux fractions (per channel, chromatic)
         with no further input; pass ``input_energy=...`` explicitly to
@@ -133,7 +134,13 @@ class Linearization(eqx.Module):
             The parameter object whose ``draw(key)`` yields
             ``AnalyticSpeckleField`` realizations.
         """
-        kwargs.setdefault("pixel_scale_lod", self.pixel_scale_lod)
+        kwargs.setdefault("grid", self.grid)
+        kwargs.setdefault(
+            "reference_wavelength_nm",
+            self.wavelength_nm
+            if self.wavelengths_nm is None
+            else self.grid.frame.reference_wavelength_nm,
+        )
         kwargs.setdefault("input_energy", self.input_energy)
         kwargs.setdefault("wavelengths_nm", self.wavelengths_nm)
         if decorr_hours is not None:
@@ -471,7 +478,7 @@ def linearize(
         wavelength_nm=float(wavelength_nm),
         method=resolved,
         kind=basis.kind,
-        pixel_scale_lod=float(e_nom_field.grid.step),
+        grid=e_nom_field.grid,
         input_energy=input_energy,
         wavelengths_nm=wavelengths_nm,
         dispersion=resolved_dispersion,
@@ -539,10 +546,8 @@ def linearize_stages(
             raise ValueError("linearize_stages: stage parts disagree on kind")
         if part.wavelength_nm != first.wavelength_nm:
             raise ValueError("linearize_stages: stage parts disagree on wavelength_nm")
-        if part.pixel_scale_lod != first.pixel_scale_lod:
-            raise ValueError(
-                "linearize_stages: stage parts disagree on pixel_scale_lod"
-            )
+        if part.grid != first.grid:
+            raise ValueError("linearize_stages: stage parts disagree on grid")
         if part.input_energy != first.input_energy:
             raise ValueError("linearize_stages: stage parts disagree on input_energy")
         if not np.array_equal(np.asarray(part.e_nom), np.asarray(first.e_nom)):
@@ -566,7 +571,7 @@ def linearize_stages(
         wavelength_nm=first.wavelength_nm,
         method=first.method,
         kind=first.kind,
-        pixel_scale_lod=first.pixel_scale_lod,
+        grid=first.grid,
         input_energy=first.input_energy,
         wavelengths_nm=first.wavelengths_nm,
         dispersion=None,

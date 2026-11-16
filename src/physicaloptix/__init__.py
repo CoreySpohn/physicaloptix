@@ -88,11 +88,11 @@ from physicaloptix.robustness import (
 from physicaloptix.sources import PointSource, broadcast_to_spectrum, point_source
 from physicaloptix.speckle import (
     AnalyticSpeckleField,
+    ChromaticAnalyticSpeckleField,
     CrossBandMoments,
     Photometry,
     SpeckleMoments,
     SpeckleProcess,
-    lambda_scaled_channels,
     telescope_peak,
 )
 from physicaloptix.system import BeamSplitter, Branch, OpticalSystem, SplitterPort
@@ -112,6 +112,7 @@ __all__ = [
     "BeamSplitter",
     "Branch",
     "ChannelLinearization",
+    "ChromaticAnalyticSpeckleField",
     "ChromaticTable",
     "CrossBandMoments",
     "DispersiveScreen",
@@ -153,7 +154,6 @@ __all__ = [
     "diff_spec",
     "eac1_primary",
     "fourier_dm_basis",
-    "lambda_scaled_channels",
     "linearity_residual",
     "linearize",
     "linearize_shared",

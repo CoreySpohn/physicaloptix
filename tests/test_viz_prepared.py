@@ -10,6 +10,7 @@ field.
 import os
 
 import matplotlib
+from conftest import analytic_from_density, speckle_grid
 from hwoutils.constants import s2d
 
 matplotlib.use("Agg")
@@ -43,7 +44,7 @@ def _times(n=4):
 def _cube_from(field, times):
     return np.stack(
         [
-            np.asarray(field.realize(wavelength_nm=500.0, time_d=float(t) * s2d))
+            np.asarray(field.realize(wavelength_nm=500.0, time_d=float(t) * s2d).data)
             for t in times
         ]
     )
@@ -145,7 +146,15 @@ class _FakeCube:
 
     def realize(self, *, wavelength_nm, time_d=0.0):
         y, x = np.ogrid[:SPECKLE_NPIX, :SPECKLE_NPIX]
-        return 1e-9 * (1.0 + 0.5 * np.sin(time_d * d2s)) * (1.0 + x + 3.0 * y)
+        from hwoutils.grids import Image
+
+        return Image(
+            1e-9 * (1.0 + 0.5 * np.sin(time_d * d2s)) * (1.0 + x + 3.0 * y),
+            speckle_grid((SPECKLE_NPIX, SPECKLE_NPIX)),
+            (),
+            "per_pixel",
+            "stellar_flux_fraction",
+        )
 
 
 # --- declared sample semantics ------------------------------------------------
@@ -458,9 +467,9 @@ def test_explicit_floor_is_added_in_flux_fraction_units(protocol_fake):
 
 
 def test_analytic_field_reconstructs_its_own_floor(analytic_speckle_field):
-    field = analytic_speckle_field()
+    field = analytic_speckle_field(coherent=True)
     times = _times(3)
-    expected = np.abs(np.asarray(field.e_nom)) ** 2 / float(field.normalization)
+    expected = np.abs(np.asarray(field.e_nom)) ** 2 / float(field.input_energy)
     bare = prepare_speckles(
         field, times_s=times, wavelength_nm=500.0, include_floor=False
     )
@@ -469,14 +478,12 @@ def test_analytic_field_reconstructs_its_own_floor(analytic_speckle_field):
     assert np.allclose(delta, expected, rtol=1e-6)
 
 
-def test_chromatic_field_is_refused_with_the_remedy_named():
+def test_chromatic_field_uses_the_requested_node_floor():
     import jax.numpy as jnp
-
-    from physicaloptix.speckle import AnalyticSpeckleField
 
     rng = np.random.default_rng(0)
     shape = (2, SPECKLE_NPIX, SPECKLE_NPIX)
-    field = AnalyticSpeckleField(
+    field = analytic_from_density(
         jnp.asarray(rng.normal(size=shape) * 1e-4, dtype=complex),
         jnp.asarray(
             rng.normal(size=(2, 3, SPECKLE_NPIX, SPECKLE_NPIX)) * 1e-5, dtype=complex
@@ -485,11 +492,20 @@ def test_chromatic_field_is_refused_with_the_remedy_named():
         frequencies_hz=jnp.asarray([1e-3, 3e-3]),
         phases=jnp.asarray(rng.random((3, 2))),
         input_energy=jnp.asarray([1.0, 1.0]),
-        pixel_scale_lod=0.25,
+        grid=speckle_grid(
+            (jnp.asarray(rng.normal(size=shape) * 0.0001, dtype=complex)).shape[-2:],
+            0.25,
+            500.0,
+        ),
+        reference_wavelength_nm=500.0,
         wavelengths_nm=jnp.asarray([500.0, 600.0]),
     )
-    with pytest.raises(ValueError, match="chromatic"):
-        prepare_speckles(field, times_s=_times(2), wavelength_nm=500.0)
+    sequence = prepare_speckles(field, times_s=_times(2), wavelength_nm=500.0)
+    expected = (
+        field.realize(wavelength_nm=500.0).data
+        + np.abs(field.e_nodes[0]) ** 2 / field.energy_nodes[0]
+    )
+    np.testing.assert_allclose(sequence.frame(0).data, expected, rtol=1e-14, atol=0)
 
 
 def test_missing_wavelength_is_refused(protocol_fake):
@@ -512,7 +528,9 @@ def test_telescope_peak_rescales_by_normalization_over_peak(analytic_speckle_fie
         telescope_peak=peak,
     )
     ratio = contrast.frame(0).data / flux.frame(0).data
-    assert np.allclose(ratio, float(field.normalization) / peak, rtol=1e-6)
+    assert np.allclose(
+        ratio, float(field.input_energy) / (field.grid.pixel_area * peak), rtol=1e-6
+    )
     assert contrast.frame(0).quantity == "contrast delta"
 
 
@@ -685,3 +703,47 @@ def test_a_bad_clock_format_is_refused_before_any_evaluation(protocol_fake):
             clock_fmt="{epoch}",
         )
     assert protocol_fake.calls == 0
+
+
+def test_preparation_uses_returned_image_coordinates(protocol_fake, monkeypatch):
+    """Fails if a field's scale replaces the returned Image's offset affine grid.
+
+    Basis: exact pixel-edge coordinates and an explicit coordinate-space
+    annulus; float64 reductions agree within 16 eps, no resampling involved.
+    """
+    from dataclasses import replace
+
+    from conftest import TEST_FRAME
+    from hwoutils.grids import PixelGrid
+
+    grid = PixelGrid(
+        (SPECKLE_NPIX, SPECKLE_NPIX),
+        6.0,
+        8.0,
+        ((0.2, 0.0), (0.0, 0.4)),
+        "lod",
+        TEST_FRAME,
+    )
+    original = protocol_fake.realize
+
+    def realize(**kwargs):
+        return replace(original(**kwargs), grid=grid)
+
+    monkeypatch.setattr(protocol_fake, "realize", realize)
+    sequence = prepare_speckles(
+        protocol_fake,
+        times_s=_times(2),
+        wavelength_nm=500.0,
+        include_floor=False,
+        trace=(0.5, 1.5),
+    )
+    image = find_element(sequence.frame(0), "image")
+    assert image.axes.x_limits == pytest.approx((-1.3, 1.9))
+    assert image.axes.y_limits == pytest.approx((-3.4, 3.0))
+    x, y = grid.coordinates()
+    mask = (np.hypot(x, y) >= 0.5) & (np.hypot(x, y) <= 1.5)
+    trace = find_element(sequence.frame(0), "series").xy[:, 1]
+    expected = [
+        find_element(sequence.frame(i), "image").data[mask].mean() for i in range(2)
+    ]
+    np.testing.assert_allclose(trace, expected, rtol=16 * np.finfo(float).eps, atol=0)
