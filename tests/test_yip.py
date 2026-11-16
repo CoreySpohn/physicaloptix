@@ -3,8 +3,11 @@
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hwoutils.grids import Frame, PixelGrid
+from hwoutils.spectral import Band
 
-from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind, Spectrum
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import MultiScaleVortex, SampledOptic
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.yip import DEFAULT_STELLAR_DIAMETERS, emit_yip
@@ -12,10 +15,11 @@ from physicaloptix.yip import DEFAULT_STELLAR_DIAMETERS, emit_yip
 NPUP = 48
 REF_NM = 1000.0
 DIAMETER_M = 6.0
+YIP_FRAME = Frame(REF_NM, DIAMETER_M, "circumscribed")
 
 
 def _disk(grid, radius):
-    x = np.asarray(grid.coords)
+    x = np.asarray(_grid_axis(grid))
     xx, yy = np.meshgrid(x, x)
     return ((xx**2 + yy**2) <= radius**2).astype(float)
 
@@ -28,7 +32,7 @@ def _field(grid, disk):
 
 @pytest.fixture(scope="module")
 def vortex_setup():
-    grid = Grid.pupil(NPUP)
+    grid = PixelGrid.pupil(NPUP)
     disk = _disk(grid, 0.5)
     core = OpticalPath(
         stages=(
@@ -59,8 +63,10 @@ def emitted(vortex_setup, tmp_path_factory):
         out_dir,
         core,
         field,
-        science_grid=Grid.focal(64, 0.5),
-        spectrum=Spectrum.tophat(REF_NM, 0.1, 3),
+        science_grid=PixelGrid.focal(64, 0.5, YIP_FRAME),
+        spectrum=Spectrum.from_band(
+            Band(REF_NM * (1 - 0.1 / 2), REF_NM * (1 + 0.1 / 2)), 3
+        ),
         reference_wavelength_nm=REF_NM,
         offsets_lod=np.array([2.0, 6.0, 10.0]),
         stellar_diams_lod=np.array([0.0, 0.1]),
@@ -87,15 +93,17 @@ class TestEmittedPackage:
 
     def test_array_shapes(self, emitted):
         _, package = emitted
-        assert package["stellar_intens"].shape == (2, 64, 64)
-        assert package["offax_psf"].shape == (3, 64, 64)
-        assert package["sky_trans"].shape == (64, 64)
+        assert package["stellar_intens"].data.shape == (2, 64, 64)
+        assert package["offax_psf"].data.shape == (3, 64, 64)
+        assert package["sky_trans"].data.shape == (64, 64)
         np.testing.assert_array_equal(package["stellar_intens_diam_list"], [0.0, 0.1])
 
     def test_offax_peaks_track_offsets(self, emitted):
         _, package = emitted
-        coords = np.asarray(Grid.focal(64, 0.5).coords)
-        for offset, image in zip((2.0, 6.0, 10.0), package["offax_psf"], strict=True):
+        coords = np.asarray(_grid_axis(PixelGrid.focal(64, 0.5, YIP_FRAME)))
+        for offset, image in zip(
+            (2.0, 6.0, 10.0), package["offax_psf"].data, strict=True
+        ):
             iy, ix = np.unravel_index(int(np.argmax(image)), image.shape)
             assert abs(coords[ix] - offset) <= 0.5
             assert abs(coords[iy]) <= 0.5
@@ -109,33 +117,40 @@ class TestEmittedPackage:
         _, package = emitted
         science = Fraunhofer(
             grid_in=field.grid,
-            grid_out=Grid.focal(64, 0.5),
+            grid_out=PixelGrid.focal(64, 0.5, YIP_FRAME),
             reference_wavelength_nm=REF_NM,
         )
         normalized = field.data / jnp.sqrt(
-            jnp.sum(field.data.real**2 + field.data.imag**2) * field.grid.weights
+            jnp.sum(field.data.real**2 + field.data.imag**2) * field.grid.pixel_area
         )
         base = Field(data=normalized, grid=field.grid, plane=PlaneKind.PUPIL)
-        band = broadcast_to_spectrum(base, Spectrum.tophat(REF_NM, 0.1, 3))
+        band = broadcast_to_spectrum(
+            base,
+            Spectrum.from_band(Band(REF_NM * (1 - 0.1 / 2), REF_NM * (1 + 0.1 / 2)), 3),
+        )
         lyot, _ = core.propagate(band)
         out = science(lyot)
         # Emitted maps are per-pixel flux fractions: density times cell area.
-        expected = np.asarray(out.intensity()) * 0.5**2
-        np.testing.assert_allclose(package["stellar_intens"][0], expected, rtol=1e-10)
+        expected = np.asarray(out.intensity().data) * 0.5**2
+        np.testing.assert_allclose(
+            package["stellar_intens"].data[0], expected, rtol=1e-10
+        )
 
     def test_finite_stellar_diameter_fills_the_null(self, emitted):
         """A resolved star leaks more light through the vortex core."""
         _, package = emitted
         center = np.s_[28:36, 28:36]
-        point = package["stellar_intens"][0][center].sum()
-        resolved = package["stellar_intens"][1][center].sum()
+        point = package["stellar_intens"].data[0][center].sum()
+        resolved = package["stellar_intens"].data[1][center].sum()
         assert resolved > point
 
     def test_deterministic_given_seed(self, vortex_setup, tmp_path):
         core, field = vortex_setup
         kwargs = dict(
-            science_grid=Grid.focal(32, 0.5),
-            spectrum=Spectrum.tophat(REF_NM, 0.1, 2),
+            science_grid=PixelGrid.focal(32, 0.5, YIP_FRAME),
+            spectrum=Spectrum.from_band(
+                Band(REF_NM * (1 - 0.1 / 2), REF_NM * (1 + 0.1 / 2)), 2
+            ),
             reference_wavelength_nm=REF_NM,
             offsets_lod=np.array([4.0]),
             stellar_diams_lod=np.array([0.05]),
@@ -146,7 +161,7 @@ class TestEmittedPackage:
         a = emit_yip(tmp_path / "a", core, field, **kwargs)
         b = emit_yip(tmp_path / "b", core, field, **kwargs)
         for key in ("stellar_intens", "offax_psf", "sky_trans"):
-            np.testing.assert_array_equal(a[key], b[key])
+            np.testing.assert_array_equal(a[key].data, b[key].data)
 
     def test_default_diameter_list(self):
         assert DEFAULT_STELLAR_DIAMETERS[0] == 0.0
@@ -156,7 +171,7 @@ class TestEmittedPackage:
 class TestSkyNormalization:
     def test_bare_telescope_transmission_is_unity(self, tmp_path):
         """The stochastic normalization makes an open telescope transmit 1."""
-        grid = Grid.pupil(NPUP)
+        grid = PixelGrid.pupil(NPUP)
         disk = _disk(grid, 0.5)
         core = OpticalPath(
             stages=(
@@ -174,8 +189,12 @@ class TestSkyNormalization:
             tmp_path,
             core,
             _field(grid, disk),
-            science_grid=Grid.focal(48, 0.45),  # clean of the blue-end gate
-            spectrum=Spectrum.tophat(REF_NM, 0.1, 2),
+            science_grid=PixelGrid.focal(
+                48, 0.45, YIP_FRAME
+            ),  # clean of the blue-end gate
+            spectrum=Spectrum.from_band(
+                Band(REF_NM * (1 - 0.1 / 2), REF_NM * (1 + 0.1 / 2)), 2
+            ),
             reference_wavelength_nm=REF_NM,
             offsets_lod=np.array([4.0]),
             stellar_diams_lod=np.array([0.0]),
@@ -183,7 +202,7 @@ class TestSkyNormalization:
             n_sky_screens=400,
             diameter_m=DIAMETER_M,
         )
-        sky = package["sky_trans"]
+        sky = package["sky_trans"].data
         interior = sky[13:35, 13:35]
         np.testing.assert_allclose(interior.mean(), 1.0, rtol=0.08)
 
@@ -194,7 +213,19 @@ class TestYippyRoundTrip:
         lod_unit = pytest.importorskip("lod_unit")
         out_dir, package = emitted
         coro = yippy.Coronagraph(str(out_dir))
-        stellar = np.asarray(coro.stellar_intens(0.0 * lod_unit.lod))
+        assert coro.grid.shape == package["offax_psf"].grid.shape
+        assert coro.grid.basis == package["offax_psf"].grid.basis
+        assert coro.grid.center_x == package["offax_psf"].grid.center_x
+        assert coro.grid.center_y == package["offax_psf"].grid.center_y
+        # FITS microns -> nm conversion incurs one floating-point rounding.
+        np.testing.assert_allclose(
+            coro.grid.frame.reference_wavelength_nm,
+            package["offax_psf"].grid.frame.reference_wavelength_nm,
+            rtol=2 * np.finfo(float).eps,
+        )
+        stellar = np.asarray(coro.stellar_intens(0.0 * lod_unit.lod).data)
         # The reader interpolates the diameter axis in log space; node
         # reproduction is at the interpolant's precision, not exact.
-        np.testing.assert_allclose(stellar, package["stellar_intens"][0], rtol=1e-4)
+        np.testing.assert_allclose(
+            stellar, package["stellar_intens"].data[0], rtol=1e-4
+        )

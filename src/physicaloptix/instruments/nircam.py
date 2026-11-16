@@ -77,7 +77,7 @@ Frames and signs:
 Normalization: the source field is scaled so the field just after the
 entrance pupil carries unit energy (``Field.energy() == 1``), the
 entrance-pupil normalization STPSF applies with ``normalize='first'``. No
-later renormalization happens, so ``out.intensity() * out.grid.weights`` is
+later renormalization happens, so ``out.intensity().data * out.grid.pixel_area`` is
 the fraction of entrance-pupil energy per output sample and finite-field,
 mask and Lyot losses are kept.
 
@@ -108,10 +108,12 @@ import jax.numpy as jnp
 import numpy as np
 from hwoutils.constants import m2nm
 from hwoutils.conversions import arcsec_to_lambda_d, lambda_d_to_arcsec
+from hwoutils.grids import Frame, Image, PixelGrid
 from hwoutils.transforms import downsample_psf
 from jaxtyping import Array
 
-from physicaloptix.core import ChromaticTable, Field, Grid, PlaneKind, validate_field
+from physicaloptix.core import ChromaticTable, Field, PlaneKind, validate_field
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import (
     FocalPlaneMask,
     ModeBasis,
@@ -153,7 +155,7 @@ class CoordinateInversion(Element):
     each coordinate to its negative exactly, so the reflection is lossless.
     """
 
-    grid: Grid
+    grid: PixelGrid
     axis: str = eqx.field(static=True, default="y")
     plane: PlaneKind = eqx.field(static=True, default=PlaneKind.PUPIL)
 
@@ -651,14 +653,17 @@ def _read_focal_mask(read, entry):
 def _focal_mask_stage(config, inputs, pupil_grid):
     """The mask-plane window, its sampled transmission and the transform pair."""
     window = mask_window(
-        pupil_grid, config.mask_oversample, extent_lod=config.mask_extent_lod
+        pupil_grid,
+        config.mask_oversample,
+        frame=Frame(config.wavelength_nm, inputs.pupil_diameter_m, "circumscribed"),
+        extent_lod=config.mask_extent_lod,
     )
     transform = select_mask_transform(
         pupil_grid, window, config.mask_oversample, config.mask_transform
     )
     theta = np.asarray(
         lambda_d_to_arcsec(
-            window.coords, config.wavelength_nm, inputs.pupil_diameter_m
+            _grid_axis(window), config.wavelength_nm, inputs.pupil_diameter_m
         ),
         dtype=float,
     )
@@ -700,11 +705,15 @@ def build_nircam(
     diameter_m = inputs.pupil_diameter_m
     amplitude = inputs.pupil_amplitude
     npup = amplitude.shape[0]
-    pupil_grid = Grid.pupil(npup)
+    pupil_grid = PixelGrid.pupil(npup)
     sample_lod = arcsec_to_lambda_d(
         config.pixel_scale_arcsec / config.oversample, wavelength_nm, diameter_m
     )
-    focal_grid = Grid.focal(config.detector_npix * config.oversample, sample_lod)
+    focal_grid = PixelGrid.focal(
+        config.detector_npix * config.oversample,
+        sample_lod,
+        Frame(wavelength_nm, diameter_m, "circumscribed"),
+    )
 
     stages = [
         Stage(
@@ -779,7 +788,7 @@ def build_nircam(
     )
     path = OpticalPath(stages=tuple(stages))
 
-    energy = jnp.sum(amplitude**2) * pupil_grid.weights
+    energy = jnp.sum(amplitude**2) * pupil_grid.pixel_area
     flat = Field(
         data=jnp.full((npup, npup), 1.0 / jnp.sqrt(energy), dtype=complex),
         grid=pupil_grid,
@@ -806,7 +815,7 @@ def mask_plane_field(path, taps):
 
     Returns:
         A focal-plane ``Field`` on the mask-plane window (lambda/D, rows y);
-        ``intensity() * grid.weights`` is the fraction of entrance-pupil
+        ``intensity() * grid.pixel_area`` is the fraction of entrance-pupil
         energy per window sample.
 
     Raises:
@@ -1008,9 +1017,8 @@ def nircam_band_image(config, inputs, band):
         band: The nodes and weights.
 
     Returns:
-        The band image as a fraction of entrance-pupil energy per output
-        sample (unit-sum weights), ``(n, n)`` with ``n = detector_npix *
-        oversample``, rows y.
+        A per_pixel stellar_flux_fraction Image on the fixed arcsecond grid;
+        data have shape (detector_npix * oversample,) on each spatial axis.
     """
     weights = np.asarray(band.weights) / np.sum(band.weights)
     total = None
@@ -1025,9 +1033,10 @@ def nircam_band_image(config, inputs, band):
             )
         path, field = build_nircam(node_config, node_inputs)
         out, _ = path.propagate(field)
-        image = weight * out.intensity() * out.grid.weights
+        image = weight * out.intensity().data * out.grid.pixel_area
         total = image if total is None else total + image
-    return total
+    grid = out.grid.to_arcsec(out.grid.frame.reference_wavelength_nm)
+    return Image(total, grid, (), "per_pixel", "stellar_flux_fraction")
 
 
 def build_nircam_band(config, inputs, band):
@@ -1092,7 +1101,7 @@ def build_nircam_band(config, inputs, band):
             entrance = field
     first = node_paths[0]
     pupil_grid = first["entrance_pupil"].grid
-    zero_opd = jnp.zeros((pupil_grid.npix, pupil_grid.npix))
+    zero_opd = jnp.zeros((pupil_grid.shape[0], pupil_grid.shape[0]))
 
     def table(name):
         return ChromaticTable(tuple(ops[name] for ops in node_paths), nodes)
@@ -1140,21 +1149,24 @@ def integrate_detector_pixels(image, oversample):
     ``physicaloptix.ifs.pixel_integrate(intensity, n_quad, stride)``, which
     returns the window MEAN of an intensity (the pixel-averaged value): for a
     square image, ``integrate_detector_pixels(image, q)`` equals
-    ``q**2 * ifs.pixel_integrate(image, q, q)``.
+    ``q**2 * ifs.pixel_integrate(image.data, q, q)`` in its data.
 
     Args:
-        image: Square energy image, ``(n, n)`` with ``n`` a multiple of
+        image: Square per_pixel Image, ``(n, n)`` with ``n`` a multiple of
             ``oversample``, as returned by ``nircam_band_image`` or
-            ``out.intensity() * out.grid.weights``.
+            an explicitly constructed energy Image.
         oversample: Samples per detector pixel along each axis.
 
     Returns:
-        The ``(n / oversample, n / oversample)`` detector image.
+        The per_pixel Image on the coarser detector grid, retaining quantity.
 
     Raises:
         ValueError: The image is not square 2D or does not tile into pixels.
     """
-    image = jnp.asarray(image)
+    source = image
+    if not isinstance(source, Image) or source.measure != "per_pixel":
+        raise ValueError("image must be a per_pixel Image")
+    image = source.data
     if image.ndim != 2 or image.shape[0] != image.shape[1]:
         raise ValueError(f"image must be square 2D, got shape {image.shape}")
     if oversample < 1 or image.shape[0] % oversample:
@@ -1164,4 +1176,11 @@ def integrate_detector_pixels(image, oversample):
         )
     n_pix = image.shape[0] // oversample
     pixels, _ = downsample_psf(image, 1.0, (n_pix, n_pix))
-    return pixels
+    grid = dataclasses.replace(
+        source.grid,
+        shape=(n_pix, n_pix),
+        center_x=(source.grid.center_x + 0.5) / oversample - 0.5,
+        center_y=(source.grid.center_y + 0.5) / oversample - 0.5,
+        basis=tuple(tuple(v * oversample for v in row) for row in source.grid.basis),
+    )
+    return Image(pixels, grid, (), "per_pixel", source.quantity)

@@ -5,8 +5,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hwoutils.grids import PixelGrid
 
-from physicaloptix.core import Field, Grid, PlaneKind
+from physicaloptix.core import Field, PlaneKind
 from physicaloptix.diff import diff_spec
 from physicaloptix.elements import ModeBasis
 
@@ -44,7 +45,7 @@ class TestModeBasis:
 
 class TestDiffSpec:
     def test_marks_only_hot_leaves(self, basis):
-        grid = Grid.pupil(16)
+        grid = PixelGrid.pupil(16)
         field = Field(
             data=jnp.ones((16, 16), dtype=complex),
             grid=grid,

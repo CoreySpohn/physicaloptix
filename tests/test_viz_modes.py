@@ -217,11 +217,12 @@ def test_mismatched_mode_and_response_counts_raise():
 
 
 def test_zernike_pyramid_places_modes_by_radial_and_azimuthal_order():
-    from physicaloptix.core import Grid
+    from hwoutils.grids import PixelGrid
+
     from physicaloptix.elements.modes import zernike_basis
     from physicaloptix.viz import plot_zernike_pyramid
 
-    basis = zernike_basis(Grid.pupil(32), 10)
+    basis = zernike_basis(PixelGrid.pupil(32), 10)
     result = plot_zernike_pyramid(basis, labels="nm")
     images = result.artists["image"]
     assert result.axes.shape == (4, 7)
@@ -241,11 +242,12 @@ def test_zernike_pyramid_places_modes_by_radial_and_azimuthal_order():
 
 
 def test_zernike_pyramid_masks_outside_the_pupil():
-    from physicaloptix.core import Grid
+    from hwoutils.grids import PixelGrid
+
     from physicaloptix.elements.modes import zernike_basis
     from physicaloptix.viz import plot_zernike_pyramid
 
-    result = plot_zernike_pyramid(zernike_basis(Grid.pupil(32), 3), labels=None)
+    result = plot_zernike_pyramid(zernike_basis(PixelGrid.pupil(32), 3), labels=None)
     data = result.artists["image"][1][0].get_array()
     assert np.ma.is_masked(data) or np.isnan(np.asarray(data)[0, 0])
     plt.close(result.fig)

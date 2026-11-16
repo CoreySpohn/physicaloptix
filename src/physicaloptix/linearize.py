@@ -18,7 +18,7 @@ mode chunks through a vmapped propagation when the full stack would exceed
 construction.
 
 Chromatic linearization: passing ``wavelengths_nm`` (matching
-``field.spectrum.wavelengths_nm``) builds a per-band stack, ``e_nom``
+``field.spectrum.nodes_nm``) builds a per-band stack, ``e_nom``
 ``(w, y, x)`` and ``G`` ``(w, m, y, x)``, one column set per wavelength. The
 hardcoded OPD phase law is replaced by a per-mode, per-wavelength complex
 factor table (``dispersion``, shape ``(m, w)``): the default derives from
@@ -305,7 +305,7 @@ def linearize(
             above which the analytic method streams chunks instead of
             batching everything.
         wavelengths_nm: Channel wavelengths, shape ``(w,)``, matching
-            ``field.spectrum.wavelengths_nm``; set this to build a chromatic
+            ``field.spectrum.nodes_nm``; set this to build a chromatic
             linearization.
         dispersion: Optional complex ``(m, w)`` table of per-mode factors
             evaluated at ``wavelengths_nm``; default derives from
@@ -350,12 +350,12 @@ def linearize(
             raise ValueError(
                 "wavelengths_nm requires a chromatic field (with a spectrum)"
             )
-        field_wavelengths = np.asarray(field.spectrum.wavelengths_nm)
+        field_wavelengths = np.asarray(field.spectrum.nodes_nm)
         query_wavelengths = np.asarray(wavelengths_nm)
         if field_wavelengths.shape != query_wavelengths.shape or not np.allclose(
             field_wavelengths, query_wavelengths
         ):
-            raise ValueError("wavelengths_nm must match field.spectrum.wavelengths_nm")
+            raise ValueError("wavelengths_nm must match field.spectrum.nodes_nm")
         if wavelength_nm is None:
             wavelength_nm = float(wavelengths_nm[0])
     else:
@@ -471,7 +471,7 @@ def linearize(
         wavelength_nm=float(wavelength_nm),
         method=resolved,
         kind=basis.kind,
-        pixel_scale_lod=float(e_nom_field.grid.dx),
+        pixel_scale_lod=float(e_nom_field.grid.step),
         input_energy=input_energy,
         wavelengths_nm=wavelengths_nm,
         dispersion=resolved_dispersion,

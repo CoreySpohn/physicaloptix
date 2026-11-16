@@ -7,6 +7,7 @@ playback schedule.
 """
 
 import matplotlib
+from hwoutils.constants import s2d
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -31,7 +32,10 @@ def _times(n=4):
 
 def _cube_from(field, times):
     return np.stack(
-        [np.asarray(field.realize(wavelength_nm=500.0, time_s=float(t))) for t in times]
+        [
+            np.asarray(field.realize(wavelength_nm=500.0, time_d=float(t) * s2d))
+            for t in times
+        ]
     )
 
 

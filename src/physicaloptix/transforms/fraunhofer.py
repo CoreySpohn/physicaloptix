@@ -31,8 +31,10 @@ import warnings
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from hwoutils.grids import PixelGrid
 
-from physicaloptix.core import Field, Grid, PlaneKind, validate_field
+from physicaloptix.core import Field, PlaneKind, validate_field
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.diagnostics import mft_sampling_parameter
 from physicaloptix.transforms.cmft import cmft_bwd, cmft_fwd
 
@@ -50,8 +52,8 @@ class Fraunhofer(eqx.Module):
     construction-time sampling gate.
     """
 
-    grid_in: Grid
-    grid_out: Grid
+    grid_in: PixelGrid
+    grid_out: PixelGrid
     plane_in: PlaneKind = eqx.field(static=True)
     plane_out: PlaneKind = eqx.field(static=True)
     on_undersampled: str = eqx.field(static=True)
@@ -98,12 +100,14 @@ class Fraunhofer(eqx.Module):
         self.reference_wavelength_nm = (
             None if reference_wavelength_nm is None else float(reference_wavelength_nm)
         )
-        gate_coords = grid_out.coords
+        gate_coords = _grid_axis(grid_out)
         if self.reference_wavelength_nm is not None and min_wavelength_nm:
             gate_coords = gate_coords * (
                 self.reference_wavelength_nm / float(min_wavelength_nm)
             )
-        self.sampling_parameter = mft_sampling_parameter(grid_in.coords, gate_coords)
+        self.sampling_parameter = mft_sampling_parameter(
+            _grid_axis(grid_in), gate_coords
+        )
         if self.sampling_parameter < 1.0:
             message = (
                 f"MFT kernel undersampled: sampling parameter "
@@ -119,15 +123,15 @@ class Fraunhofer(eqx.Module):
         """Per-slice coordinate scale factors, or None for the native path."""
         if field.spectrum is None or self.reference_wavelength_nm is None:
             return None
-        return self.reference_wavelength_nm / field.spectrum.wavelengths_nm
+        return self.reference_wavelength_nm / field.spectrum.nodes_nm
 
     def forward(self, field):
         """Propagate ``plane_in`` -> ``plane_out`` (retags plane and grid)."""
         validate_field(
             field, plane=self.plane_in, grid=self.grid_in, context="Fraunhofer"
         )
-        x = jnp.asarray(self.grid_in.coords)
-        u = jnp.asarray(self.grid_out.coords)
+        x = jnp.asarray(_grid_axis(self.grid_in))
+        u = jnp.asarray(_grid_axis(self.grid_out))
         scaling = self._chromatic_scaling(field)
         if scaling is None:
             data = cmft_fwd(field.data, x, u)
@@ -144,8 +148,8 @@ class Fraunhofer(eqx.Module):
         """Adjoint propagation ``plane_out`` -> ``plane_in``.
 
         The fixed-grid adjoint of :meth:`forward`: for every wavelength slice,
-        ``grid_out.weights * vdot(forward(a), y)`` equals
-        ``grid_in.weights * vdot(a, backward(y))``, with the fixed angular
+        ``grid_out.pixel_area * vdot(forward(a), y)`` equals
+        ``grid_in.pixel_area * vdot(a, backward(y))``, with the fixed angular
         grid's cell area on the focal side (the same measure on which
         ``forward`` conserves energy). With a reference wavelength, each slice
         applies ``cmft_bwd`` on its scaled coordinates, whose built-in
@@ -158,8 +162,8 @@ class Fraunhofer(eqx.Module):
         validate_field(
             field, plane=self.plane_out, grid=self.grid_out, context="Fraunhofer"
         )
-        x = jnp.asarray(self.grid_in.coords)
-        u = jnp.asarray(self.grid_out.coords)
+        x = jnp.asarray(_grid_axis(self.grid_in))
+        u = jnp.asarray(_grid_axis(self.grid_out))
         scaling = self._chromatic_scaling(field)
         if scaling is None:
             data = cmft_bwd(field.data, x, u)

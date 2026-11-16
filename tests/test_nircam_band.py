@@ -31,6 +31,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from astropy.io import fits
+from conftest import as_image
 
 from physicaloptix.ifs import pixel_integrate as ifs_pixel_integrate
 from physicaloptix.instruments import (
@@ -97,7 +98,7 @@ def _propagate(config, inputs, taps=()):
 def _fraction_image(config, inputs):
     """Fraction of entrance-pupil energy per output sample."""
     out, _ = _propagate(config, inputs)
-    return np.asarray(out.intensity()) * out.grid.weights
+    return np.asarray(out.intensity().data) * out.grid.pixel_area
 
 
 def _direct_field(amp, opd_nm, wavelength_nm, theta_x_rad, theta_y_rad, source):
@@ -181,8 +182,8 @@ class TestTwoWavelengths:
         short_cfg = _config(1800.0, det_npix, 4, self.SCALE)
         out_long, _ = _propagate(long_cfg, _inputs())
         out_short, _ = _propagate(short_cfg, _inputs())
-        density_long = np.asarray(out_long.intensity())
-        density_short = np.asarray(out_short.intensity())
+        density_long = np.asarray(out_long.intensity().data)
+        density_short = np.asarray(out_short.intensity().data)
         n = density_long.shape[0]
         matched = density_short[n // 2 : n // 2 + n, n // 2 : n // 2 + n]
         np.testing.assert_allclose(
@@ -232,7 +233,7 @@ class TestBandImage:
             source_position_arcsec=self.SOURCE,
             ote_opd=True,
         )
-        image = np.asarray(nircam_band_image(config, _inputs(opd_nm=opd_nm), band))
+        image = np.asarray(nircam_band_image(config, _inputs(opd_nm=opd_nm), band).data)
         weights = np.asarray(self.RAW_WEIGHTS) / np.sum(self.RAW_WEIGHTS)
         expected = sum(
             w
@@ -276,7 +277,7 @@ class TestBandImage:
         band = NIRCamBand(wavelengths_nm=nodes, weights=weights, si_opd_nm=cube)
         config = _config(3350.0, det_npix, oversample, self.SCALE, si_wfe=True)
         inputs = _inputs(si_opd_nm=jnp.zeros((NPUP, NPUP)), si_wavelength_nm=3350.0)
-        image = np.asarray(nircam_band_image(config, inputs, band))
+        image = np.asarray(nircam_band_image(config, inputs, band).data)
         n = image.shape[0]
         top = max(shifts)
         expected = np.zeros((n, n - top))
@@ -359,7 +360,7 @@ class TestPixelIntegration:
             ote_opd=True,
         )
         image = _fraction_image(config, _inputs(opd_nm=_asymmetric_opd_nm()))
-        pixels = np.asarray(integrate_detector_pixels(image, oversample))
+        pixels = np.asarray(integrate_detector_pixels(as_image(image), oversample).data)
         np.testing.assert_allclose(pixels.sum(), image.sum(), rtol=1e-14)
         return pixels
 
@@ -387,7 +388,7 @@ class TestPixelIntegration:
         sample count per pixel exactly (to rounding)."""
         q = 4
         image = np.random.default_rng(3).random((12 * q, 12 * q))
-        summed = np.asarray(integrate_detector_pixels(image, q))
+        summed = np.asarray(integrate_detector_pixels(as_image(image), q).data)
         mean = np.asarray(ifs_pixel_integrate(jnp.asarray(image), q, q))
         np.testing.assert_allclose(summed, q**2 * mean, rtol=1e-14)
         np.testing.assert_allclose(
@@ -397,7 +398,7 @@ class TestPixelIntegration:
     @pytest.mark.parametrize(("shape", "oversample"), [((9, 9), 2), ((8, 6), 2)])
     def test_rejects_grids_that_do_not_tile_into_pixels(self, shape, oversample):
         with pytest.raises(ValueError):
-            integrate_detector_pixels(np.ones(shape), oversample)
+            integrate_detector_pixels(as_image(np.ones(shape)), oversample)
 
 
 # --- Reading the band nodes, weights and per-node SI OPDs from a bundle ----

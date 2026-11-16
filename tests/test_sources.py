@@ -10,8 +10,11 @@ the MFT samples the same continuous transform). Tolerances: floating-point.
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import TEST_FRAME
+from hwoutils.grids import PixelGrid
 
-from physicaloptix.core import Field, Grid, PlaneKind
+from physicaloptix.core import Field, PlaneKind
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.sources import PointSource
 from physicaloptix.transforms import Fraunhofer
 
@@ -24,8 +27,8 @@ LOD_ARCSEC = WAVELENGTH_NM * NM_TO_M / DIAMETER_M / ARCSEC_TO_RAD
 
 
 def _entrance():
-    grid = Grid.pupil(NPUP)
-    x = np.asarray(grid.coords)
+    grid = PixelGrid.pupil(NPUP)
+    x = np.asarray(_grid_axis(grid))
     xx, yy = np.meshgrid(x, x)
     disk = ((xx**2 + yy**2) <= 0.25).astype(float)
     return Field(data=jnp.asarray(disk + 0j), grid=grid, plane=PlaneKind.PUPIL)
@@ -33,10 +36,10 @@ def _entrance():
 
 def _image(source, parity=(1, 1)):
     entrance = _entrance()
-    focal = Grid.focal(48, 0.5)
+    focal = PixelGrid.focal(48, 0.5, TEST_FRAME)
     field = source.entrance_field(entrance, WAVELENGTH_NM, DIAMETER_M, parity)
     out = Fraunhofer(entrance.grid, focal).forward(field)
-    return np.asarray(out.intensity())
+    return np.asarray(out.intensity().data)
 
 
 def test_tilt_is_the_plane_wave_of_the_physical_angle():
@@ -44,7 +47,7 @@ def test_tilt_is_the_plane_wave_of_the_physical_angle():
     diameters, from physical units. Floating-point tolerance, 1e-12."""
     source = PointSource(jnp.asarray([0.021, -0.013]))
     field = source.entrance_field(_entrance(), WAVELENGTH_NM, DIAMETER_M)
-    x = np.asarray(_entrance().grid.coords)
+    x = np.asarray(_grid_axis(_entrance().grid))
     px = 0.021 * ARCSEC_TO_RAD * DIAMETER_M / (WAVELENGTH_NM * NM_TO_M)
     py = -0.013 * ARCSEC_TO_RAD * DIAMETER_M / (WAVELENGTH_NM * NM_TO_M)
     ramp = np.exp(2j * np.pi * (px * x[None, :] + py * x[:, None]))

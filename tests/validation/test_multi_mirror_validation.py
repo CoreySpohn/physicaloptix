@@ -9,15 +9,18 @@ out-of-pupil errors (while removing a lumped pupil error exactly).
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import TEST_FRAME
+from hwoutils.grids import PixelGrid
+from hwoutils.spectral import Band
 
 from physicaloptix import (
     Field,
     Fraunhofer,
-    Grid,
     PlaneKind,
     Spectrum,
     broadcast_to_spectrum,
 )
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.trains import (
     REFLECTION_OPD_FACTOR,
     MirrorSpec,
@@ -32,8 +35,8 @@ ALPHAS = {"m_near": 6.9e-5, "m_mid": 4.0e-4, "m_far": 9.4e-4}
 
 @pytest.fixture(scope="module")
 def setup():
-    grid = Grid.pupil(NPIX)
-    coords = grid.coords
+    grid = PixelGrid.pupil(NPIX)
+    coords = _grid_axis(grid)
     xx, yy = np.meshgrid(coords, coords)
     aperture = (np.hypot(xx, yy) <= 0.5).astype(complex)
     surfaces = {
@@ -47,7 +50,7 @@ def setup():
             for n, a in ALPHAS.items()
         ]
     )
-    spectrum = Spectrum.tophat(WL0, 0.2, NLAM)
+    spectrum = Spectrum.from_band(Band(WL0 * (1 - 0.2 / 2), WL0 * (1 + 0.2 / 2)), NLAM)
     field = broadcast_to_spectrum(
         Field(data=jnp.asarray(aperture), grid=grid, plane=PlaneKind.PUPIL), spectrum
     )
@@ -58,7 +61,7 @@ def setup():
 
 
 def _focal_contrast(grid, field, e_out, mask):
-    focal = Grid.focal(NFOC, PSCALE)
+    focal = PixelGrid.focal(NFOC, PSCALE, TEST_FRAME)
     prop = Fraunhofer(grid_in=grid, grid_out=focal)
     peak = np.abs(np.asarray(prop(field).data)) ** 2
     peak = peak.max(axis=(1, 2))
@@ -86,7 +89,7 @@ class TestMultiMirrorPhysics:
         # fraction |sin(pi alpha nu^2)| -- measure there, on the full train.
         grid, aperture, *_ = setup
         alpha, nu = 4.0e-4, 20.0
-        coords = grid.coords
+        coords = _grid_axis(grid)
         xx = np.meshgrid(coords, coords)[0]
         ripple = 0.5 * np.cos(2 * np.pi * nu * xx)  # nm surface, no aperture
         spec = (MirrorSpec(name="m", alpha=alpha, surface_nm=ripple),)
@@ -111,7 +114,7 @@ class TestMultiMirrorPhysics:
         grid, _aperture, field, spectrum, honest, _ap, lumped_opd, _ = setup
         mask = _annulus(NFOC, PSCALE)
         e_h, _ = honest.propagate(field)
-        wl = np.asarray(spectrum.wavelengths_nm)[:, None, None]
+        wl = np.asarray(spectrum.nodes_nm)[:, None, None]
         e_l = Field(
             data=field.data * jnp.exp(1j * 2 * jnp.pi * jnp.asarray(lumped_opd) / wl),
             grid=grid,
@@ -126,7 +129,7 @@ class TestMultiMirrorPhysics:
         grid, _aperture, field, spectrum, honest, ap, lumped_opd, _ = setup
         mask = _annulus(NFOC, PSCALE)
         i0 = NLAM // 2
-        wl = np.asarray(spectrum.wavelengths_nm)
+        wl = np.asarray(spectrum.nodes_nm)
 
         def corrected(e_out):
             ratio0 = np.asarray(e_out.data[i0]) / np.where(

@@ -12,12 +12,15 @@ import pytest
 # collectible when the viz extra is present.
 pytest.importorskip("eyepiece")
 
-from physicaloptix import Field, Grid, PlaneKind, Spectrum
+from conftest import TEST_FRAME
+from hwoutils.grids import PixelGrid
+
+from physicaloptix import Field, PlaneKind, Spectrum
 from physicaloptix.viz import plot_field
 
 
 def _mono(npix=16):
-    grid = Grid(npix=npix, dx=2.0 / npix)
+    grid = PixelGrid.regular((npix, npix), 2.0 / npix, "pupil_diameter")
     rng = np.random.default_rng(0)
     real = rng.normal(size=(npix, npix))
     imag = rng.normal(size=(npix, npix))
@@ -26,20 +29,20 @@ def _mono(npix=16):
 
 
 def _chromatic(npix=16, nlam=3, weights=None):
-    grid = Grid(npix=npix, dx=2.0 / npix)
+    grid = PixelGrid.regular((npix, npix), 2.0 / npix, "pupil_diameter")
     rng = np.random.default_rng(1)
     data = jnp.asarray(
         rng.normal(size=(nlam, npix, npix)) + 1j * rng.normal(size=(nlam, npix, npix))
     )
     w = jnp.full((nlam,), 1.0 / nlam) if weights is None else jnp.asarray(weights)
-    spec = Spectrum(wavelengths_nm=jnp.linspace(500.0, 600.0, nlam), weights=w)
+    spec = Spectrum(nodes_nm=jnp.linspace(500.0, 600.0, nlam), weights=w)
     return Field(data=data, grid=grid, plane=PlaneKind.FOCAL, spectrum=spec)
 
 
 def test_intensity_from_mono_field_labels_and_extent():
     field = _mono()
     res = plot_field(field)
-    e = field.grid.extent
+    e = field.grid.shape[0] * field.grid.step / 2
     assert tuple(res.artists["image"].get_extent()) == (-e, e, -e, e)
     assert "lambda" in res.ax.get_xlabel() or r"\lambda" in res.ax.get_xlabel()
     plt.close(res.fig)
@@ -60,11 +63,16 @@ def test_chromatic_intensity_sums_and_channel_selects():
 def test_chromatic_intensity_pins_to_field_own_weighted_sum():
     # Non-uniform weights: a weighted sum and a plain mean would diverge
     # here, unlike the uniform-1/nlam fixture above, so this actually pins
-    # plot_field to Field.intensity() rather than any average.
+    # plot_field to Field.intensity().data rather than any average.
     f = _chromatic(weights=[0.1, 0.3, 0.6])
     res = plot_field(f)
-    expected = np.clip(np.asarray(f.intensity()), 1e-20, None)
+    expected = np.clip(np.asarray(f.intensity().data), 1e-20, None)
     assert np.allclose(res.artists["image"].get_array(), expected)
+    image_res = plot_field(f.intensity())
+    np.testing.assert_array_equal(
+        image_res.artists["image"].get_array(), res.artists["image"].get_array()
+    )
+    plt.close(image_res.fig)
     plt.close(res.fig)
 
 
@@ -200,7 +208,7 @@ def test_phase_masks_below_floor_and_labels_focal():
 
 
 def test_pupil_plane_gets_distinct_x_y_labels():
-    grid = Grid(npix=8, dx=1.0 / 8)
+    grid = PixelGrid.regular((8, 8), 1.0 / 8, "pupil_diameter")
     data = jnp.ones((8, 8), dtype=complex)
     field = Field(data=data, grid=grid, plane=PlaneKind.PUPIL)
     res = plot_field(field)
@@ -370,8 +378,8 @@ def test_contrast_row_axes_shape_contract():
 def test_contrast_row_mismatched_extents_raises_naming_both():
     from physicaloptix.viz import contrast_row
 
-    grid_a = Grid.focal(8, pixel_scale_lod=4.0)
-    grid_b = Grid.focal(8, pixel_scale_lod=5.0)
+    grid_a = PixelGrid.focal(8, 4.0, TEST_FRAME)
+    grid_b = PixelGrid.focal(8, 5.0, TEST_FRAME)
     rng = np.random.default_rng(0)
     field_a = Field(
         data=jnp.asarray(rng.uniform(1e-12, 1e-7, (8, 8)) + 0j),
@@ -406,7 +414,7 @@ def test_contrast_row_field_input_extent_matches_annulus_coordinates():
     from physicaloptix.viz import contrast_row
 
     field = _mono()
-    half = float(field.grid.extent)
+    half = float(field.grid.shape[0] * field.grid.step / 2)
     res = contrast_row([field], annulus=(0.2, 0.7))
 
     extent = tuple(res.artists["image"][0].get_extent())

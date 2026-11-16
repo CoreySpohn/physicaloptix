@@ -45,10 +45,11 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.grids import PixelGrid
 from jax import lax
 from jaxtyping import Array
 
-from physicaloptix.core import Grid
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.transforms.cmft import cmft_fwd
 
 PACK_FORMAT_VERSION = 1
@@ -73,7 +74,7 @@ class LensletChain(eqx.Module):
         pupil_field: Complex exit-pupil field, ``(n, n)`` shared across
             wavelengths or ``(n_lam, n, n)`` per-wavelength (matched against
             the pack wavelengths at build time).
-        pupil_grid: Grid of ``pupil_field`` (pupil diameters).
+        pupil_grid: PixelGrid of ``pupil_field`` (pupil diameters).
         stop_opd_nm: Optional spectrograph aberration OPD map [nm] on the
             stop grid, ``(n_stop, n_stop)``; ``None`` for an ideal relay.
         pitch_lod_ref: Lenslet pitch in lambda/D at ``lam_ref_nm``.
@@ -100,7 +101,7 @@ class LensletChain(eqx.Module):
     """
 
     pupil_field: Array = eqx.field(converter=jnp.asarray)
-    pupil_grid: Grid
+    pupil_grid: PixelGrid
     stop_opd_nm: Array | None
     pitch_lod_ref: float = eqx.field(static=True)
     lam_ref_nm: float = eqx.field(static=True)
@@ -166,7 +167,7 @@ class LensletChain(eqx.Module):
                 "pupil_field must be (n, n) or (n_lam, n, n), got shape "
                 f"{self.pupil_field.shape}"
             )
-        npix = self.pupil_grid.npix
+        npix = self.pupil_grid.shape[0]
         if self.pupil_field.shape[-2:] != (npix, npix):
             raise ValueError(
                 f"pupil_field shape {self.pupil_field.shape} does not match "
@@ -201,17 +202,25 @@ class LensletChain(eqx.Module):
     @property
     def tile_grid(self):
         """The lenslet tile grid: one pitch across, half-pixel-offset."""
-        return Grid.pupil(self.n_tile)
+        return PixelGrid.pupil(self.n_tile)
 
     @property
     def mp_grid(self):
         """The micro-pupil grid [diffraction units]."""
-        return Grid(npix=self.n_mp, dx=2.0 * self.mp_half_extent / self.n_mp)
+        return PixelGrid.regular(
+            (self.n_mp, self.n_mp),
+            2.0 * self.mp_half_extent / self.n_mp,
+            "pupil_diameter",
+        )
 
     @property
     def stop_grid(self):
         """The spectrograph stop grid [pitch units], spanning the stop."""
-        return Grid(npix=self.n_stop, dx=2.0 * self.stop_halfwidth / self.n_stop)
+        return PixelGrid.regular(
+            (self.n_stop, self.n_stop),
+            2.0 * self.stop_halfwidth / self.n_stop,
+            "pupil_diameter",
+        )
 
     def pitch_lod(self, wavelength_nm):
         """Lenslet pitch in lambda/D at ``wavelength_nm`` (fixed sky angle)."""
@@ -222,7 +231,7 @@ class LensletChain(eqx.Module):
         return self.micropupil_px / self.pitch_lod(wavelength_nm)
 
     def _window(self):
-        c = jnp.asarray(self.tile_grid.coords)
+        c = jnp.asarray(_grid_axis(self.tile_grid))
         half = 0.5 * self.fill_factor
         inside = (jnp.abs(c[:, None]) <= half) & (jnp.abs(c[None, :]) <= half)
         return inside.astype(self.pupil_field.real.dtype)
@@ -244,19 +253,19 @@ class LensletChain(eqx.Module):
                     "per-wavelength pupil_field needs an explicit pupil slice"
                 )
             pupil = self.pupil_field
-        tile = jnp.asarray(self.tile_grid.coords)
+        tile = jnp.asarray(_grid_axis(self.tile_grid))
         if self.illumination == "flat":
             field = jnp.ones((self.n_tile, self.n_tile), dtype=pupil.dtype)
         else:
             u_tile = tile * self.pitch_lod(wavelength_nm)
-            field = cmft_fwd(pupil, jnp.asarray(self.pupil_grid.coords), u_tile)
+            field = cmft_fwd(pupil, jnp.asarray(_grid_axis(self.pupil_grid)), u_tile)
         return field * self._window()
 
     def micropupil_field(self, wavelength_nm, pupil=None):
         """Complex field at the micro-pupil plane, pinhole applied if any."""
         windowed = self.local_field(wavelength_nm, pupil)
-        u_mp = jnp.asarray(self.mp_grid.coords)
-        field = cmft_fwd(windowed, jnp.asarray(self.tile_grid.coords), u_mp)
+        u_mp = jnp.asarray(_grid_axis(self.mp_grid))
+        field = cmft_fwd(windowed, jnp.asarray(_grid_axis(self.tile_grid)), u_mp)
         if self.pinhole_radius is not None:
             rr2 = u_mp[:, None] ** 2 + u_mp[None, :] ** 2
             field = field * (rr2 <= self.pinhole_radius**2)
@@ -264,12 +273,12 @@ class LensletChain(eqx.Module):
 
     def _relay_to_stop(self, tile_field, wavelength_nm, shift_diffraction=(0.0, 0.0)):
         """Windowed tile field -> field just after the spectrograph stop."""
-        u_mp = jnp.asarray(self.mp_grid.coords)
-        field = cmft_fwd(tile_field, jnp.asarray(self.tile_grid.coords), u_mp)
+        u_mp = jnp.asarray(_grid_axis(self.mp_grid))
+        field = cmft_fwd(tile_field, jnp.asarray(_grid_axis(self.tile_grid)), u_mp)
         if self.pinhole_radius is not None:
             rr2 = u_mp[:, None] ** 2 + u_mp[None, :] ** 2
             field = field * (rr2 <= self.pinhole_radius**2)
-        x_s = jnp.asarray(self.stop_grid.coords)
+        x_s = jnp.asarray(_grid_axis(self.stop_grid))
         field = cmft_fwd(field, u_mp, x_s)
         if self.stop_kind == "square":
             inside = (jnp.abs(x_s[:, None]) <= self.stop_halfwidth) & (
@@ -327,10 +336,10 @@ class LensletChain(eqx.Module):
                     "per-wavelength pupil_field needs an explicit pupil slice"
                 )
             pupil = self.pupil_field
-        tile = jnp.asarray(self.tile_grid.coords)
+        tile = jnp.asarray(_grid_axis(self.tile_grid))
         p_lod = self.pitch_lod(wavelength_nm)
         window = self._window()
-        xp = jnp.asarray(self.pupil_grid.coords)
+        xp = jnp.asarray(_grid_axis(self.pupil_grid))
 
         def one(center):
             uy = (tile + center[1]) * p_lod
@@ -350,7 +359,7 @@ class LensletChain(eqx.Module):
         """
         stop = self._relay_to_stop(tile_field, wavelength_nm, shift_diffraction)
         ppd = self.px_per_diffraction(wavelength_nm)
-        x_s = jnp.asarray(self.stop_grid.coords)
+        x_s = jnp.asarray(_grid_axis(self.stop_grid))
         return _cmft2(stop, x_s, jnp.asarray(off_y) / ppd, jnp.asarray(off_x) / ppd)
 
     def detector_field(
@@ -363,7 +372,7 @@ class LensletChain(eqx.Module):
         """
         stop = self.stop_field(wavelength_nm, pupil, shift_diffraction)
         u_det = jnp.asarray(px_coords) / self.px_per_diffraction(wavelength_nm)
-        return cmft_fwd(stop, jnp.asarray(self.stop_grid.coords), u_det)
+        return cmft_fwd(stop, jnp.asarray(_grid_axis(self.stop_grid)), u_det)
 
     def psflet_intensity(
         self, wavelength_nm, px_coords, pupil=None, shift_diffraction=(0.0, 0.0)
@@ -380,11 +389,11 @@ class LensletChain(eqx.Module):
         sampling knobs are validated with.
         """
         windowed = self.local_field(wavelength_nm, pupil)
-        tile = jnp.sum(jnp.abs(windowed) ** 2) * self.tile_grid.weights
+        tile = jnp.sum(jnp.abs(windowed) ** 2) * self.tile_grid.pixel_area
         mp = self.micropupil_field(wavelength_nm, pupil)
-        e_mp = jnp.sum(jnp.abs(mp) ** 2) * self.mp_grid.weights
+        e_mp = jnp.sum(jnp.abs(mp) ** 2) * self.mp_grid.pixel_area
         stop = self.stop_field(wavelength_nm, pupil)
-        e_stop = jnp.sum(jnp.abs(stop) ** 2) * self.stop_grid.weights
+        e_stop = jnp.sum(jnp.abs(stop) ** 2) * self.stop_grid.pixel_area
         return tile, e_mp, e_stop
 
 

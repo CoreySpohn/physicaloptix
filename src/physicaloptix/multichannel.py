@@ -175,7 +175,7 @@ def linearize_shared(
                 name=branch.name,
                 e_nom=out_field.data,
                 g_shared=g_shared,
-                pixel_scale_lod=float(out_field.grid.dx),
+                pixel_scale_lod=float(out_field.grid.step),
             )
         )
     return MultiChannelLinearization(
@@ -208,7 +208,7 @@ def ncpa_differential_opd(system, name_a, name_b):
             raise ValueError(f"unknown branch {name!r}; branches are {sorted(by_name)}")
 
     def branch_opd(branch):
-        npix = system.split.grid.npix
+        npix = system.split.grid.shape[0]
         total = jnp.zeros((npix, npix))
         for stage in branch.path.stages:
             if isinstance(stage.op, PhaseScreen):

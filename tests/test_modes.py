@@ -5,9 +5,12 @@ import typing
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import TEST_FRAME
+from hwoutils.grids import PixelGrid
 
 from physicaloptix.apertures import eac1_primary, rasterize_primary, rasterize_segments
-from physicaloptix.core import Field, Grid, PlaneKind
+from physicaloptix.core import Field, PlaneKind
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import ModeBasis
 from physicaloptix.elements.modes import segment_ptt_basis, zernike_basis
 from physicaloptix.linearize import linearity_residual, linearize
@@ -21,25 +24,25 @@ def primary():
 
 
 def _aperture(grid, diameter=1.0):
-    coords = np.asarray(grid.coords)
+    coords = np.asarray(_grid_axis(grid))
     x_grid, y_grid = np.meshgrid(coords, coords)
     return np.sqrt(x_grid**2 + y_grid**2) <= diameter / 2.0
 
 
 class TestSegmentPTT:
     def test_three_modes_per_segment(self, primary):
-        basis = segment_ptt_basis(primary, Grid.pupil(48))
+        basis = segment_ptt_basis(primary, PixelGrid.pupil(48))
         assert isinstance(basis, ModeBasis)
         assert basis.n_modes == 3 * primary.n_segments
 
     def test_kind_is_opd(self, primary):
-        assert segment_ptt_basis(primary, Grid.pupil(48)).kind == "opd"
+        assert segment_ptt_basis(primary, PixelGrid.pupil(48)).kind == "opd"
 
     def test_modes_are_segment_local(self, primary):
         """Each of the center segment's three modes is zero outside the
         center hexagon, so a segment-local error cannot leak."""
         npix = 48
-        basis = segment_ptt_basis(primary, Grid.pupil(npix))
+        basis = segment_ptt_basis(primary, PixelGrid.pupil(npix))
         centre_support = rasterize_segments(primary, npix)[0] > 0
         for k in range(3):  # piston, tip, tilt of the center segment
             mode = np.asarray(basis.B[k])
@@ -50,7 +53,7 @@ class TestSegmentPTT:
         its segment: B is delivered in nanometers, not a dimensionless mode."""
         npix = 48
         ptt_nm = 7.0
-        basis = segment_ptt_basis(primary, Grid.pupil(npix), ptt_nm=ptt_nm)
+        basis = segment_ptt_basis(primary, PixelGrid.pupil(npix), ptt_nm=ptt_nm)
         area = rasterize_segments(primary, npix)[0].sum()
         piston = np.asarray(basis.B[0])
         rms = np.sqrt((piston**2).sum() / area)
@@ -59,20 +62,20 @@ class TestSegmentPTT:
     def test_tip_carries_no_piston(self, primary):
         """The tip mode is zero-mean over its segment (hexagon symmetry), so
         it is orthogonal to that segment's piston."""
-        basis = segment_ptt_basis(primary, Grid.pupil(48))
+        basis = segment_ptt_basis(primary, PixelGrid.pupil(48))
         tip = np.asarray(basis.B[1])
         assert abs(tip.sum()) < 1e-9 * np.abs(tip).sum()
 
 
 class TestZernike:
     def test_mode_count_and_kind(self):
-        basis = zernike_basis(Grid.pupil(64), 10)
+        basis = zernike_basis(PixelGrid.pupil(64), 10)
         assert basis.n_modes == 10
         assert basis.kind == "opd"
 
     def test_piston_is_constant_over_the_aperture(self):
         """Noll mode 1 is a constant (the aperture), zero outside it."""
-        grid = Grid.pupil(64)
+        grid = PixelGrid.pupil(64)
         piston = np.asarray(zernike_basis(grid, 4, rms_nm=3.0).B[0])
         aperture = _aperture(grid)
         assert np.all(piston[~aperture] == 0.0)
@@ -81,7 +84,7 @@ class TestZernike:
 
     def test_unit_contract_rms_over_aperture(self):
         """Every mode carries rms_nm of RMS over the aperture (B is in nm)."""
-        grid = Grid.pupil(64)
+        grid = PixelGrid.pupil(64)
         rms_nm = 5.0
         basis = zernike_basis(grid, 8, rms_nm=rms_nm)
         npupil = _aperture(grid).sum()
@@ -92,7 +95,7 @@ class TestZernike:
 
     @staticmethod
     def _worst_cross_correlation(npix, n_modes=6):
-        grid = Grid.pupil(npix)
+        grid = PixelGrid.pupil(npix)
         stack = np.asarray(zernike_basis(grid, n_modes).B)
         npupil = _aperture(grid).sum()
         pairs = [
@@ -160,12 +163,12 @@ class TestNollIdentity:
 
     @staticmethod
     def _polar(grid):
-        coords = np.asarray(grid.coords)
+        coords = np.asarray(_grid_axis(grid))
         x_grid, y_grid = np.meshgrid(coords, coords)
         return 2.0 * np.hypot(x_grid, y_grid), np.arctan2(y_grid, x_grid)
 
     def test_modes_match_the_explicit_noll_polynomials(self):
-        grid = Grid.pupil(128)
+        grid = PixelGrid.pupil(128)
         basis = zernike_basis(grid, 11, rms_nm=1.0)
         rho, theta = self._polar(grid)
         aperture = rho <= 1.0
@@ -179,7 +182,7 @@ class TestNollIdentity:
         """Noll j=5 is the SINE astigmatism: its correlation with the cosine
         form must vanish (a swapped mapping would score ~1 above and ~0
         here)."""
-        grid = Grid.pupil(128)
+        grid = PixelGrid.pupil(128)
         basis = zernike_basis(grid, 6, rms_nm=1.0)
         rho, theta = self._polar(grid)
         aperture = rho <= 1.0
@@ -190,7 +193,7 @@ class TestNollIdentity:
 
 
 def _science_path(pupil, npix_focal=32):
-    focal = Grid.focal(npix_focal, 0.5)
+    focal = PixelGrid.focal(npix_focal, 0.5, TEST_FRAME)
     return OpticalPath(
         stages=(Stage("science", Fraunhofer(grid_in=pupil, grid_out=focal)),)
     )
@@ -200,7 +203,7 @@ class TestLinearizeIntegration:
     def test_zernike_basis_linearizes_cleanly(self):
         """A Zernike basis feeds linearize: G has the right shape and the
         linear model's error scales quadratically with the coefficient."""
-        pupil = Grid.pupil(48)
+        pupil = PixelGrid.pupil(48)
         aperture = _aperture(pupil).astype(float)
         path = _science_path(pupil)
         field = Field(
@@ -219,7 +222,7 @@ class TestLinearizeIntegration:
 
     def test_segment_ptt_basis_linearizes_cleanly(self, primary):
         """The segment PTT basis feeds linearize on the real EAC pupil."""
-        pupil = Grid.pupil(48)
+        pupil = PixelGrid.pupil(48)
         pupil_arr = rasterize_primary(primary, 48, supersample=4)
         path = _science_path(pupil)
         field = Field(

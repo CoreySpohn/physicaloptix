@@ -2,7 +2,7 @@
 
 Two views of one thing -- a dark hole whose speckles drift -- typed on the
 SPECKLE-FIELD PROTOCOL rather than on any concrete class. Anything with
-``realize(wavelength_nm=..., time_s=...) -> (y, x)`` and a
+``realize(wavelength_nm=..., time_d=...) -> (y, x)`` and a
 ``pixel_scale_lod`` drives both functions: the analytic generator, a
 replayed testbed trajectory, a fitted reduced-order model, a maintained
 residual, or a ten-line fake in a test. A precomputed ``(n_t, y, x)`` cube

@@ -21,8 +21,8 @@ simulation) and [jaxEDITH](https://github.com/CoreySpohn/jaxedith)
 (exposure-time and yield calculations) -- so optixstuff itself stays free of
 diffraction code.
 
-The propagation core is owned: a
-plane-aware `Field`/`Grid` data model, the continuous-FT MFT pair, the
+The propagation core combines a plane-aware `Field` subclass of
+`hwoutils.grids.GridArray` with shared `PixelGrid` geometry, the continuous-FT MFT pair, the
 multi-scale vortex, and the `OpticalPath` fold with construction-time
 sampling gates, validated against the HWO Coronagraph Design Survey
 (cds_pipeline) EAC-1 AAVC to an on-axis null of 3.05e-11 (0.2 percent of the
@@ -37,11 +37,20 @@ Requires a configured optical path, pupil field, and output sampling.
 
 ```python notest
 import physicaloptix as po
+from hwoutils.grids import PixelGrid
+from optixstuff import SimplePrimary
+
+primary = SimplePrimary(circumscribed_diameter_m=6.0, collecting_area_m2=28.0)
 
 coro = po.PathCoronagraph.from_path(
-    core_path, pupil_field, diameter_m=6.0, owa_lod=32.0
+    core_path,
+    pupil_field,
+    primary=primary,
+    reference_wavelength_nm=600.0,
+    outer_working_angle_lod=32.0,
 )
-psf = coro.on_axis_psf(600.0, pixel_scale_rad, npix)  # unit-flux PSF out
+target = PixelGrid.focal(npix, 0.25, primary.frame(600.0))
+psf = coro.on_axis_psf(600.0, target)  # per-pixel flux-fraction Image
 eta = coro.throughput(6.0, 600.0)  # derived, not declared
 ```
 
@@ -61,7 +70,7 @@ eta = coro.throughput(6.0, 600.0)  # derived, not declared
 Built on [JAX](https://github.com/google/jax) and
 [Equinox](https://github.com/patrick-kidger/equinox), `physicaloptix` provides:
 
-- **The owned core** (`physicaloptix.core`) -- `Grid` (all-static, half-pixel
+- **The field core** (`physicaloptix.core`) -- shared `hwoutils.grids.PixelGrid` (all-static, half-pixel
   offset, continuous-FT weights), `PlaneKind`-tagged `Field` pytrees, and
   `Spectrum` for chromatic fields.
 - **Propagators** (`physicaloptix.transforms`) -- the validated `cmft_fwd` /
@@ -77,7 +86,7 @@ Built on [JAX](https://github.com/google/jax) and
   linear speckle generator (E_nom, G) behind optixstuff's `AbstractSpeckleField`.
 - **Interop** (`physicaloptix.interop`) -- `PathCoronagraph`, the
   optixstuff `AbstractCoronagraph` adapter: cached-Lyot image interface and
-  scalar curves (throughput, core area/intensity, occulter transmission)
+  rule-specific curves (throughput, core area, leakage density, occulter transmission)
   derived from a build-time separation sweep.
 
 ### Ecosystem position

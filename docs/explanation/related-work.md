@@ -34,7 +34,7 @@ upstream.
 
 | Library | Backend and autodiff | Primary domain | Data model | Coronagraph focus |
 |---|---|---|---|---|
-| **physicaloptix** | JAX + Equinox, differentiable | HWO coronagraph propagation | plane-tagged `Field` on a static `Grid` | first class: owned multi-scale vortex, `PathCoronagraph`, live or freeze-to-table |
+| **physicaloptix** | JAX + Equinox, differentiable | HWO coronagraph propagation | plane-tagged `Field` on a static `PixelGrid` | first class: owned multi-scale vortex, `PathCoronagraph`, live or freeze-to-table |
 | [dLux](https://github.com/LouisDesdoigts/dLux) | JAX + Equinox, differentiable | general differentiable optical modeling, phase retrieval | `Wavefront` through composed `Optics` layers | by composition |
 | [chromatix](https://github.com/chromatix-team/chromatix) | JAX + Equinox, differentiable | computational and microscopy wave optics | typed `Field` with explicit wavelength and polarization axes | not coronagraph specific |
 | [hcipy](https://docs.hcipy.org) | NumPy (newer parts JAX tested) | high-contrast imaging and adaptive optics | `Field` = data + `Grid` | strong: Lyot, vortex, adaptive optics |
@@ -50,7 +50,7 @@ both an acknowledgment and a map for anyone who wants to go deeper.
   from their sampling comes from hcipy, whose `Field` is data plus a `Grid`.
   The plane tag that a propagator validates comes from poppy, whose
   `PlaneType` is set when a wavefront is created and checked inside each optic.
-  physicaloptix combines the two: a static `Grid` plus a `PlaneKind` tag that
+  physicaloptix combines the two: a static `PixelGrid` plus a `PlaneKind` tag that
   is checked when a path is built.
 - **A matrix Fourier transform with free output sampling.** The semi-analytic
   MFT of Soummer et al. (2007) decouples the focal sampling from the pupil

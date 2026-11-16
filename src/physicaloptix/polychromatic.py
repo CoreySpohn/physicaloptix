@@ -14,6 +14,7 @@ the backward pass holds about one propagation at a time.
 
 import equinox as eqx
 import numpy as np
+from hwoutils.grids import Image
 
 from physicaloptix.core import Field
 from physicaloptix.path import OpticalPath
@@ -28,7 +29,13 @@ def _node_image(path, entrance, source, scale, wavelength_nm, pupil_diameter_m, 
     """Energy image of one source at one node, times ``scale``."""
     field = source.entrance_field(entrance, wavelength_nm, pupil_diameter_m, parity)
     out, _ = path.at_wavelength(wavelength_nm).propagate(field)
-    return scale * out.intensity() * out.grid.weights
+    return Image(
+        scale * out.intensity().data * out.grid.pixel_area,
+        out.grid,
+        (),
+        "per_pixel",
+        "stellar_flux_fraction",
+    )
 
 
 class PolychromaticPath(eqx.Module):
@@ -99,8 +106,8 @@ class PolychromaticPath(eqx.Module):
             sources: A ``PointSource`` or a sequence of them.
 
         Returns:
-            The image as a fraction of entrance energy per output sample, on
-            the path's output grid.
+            A per_pixel stellar_flux_fraction Image on an arcsecond grid,
+            with values equal to fractions of the unocculted source flux.
 
         Raises:
             ValueError: No sources, or a source's ``spectral_weights`` does
@@ -139,5 +146,11 @@ class PolychromaticPath(eqx.Module):
                     self.pupil_diameter_m,
                     self.source_parity,
                 )
-                total = image if total is None else total + image
-        return total
+                total = image.data if total is None else total + image.data
+        return Image(
+            total,
+            image.grid.to_arcsec(image.grid.frame.reference_wavelength_nm),
+            (),
+            "per_pixel",
+            "stellar_flux_fraction",
+        )

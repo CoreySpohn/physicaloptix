@@ -12,9 +12,10 @@ import pytest
 # collectible when the viz extra is present.
 pytest.importorskip("eyepiece")
 
+from hwoutils.grids import PixelGrid
 from hwoutils.radial import radial_distance, radial_profile
 
-from physicaloptix import Field, Grid, PlaneKind
+from physicaloptix import Field, PlaneKind
 from physicaloptix.viz import plot_contrast_profile
 from physicaloptix.viz.profiles import _radial_bins, _reduce_bins
 
@@ -163,7 +164,11 @@ def test_field_supplies_its_own_pixel_scale():
     npix, dx = 32, 0.25
     radius = np.asarray(radial_distance((npix, npix)), dtype=float)
     data = jnp.asarray((1e-4 / (1.0 + radius)).astype(complex))
-    field = Field(data=data, grid=Grid(npix=npix, dx=dx), plane=PlaneKind.FOCAL)
+    field = Field(
+        data=data,
+        grid=PixelGrid.regular((npix, npix), dx, "pupil_diameter"),
+        plane=PlaneKind.FOCAL,
+    )
 
     _, ax = plt.subplots()
     r_field, y_field = _line_xy(plot_contrast_profile(field, ax=ax))

@@ -15,24 +15,34 @@ from physicaloptix.apertures import (
 
 class TestYamlLoader:
     def test_bundled_eac1_geometry(self):
+        """Fails for rounded supplied diameters; hexagon geometry at 8-eps floor."""
         primary = eac1_primary()
         assert isinstance(primary, SegmentedPrimary)
         assert primary.n_rings == 2
         assert primary.n_segments == 19
-        np.testing.assert_allclose(primary.diameter_m, 7.2)
-        np.testing.assert_allclose(primary.inscribed_diameter_m, 5.96)
+        a = 1.65 / 2
+        pitch = np.sqrt(3) * a + 0.004
+        circ = 2 * np.hypot(np.sqrt(3) * pitch + a, pitch)
+        insc = 2 * np.hypot(np.sqrt(3) * pitch + a / 2, np.sqrt(3) * a / 2)
+        np.testing.assert_allclose(
+            primary.diameter("circumscribed"), circ, rtol=8 * np.finfo(float).eps
+        )
+        np.testing.assert_allclose(
+            primary.diameter("inscribed"), insc, rtol=8 * np.finfo(float).eps
+        )
         np.testing.assert_allclose(primary.segment_point_to_point_m, 1.65)
         np.testing.assert_allclose(primary.segment_gap_m, 0.004)
 
     def test_area_is_derived_from_geometry(self):
         primary = eac1_primary()
         hex_area = 3.0 * np.sqrt(3.0) / 8.0 * 1.65**2
-        np.testing.assert_allclose(primary.area_m2, 19 * hex_area, rtol=1e-12)
+        np.testing.assert_allclose(
+            primary.collecting_area_m2, 19 * hex_area, rtol=1e-12
+        )
 
     def test_loader_reads_an_explicit_path(self, tmp_path):
         text = (
             "name: tiny\n"
-            "circumscribed_diameter_m: 3.0\n"
             "segmentation:\n"
             "  type: hexagonal\n"
             "  n_rings: 1\n"
@@ -43,12 +53,15 @@ class TestYamlLoader:
         path.write_text(text)
         primary = load_primary_yaml(path)
         assert primary.n_segments == 7
-        assert primary.inscribed_diameter_m is None
+        np.testing.assert_allclose(
+            primary.diameter("inscribed"),
+            np.sqrt(3) * (np.sqrt(3) / 2 + 0.01) + 0.5,
+            rtol=8 * np.finfo(float).eps,
+        )
 
     def test_loader_rejects_unknown_segmentation(self, tmp_path):
         path = tmp_path / "bad.yaml"
         path.write_text(
-            "circumscribed_diameter_m: 3.0\n"
             "segmentation:\n"
             "  type: keystone\n"
             "  n_rings: 1\n"
@@ -75,9 +88,9 @@ class TestRasterizer:
 
     def test_coverage_matches_collecting_area(self, raster):
         primary, pupil = raster
-        cell = (7.2 / 192) ** 2
+        cell = (primary.diameter("circumscribed") / 192) ** 2
         np.testing.assert_allclose(
-            pupil.sum() * cell, float(primary.area_m2), rtol=2e-3
+            pupil.sum() * cell, float(primary.collecting_area_m2), rtol=2e-3
         )
 
     def test_layout_symmetries(self, raster):
@@ -89,7 +102,7 @@ class TestRasterizer:
         """The mid-gap between the center and a ring-1 segment is dark."""
         primary, pupil = raster
         pitch = float(primary.segment_pitch_m)
-        delta = 7.2 / 192
+        delta = primary.diameter("circumscribed") / 192
         coords = (np.arange(192) - 96 + 0.5) * delta
         # Mid-gap point along the +x lattice direction (flat-top: 30 deg).
         gx = pitch / 2.0 * np.sqrt(3.0) / 2.0
@@ -99,15 +112,8 @@ class TestRasterizer:
         assert pupil[iy, ix] < 1.0
 
     def test_requires_exact_segment_size(self):
-        primary = SegmentedPrimary(
-            diameter_m=7.2,
-            area_m2=33.0,
-            n_rings=2,
-            n_segments=19,
-            segment_gap_m=0.004,
-        )
-        with pytest.raises(ValueError, match="segment_point_to_point_m"):
-            rasterize_primary(primary, 64)
+        with pytest.raises(ValueError, match="segment size"):
+            SegmentedPrimary(n_rings=2, segment_point_to_point_m=0.0)
 
 
 class TestSegmentRasterizer:
@@ -132,7 +138,7 @@ class TestSegmentRasterizer:
         primary = eac1_primary()
         npix = 96
         stack = rasterize_segments(primary, npix, supersample=4)
-        delta = 7.2 / npix
+        delta = primary.diameter("circumscribed") / npix
         coords = (np.arange(npix) - npix / 2 + 0.5) * delta
         xx, yy = np.meshgrid(coords, coords)
         radius = np.sqrt(xx**2 + yy**2)
@@ -148,15 +154,8 @@ class TestSegmentRasterizer:
         assert np.all(stack.sum(axis=(1, 2)) > 0.0)
 
     def test_requires_exact_segment_size(self):
-        primary = SegmentedPrimary(
-            diameter_m=7.2,
-            area_m2=33.0,
-            n_rings=2,
-            n_segments=19,
-            segment_gap_m=0.004,
-        )
-        with pytest.raises(ValueError, match="segment_point_to_point_m"):
-            rasterize_segments(primary, 64)
+        with pytest.raises(ValueError, match="segment size"):
+            SegmentedPrimary(n_rings=2, segment_point_to_point_m=0.0)
 
 
 class TestNormalization:

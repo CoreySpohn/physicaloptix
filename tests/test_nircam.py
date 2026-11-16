@@ -109,7 +109,7 @@ def _propagate(config, inputs, taps=()):
 
 def _image(config, inputs):
     out, _ = _propagate(config, inputs)
-    return np.asarray(out.intensity())
+    return np.asarray(out.intensity().data)
 
 
 def _expected_field(amp, opd_nm, det_npix, oversample, source_arcsec):
@@ -194,8 +194,8 @@ class TestUnits:
         lod_rad = WAVELENGTH_NM * NM_TO_M / DIAMETER_M
         expected = PIXEL_SCALE_ARCSEC / oversample * ARCSEC_TO_RAD / lod_rad
         grid = path.stages[-1].op.grid_out
-        assert grid.npix == 9 * oversample
-        assert grid.dx == pytest.approx(expected, rel=1e-14)
+        assert grid.shape[0] == 9 * oversample
+        assert grid.step == pytest.approx(expected, rel=1e-14)
 
 
 class TestIndependentFourierSum:
@@ -613,7 +613,7 @@ class TestMaskedStructure:
         mask_plane = mask_plane_field(path, tapped)
         assert mask_plane.plane is PlaneKind.FOCAL
         assert mask_plane.data.shape == (NPUP * 4, NPUP * 4)
-        assert mask_plane.grid.dx == pytest.approx(0.25, rel=1e-15)
+        assert mask_plane.grid.step == pytest.approx(0.25, rel=1e-15)
         assert out.data.shape == (32, 32)
 
     def test_mask_plane_tap_needs_the_pre_mask_field(self):
@@ -689,7 +689,7 @@ class TestKnownAttenuation:
             build_nircam(config, _masked_inputs(mask=_UniformMask(0.5)))[0], taps
         )
         assert float(mask_plane.energy()) == pytest.approx(0.25, abs=1e-12)
-        focal_energy = np.sum(np.abs(np.asarray(out.data)) ** 2) * out.grid.weights
+        focal_energy = np.sum(np.abs(np.asarray(out.data)) ** 2) * out.grid.pixel_area
         assert focal_energy == pytest.approx(0.25, abs=1e-10)
 
 
@@ -1173,7 +1173,7 @@ class TestFullBandFFT:
         cfg_fft, cfg_mft = _fft_mft_configs(npup, mask_oversample)
         band = NIRCamBand(wavelengths_nm=(3200.0, 3500.0), weights=(1.0, 2.0))
         images = [
-            np.asarray(nircam_band_image(cfg, inputs, band))
+            np.asarray(nircam_band_image(cfg, inputs, band).data)
             for cfg in (cfg_fft, cfg_mft)
         ]
         np.testing.assert_allclose(
@@ -1186,7 +1186,7 @@ class TestFullBandFFT:
         def loss(opd, cfg):
             image = nircam_band_image(
                 cfg, eqx.tree_at(lambda i: i.ote_opd_nm, inputs, opd), band
-            )
+            ).data
             return jnp.sum(weight * image)
 
         grads = [

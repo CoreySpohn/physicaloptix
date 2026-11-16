@@ -5,8 +5,12 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import TEST_FRAME
+from hwoutils.grids import PixelGrid
+from hwoutils.spectral import Band
 
-from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind, Spectrum
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import ModeBasis, PhaseScreen, SampledOptic
 from physicaloptix.multichannel import linearize_shared, ncpa_differential_opd
 from physicaloptix.path import OpticalPath, Stage
@@ -18,8 +22,8 @@ NPIX, WL, DIAM_M = 16, 500.0, 0.02
 
 
 def _grid_bits(npix=NPIX):
-    grid = Grid.pupil(npix)
-    x = np.asarray(grid.coords)
+    grid = PixelGrid.pupil(npix)
+    x = np.asarray(_grid_axis(grid))
     xx, yy = np.meshgrid(x, x)
     disk = ((xx**2 + yy**2) <= 0.25).astype(float)
     return grid, xx, yy, disk
@@ -38,7 +42,7 @@ def _mode_basis(xx, yy, n=3, amp_nm=4.0):
 def _entrance_system(npix=NPIX):
     """Screen at the trunk entrance; split; sci (Fraunhofer) + wfs (bare)."""
     grid, xx, yy, disk = _grid_bits(npix)
-    focal = Grid.focal(2 * npix, 0.5)
+    focal = PixelGrid.focal(2 * npix, 0.5, TEST_FRAME)
     basis = _mode_basis(xx, yy)
     trunk = OpticalPath(
         stages=(
@@ -70,7 +74,7 @@ def _entrance_system(npix=NPIX):
 def _interior_system(npix=NPIX):
     """A Fresnel hop BEFORE the shared screen, so entrance injection is wrong."""
     grid, xx, yy, disk = _grid_bits(npix)
-    focal = Grid.focal(2 * npix, 0.5)
+    focal = PixelGrid.focal(2 * npix, 0.5, TEST_FRAME)
     basis = _mode_basis(xx, yy)
     z = 0.05 * DIAM_M**2 / (WL * 1e-9)
 
@@ -182,7 +186,9 @@ class TestLinearizeShared:
 
     def test_refuses_chromatic_field(self):
         system, mono, _basis = _entrance_system()
-        field = broadcast_to_spectrum(mono, Spectrum.tophat(WL, 0.1, 3))
+        field = broadcast_to_spectrum(
+            mono, Spectrum.from_band(Band(WL * (1 - 0.1 / 2), WL * (1 + 0.1 / 2)), 3)
+        )
         with pytest.raises(ValueError, match="monochromatic"):
             linearize_shared(system, field, wavelength_nm=WL, shared_stage="screen")
 
@@ -195,7 +201,7 @@ class TestLinearizeShared:
 class TestNcpaDifferential:
     def test_differential_opd_between_branches(self):
         grid, xx, yy, _disk = _grid_bits()
-        focal = Grid.focal(2 * NPIX, 0.5)
+        focal = PixelGrid.focal(2 * NPIX, 0.5, TEST_FRAME)
         basis = _mode_basis(xx, yy)
         ncpa_a = PhaseScreen(
             ModeBasis(B=basis.B, coeffs=jnp.asarray([1.0, 0.0, 0.5])),

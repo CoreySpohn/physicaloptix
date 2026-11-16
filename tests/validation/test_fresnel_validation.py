@@ -20,8 +20,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import TEST_FRAME
+from hwoutils.grids import PixelGrid
 
-from physicaloptix.core import Field, Grid, PlaneKind
+from physicaloptix.core import Field, PlaneKind
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import ModeBasis, PhaseScreen
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.transforms import Fraunhofer, Fresnel
@@ -54,7 +57,9 @@ def _coords(npix):
 
 
 def _pupil(data, npix):
-    return Field(data=jnp.asarray(data), grid=Grid.pupil(npix), plane=PlaneKind.PUPIL)
+    return Field(
+        data=jnp.asarray(data), grid=PixelGrid.pupil(npix), plane=PlaneKind.PUPIL
+    )
 
 
 class TestTalbotConversion:
@@ -71,7 +76,7 @@ class TestTalbotConversion:
         x = _coords(npix)
         xg, _ = np.meshgrid(x, x)
         e_in = np.exp(1j * amp * np.cos(2 * np.pi * nu0 * xg))  # pure phase, flat |E|
-        out = _fresnel(Grid.pupil(npix), alpha).forward(_pupil(e_in, npix))
+        out = _fresnel(PixelGrid.pupil(npix), alpha).forward(_pupil(e_in, npix))
         inten = np.abs(np.asarray(out.data)) ** 2
         # Project the intensity onto cos(2 pi nu0 x): depth = 2 |projection|.
         projection = np.mean(inten * np.exp(-2j * np.pi * nu0 * xg))
@@ -89,7 +94,7 @@ class TestTalbotConversion:
         e_in = np.exp(1j * amp * np.cos(2 * np.pi * nu0 * xg))
 
         def conversion(alpha):
-            out = _fresnel(Grid.pupil(npix), alpha).forward(_pupil(e_in, npix))
+            out = _fresnel(PixelGrid.pupil(npix), alpha).forward(_pupil(e_in, npix))
             inten = np.abs(np.asarray(out.data)) ** 2
             projection = np.mean(inten * np.exp(-2j * np.pi * nu0 * xg))
             return 2.0 * np.abs(projection) / (2 * amp)
@@ -123,8 +128,8 @@ class TestTwoDeformableMirrorControl:
         return ModeBasis(B=stack, coeffs=jnp.zeros(stack.shape[0]))
 
     def _relay_path(self, npix, alpha):
-        pupil = Grid.pupil(npix)
-        focal = Grid.focal(_DM_NFOC, 0.5)
+        pupil = PixelGrid.pupil(npix)
+        focal = PixelGrid.focal(_DM_NFOC, 0.5, TEST_FRAME)
         dm2 = PhaseScreen(
             self._fourier_basis(npix),
             pupil,
@@ -151,7 +156,7 @@ class TestTwoDeformableMirrorControl:
         x = np.asarray(_coords(npix))
         xg, yg = np.meshgrid(x, x)
         field = _pupil((xg**2 + yg**2 <= 0.25).astype(complex), npix)
-        fx = np.asarray(Grid.focal(_DM_NFOC, 0.5).coords)
+        fx = np.asarray(_grid_axis(PixelGrid.focal(_DM_NFOC, 0.5, TEST_FRAME)))
         fxg, fyg = np.meshgrid(fx, fx)
         mask = jnp.asarray((np.abs(fxg - _DM_FX0) < 1.0) & (np.abs(fyg) < 1.0))
         return self._relay_path(npix, alpha), field, mask
@@ -213,7 +218,7 @@ class TestExternalReferences:
         xg, yg = np.meshgrid(x, x)
         r2 = xg**2 + yg**2
         e_in = np.exp(-r2 / w0**2).astype(complex)
-        forward = _fresnel(Grid.pupil(npix), alpha).forward(_pupil(e_in, npix))
+        forward = _fresnel(PixelGrid.pupil(npix), alpha).forward(_pupil(e_in, npix))
         out = np.asarray(forward.data)
         q = w0**2 + 1j * alpha / np.pi
         ref = (w0**2 / q) * np.exp(-r2 / q)
@@ -230,7 +235,7 @@ class TestExternalReferences:
         field = _pupil(e_in, npix)
         e0 = float(jnp.sum(jnp.abs(field.data) ** 2))
         for method in ("fresnel", "exact"):
-            out = _fresnel(Grid.pupil(npix), alpha, method=method).forward(field)
+            out = _fresnel(PixelGrid.pupil(npix), alpha, method=method).forward(field)
             e1 = float(jnp.sum(jnp.abs(out.data) ** 2))
             assert abs(e1 - e0) / e0 < 1e-9
 
@@ -253,7 +258,7 @@ class TestAnalyticLaws:
             return np.sqrt((inten * (xg**2 + yg**2)).sum() / inten.sum())
 
         rms0 = rms(field.data)
-        out = _fresnel(Grid.pupil(npix), ratio * alpha_r).forward(field)
+        out = _fresnel(PixelGrid.pupil(npix), ratio * alpha_r).forward(field)
         np.testing.assert_allclose(
             rms(out.data) / rms0, np.sqrt(1 + ratio**2), rtol=2e-3
         )
@@ -270,7 +275,7 @@ class TestAnalyticLaws:
         gaps = []
         for diameter_m in (5e-4, 1e-3):  # beta halves as D doubles
             common = dict(
-                grid=Grid.pupil(npix),
+                grid=PixelGrid.pupil(npix),
                 distance_m=2e-4,
                 beam_diameter_m=diameter_m,
                 wavelength_nm=WL,

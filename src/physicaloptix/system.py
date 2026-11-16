@@ -23,9 +23,10 @@ import warnings
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.grids import PixelGrid
 from jaxtyping import Array
 
-from physicaloptix.core import Field, Grid, PlaneKind, validate_field
+from physicaloptix.core import Field, PlaneKind, validate_field
 from physicaloptix.path import OpticalPath, Stage, _planes
 
 _ENERGY_TOL = 1e-10
@@ -56,7 +57,7 @@ class BeamSplitter(eqx.Module):
     r: Array | None
     wavelengths_nm: Array | None
     transmit_table: Array | None
-    grid: Grid
+    grid: PixelGrid
     plane: PlaneKind = eqx.field(static=True)
     on_violation: str = eqx.field(static=True, default="raise")
     multi_output: bool = eqx.field(static=True, default=True)
@@ -109,12 +110,12 @@ class BeamSplitter(eqx.Module):
                         "ambiguous"
                     )
                 if jnp.ndim(amp) >= 2 and jnp.shape(amp)[-2:] != (
-                    grid.npix,
-                    grid.npix,
+                    grid.shape[0],
+                    grid.shape[0],
                 ):
                     raise ValueError(
                         f"{name} shape {jnp.shape(amp)} does not match grid "
-                        f"({grid.npix}, {grid.npix})"
+                        f"({grid.shape[0]}, {grid.shape[0]})"
                     )
             t = jnp.asarray(t)
             r = jnp.asarray(r)
@@ -262,7 +263,7 @@ class BeamSplitter(eqx.Module):
                 "defines the colors to route)"
             )
         transmit = jnp.interp(
-            field.spectrum.wavelengths_nm,
+            field.spectrum.nodes_nm,
             self.wavelengths_nm,
             self.transmit_table,
         )[:, jnp.newaxis, jnp.newaxis]

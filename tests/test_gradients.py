@@ -23,9 +23,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import TEST_FRAME
+from hwoutils.grids import PixelGrid
 from jax.test_util import check_grads
 
-from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind, Spectrum
 from physicaloptix.elements import (
     ModeBasis,
     MultiScaleVortex,
@@ -55,7 +57,7 @@ def _disk(npix, radius=0.5):
 def _pupil_field(npix):
     return Field(
         data=jnp.asarray(_disk(npix)),
-        grid=Grid.pupil(npix),
+        grid=PixelGrid.pupil(npix),
         plane=PlaneKind.PUPIL,
     )
 
@@ -80,18 +82,23 @@ def _masked_loss(path, field, mask, dm_stage):
 
 
 def _fraunhofer_path(npix):
-    pupil = Grid.pupil(npix)
+    pupil = PixelGrid.pupil(npix)
     screen = PhaseScreen(zernike_basis(pupil, 6, rms_nm=1.0), pupil, wavelength_nm=WL)
     return OpticalPath(
         stages=(
             Stage("dm", screen),
-            Stage("sci", Fraunhofer(grid_in=pupil, grid_out=Grid.focal(64, 0.25))),
+            Stage(
+                "sci",
+                Fraunhofer(
+                    grid_in=pupil, grid_out=PixelGrid.focal(64, 0.25, TEST_FRAME)
+                ),
+            ),
         )
     )
 
 
 def _vortex_path(npix):
-    pupil = Grid.pupil(npix)
+    pupil = PixelGrid.pupil(npix)
     screen = PhaseScreen(zernike_basis(pupil, 6, rms_nm=1.0), pupil, wavelength_nm=WL)
     stop = SampledOptic(
         transmission=jnp.asarray(np.abs(_disk(npix, radius=0.4))),
@@ -103,7 +110,12 @@ def _vortex_path(npix):
             Stage("dm", screen),
             Stage("vortex", MultiScaleVortex.build(charge=2, npup=npix, q=64)),
             Stage("lyot", stop),
-            Stage("sci", Fraunhofer(grid_in=pupil, grid_out=Grid.focal(64, 0.25))),
+            Stage(
+                "sci",
+                Fraunhofer(
+                    grid_in=pupil, grid_out=PixelGrid.focal(64, 0.25, TEST_FRAME)
+                ),
+            ),
         )
     )
 
@@ -121,7 +133,7 @@ def _fourier_basis(npix, amp_nm=2.0):
 
 
 def _fresnel_relay_path(npix, alpha=3e-3):
-    pupil = Grid.pupil(npix)
+    pupil = PixelGrid.pupil(npix)
     distance_m = alpha * DIAM_M**2 / (WL * 1e-9)
     fresnel_kw = dict(
         grid=pupil,
@@ -152,7 +164,12 @@ def _fresnel_relay_path(npix, alpha=3e-3):
                     **fresnel_kw,
                 ),
             ),
-            Stage("sci", Fraunhofer(grid_in=pupil, grid_out=Grid.focal(64, 0.25))),
+            Stage(
+                "sci",
+                Fraunhofer(
+                    grid_in=pupil, grid_out=PixelGrid.focal(64, 0.25, TEST_FRAME)
+                ),
+            ),
         )
     )
 
@@ -192,10 +209,15 @@ class TestCheckGrads:
         """The fractional-amplitude perturbation map differentiates cleanly
         (kind="amplitude" is exactly linear, so order-2 FD is essentially
         exact)."""
-        pupil = Grid.pupil(NPUP)
+        pupil = PixelGrid.pupil(NPUP)
         path = OpticalPath(
             stages=(
-                Stage("sci", Fraunhofer(grid_in=pupil, grid_out=Grid.focal(64, 0.25))),
+                Stage(
+                    "sci",
+                    Fraunhofer(
+                        grid_in=pupil, grid_out=PixelGrid.focal(64, 0.25, TEST_FRAME)
+                    ),
+                ),
             )
         )
         field = _pupil_field(NPUP)
@@ -223,10 +245,10 @@ class TestLinearizeAnchors:
         This is the closed-form speckle-pair Jacobian column (the EFC
         anchor), independent of the linearize implementation's bookkeeping."""
         npix = NPUP
-        pupil = Grid.pupil(npix)
+        pupil = PixelGrid.pupil(npix)
         q, num_airy = 8, 8
         nfoc = int(2 * q * num_airy)
-        focal = Grid.focal(nfoc, 1.0 / q)
+        focal = PixelGrid.focal(nfoc, 1.0 / q, TEST_FRAME)
         path = OpticalPath(
             stages=(Stage("sci", Fraunhofer(grid_in=pupil, grid_out=focal)),)
         )
@@ -253,7 +275,7 @@ class TestLinearizeAnchors:
         use a mask-only chain; this is the coronagraph-bearing version)."""
         path = _vortex_path(NPUP)
         field = _pupil_field(NPUP)
-        basis = zernike_basis(Grid.pupil(NPUP), 4, rms_nm=1.0)
+        basis = zernike_basis(PixelGrid.pupil(NPUP), 4, rms_nm=1.0)
         lin_analytic = linearize(path, field, basis, wavelength_nm=WL)
         lin_jvp = linearize(path, field, basis, wavelength_nm=WL, method="jvp")
         scale = float(jnp.abs(lin_analytic.G).max())
@@ -296,10 +318,10 @@ class TestChromaticAdjointGradient:
 
     def test_adjoint_state_gradient_matches_autodiff_off_reference(self):
         npup, nfoc, ref_nm = 32, 48, 500.0
-        pupil = Grid.pupil(npup)
-        focal = Grid.focal(nfoc, 0.3)
+        pupil = PixelGrid.pupil(npup)
+        focal = PixelGrid.focal(nfoc, 0.3, TEST_FRAME)
         wavelengths = jnp.array([500.0, 750.0, 1000.0])
-        spectrum = Spectrum(wavelengths_nm=wavelengths, weights=jnp.ones(3) / 3)
+        spectrum = Spectrum(nodes_nm=wavelengths, weights=jnp.ones(3) / 3)
         prop = Fraunhofer(
             pupil,
             focal,
@@ -321,14 +343,14 @@ class TestChromaticAdjointGradient:
 
         def loss(data):
             out = prop.forward(pupil_field(data)).data
-            return jnp.sum(jnp.abs(out) ** 2 * mask) * focal.weights
+            return jnp.sum(jnp.abs(out) ** 2 * mask) * focal.pixel_area
 
         # jax.grad of a real loss in a complex input returns the conjugate of
         # dL/dRe + i dL/dIm.
         euclidean = jnp.conj(jax.grad(loss)(a))
         residual = prop.forward(pupil_field(a))
         masked = eqx.tree_at(lambda f: f.data, residual, residual.data * mask)
-        adjoint_state = 2.0 * pupil.weights * prop.backward(masked).data
+        adjoint_state = 2.0 * pupil.pixel_area * prop.backward(masked).data
         scale = float(jnp.abs(euclidean).max())
         assert scale > 0.0
         np.testing.assert_allclose(

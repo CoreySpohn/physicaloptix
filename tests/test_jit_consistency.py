@@ -11,8 +11,11 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+from conftest import TEST_FRAME
+from hwoutils.grids import PixelGrid
 
-from physicaloptix.core import Field, Grid, PlaneKind
+from physicaloptix.core import Field, PlaneKind
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import MultiScaleVortex, PhaseScreen, SampledOptic
 from physicaloptix.elements.modes import zernike_basis
 from physicaloptix.path import OpticalPath, Stage
@@ -36,13 +39,13 @@ def _disk(npix, radius=0.5):
 def _pupil_field(npix):
     return Field(
         data=jnp.asarray(_disk(npix)),
-        grid=Grid.pupil(npix),
+        grid=PixelGrid.pupil(npix),
         plane=PlaneKind.PUPIL,
     )
 
 
 def _coronagraph_path(npix):
-    pupil = Grid.pupil(npix)
+    pupil = PixelGrid.pupil(npix)
     screen = PhaseScreen(zernike_basis(pupil, 6, rms_nm=1.0), pupil, wavelength_nm=WL)
     stop = SampledOptic(
         transmission=jnp.asarray(np.abs(_disk(npix, radius=0.4))),
@@ -54,7 +57,12 @@ def _coronagraph_path(npix):
             Stage("dm", screen),
             Stage("vortex", MultiScaleVortex.build(charge=2, npup=npix, q=64)),
             Stage("lyot", stop),
-            Stage("sci", Fraunhofer(grid_in=pupil, grid_out=Grid.focal(64, 0.25))),
+            Stage(
+                "sci",
+                Fraunhofer(
+                    grid_in=pupil, grid_out=PixelGrid.focal(64, 0.25, TEST_FRAME)
+                ),
+            ),
         )
     )
 
@@ -63,7 +71,7 @@ class TestJitMatchesEager:
     def test_fresnel_forward(self):
         npix = 128
         prop = Fresnel(
-            grid=Grid.pupil(npix),
+            grid=PixelGrid.pupil(npix),
             distance_m=0.3,
             beam_diameter_m=0.02,
             wavelength_nm=WL,
@@ -100,8 +108,8 @@ class TestVmapMatchesLoop:
         agree exactly."""
         rng = np.random.default_rng(0)
         npup, nfoc = 32, 48
-        x = jnp.asarray(Grid.pupil(npup).coords)
-        u = jnp.asarray(Grid.focal(nfoc, 0.25).coords)
+        x = jnp.asarray(_grid_axis(PixelGrid.pupil(npup)))
+        u = jnp.asarray(_grid_axis(PixelGrid.focal(nfoc, 0.25, TEST_FRAME)))
         batch = jnp.asarray(
             rng.standard_normal((3, npup, npup))
             + 1j * rng.standard_normal((3, npup, npup))

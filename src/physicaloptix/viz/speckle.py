@@ -535,7 +535,7 @@ def plot_field_ellipse(
     accessor was added. (The private name is deliberately not written
     anywhere in this module, so a bare source grep for it is a valid gate.)
     Build ``draws`` as, for example, ``np.stack([field.delta_e(
-    wavelength_nm=w, time_s=t) for t in times])``.
+    wavelength_nm=w, time_d=field.epoch_d + t * s2d) for t in times])``.
 
     The false-alarm circle is origin-centered with radius
     ``sqrt(i_c + threshold * normalization)``: it is the contour of TOTAL

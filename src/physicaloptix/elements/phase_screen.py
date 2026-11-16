@@ -4,12 +4,12 @@ import dataclasses
 
 import equinox as eqx
 import jax.numpy as jnp
+from hwoutils.grids import PixelGrid
 from jaxtyping import Array
 
 from physicaloptix.core import (
     AbstractChromaticOp,
     Field,
-    Grid,
     PlaneKind,
     validate_field,
 )
@@ -30,7 +30,7 @@ class PhaseScreen(Element, AbstractChromaticOp):
     """
 
     basis: ModeBasis
-    grid: Grid
+    grid: PixelGrid
     wavelength_nm: float = eqx.field(static=True)
     plane: PlaneKind = eqx.field(static=True)
 
@@ -54,7 +54,7 @@ class PhaseScreen(Element, AbstractChromaticOp):
             raise ValueError(
                 f"PhaseScreen needs an opd basis, got kind={self.basis.kind!r}"
             )
-        npix = self.grid.npix
+        npix = self.grid.shape[0]
         if self.basis.B.shape[-2:] != (npix, npix):
             raise ValueError(
                 f"basis B {tuple(self.basis.B.shape)} does not match grid "
@@ -74,7 +74,7 @@ class PhaseScreen(Element, AbstractChromaticOp):
         if field.spectrum is None:
             phasor = jnp.exp(1j * 2.0 * jnp.pi * opd / self.wavelength_nm)
         else:
-            wavelengths = field.spectrum.wavelengths_nm[:, jnp.newaxis, jnp.newaxis]
+            wavelengths = field.spectrum.nodes_nm[:, jnp.newaxis, jnp.newaxis]
             phasor = jnp.exp(1j * 2.0 * jnp.pi * opd[jnp.newaxis] / wavelengths)
         return Field(
             data=field.data * phasor,
@@ -114,13 +114,13 @@ class SampledPhaseScreen(Element, AbstractChromaticOp):
     """
 
     opd_nm: Array
-    grid: Grid
+    grid: PixelGrid
     plane: PlaneKind = eqx.field(static=True, default=PlaneKind.PUPIL)
     wavelength_nm: float | None = eqx.field(static=True, default=None)
 
     def __check_init__(self):
         """Validate that the OPD map matches the grid."""
-        npix = self.grid.npix
+        npix = self.grid.shape[0]
         if self.opd_nm.shape != (npix, npix):
             raise ValueError(
                 f"opd_nm shape {self.opd_nm.shape} does not match grid ({npix}, {npix})"
@@ -155,7 +155,7 @@ class SampledPhaseScreen(Element, AbstractChromaticOp):
                 )
             phasor = jnp.exp(1j * 2.0 * jnp.pi * self.opd_nm / self.wavelength_nm)
         else:
-            wavelengths = field.spectrum.wavelengths_nm[:, jnp.newaxis, jnp.newaxis]
+            wavelengths = field.spectrum.nodes_nm[:, jnp.newaxis, jnp.newaxis]
             phasor = jnp.exp(1j * 2.0 * jnp.pi * self.opd_nm[jnp.newaxis] / wavelengths)
         return Field(
             data=field.data * phasor,

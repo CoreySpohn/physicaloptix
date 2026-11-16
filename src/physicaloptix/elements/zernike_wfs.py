@@ -18,9 +18,10 @@ linearizes this forward and inverts it.
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.grids import PixelGrid
 from jaxtyping import Array
 
-from physicaloptix.core import Field, Grid, PlaneKind, validate_field
+from physicaloptix.core import Field, PlaneKind, validate_field
 from physicaloptix.transforms.cmft import cmft_bwd, cmft_fwd
 
 
@@ -35,7 +36,7 @@ class ZernikeWavefrontSensor(eqx.Module):
         pupil_coords: 1D pupil coordinates in pupil diameters.
         focal_u: 1D focal coordinates in lambda/D.
         dot: Complex phase-dot transmission on the focal grid.
-        grid: The pupil ``Grid``.
+        grid: The pupil ``PixelGrid``.
         plane_in: PUPIL.
         plane_out: PUPIL.
     """
@@ -43,7 +44,7 @@ class ZernikeWavefrontSensor(eqx.Module):
     pupil_coords: Array
     focal_u: Array
     dot: Array
-    grid: Grid
+    grid: PixelGrid
     plane_in: PlaneKind = eqx.field(static=True)
     plane_out: PlaneKind = eqx.field(static=True)
 
@@ -83,7 +84,7 @@ class ZernikeWavefrontSensor(eqx.Module):
             pupil_coords=jnp.asarray(pupil_x),
             focal_u=jnp.asarray(u),
             dot=jnp.asarray(dot),
-            grid=Grid.pupil(npup),
+            grid=PixelGrid.pupil(npup),
             plane_in=PlaneKind.PUPIL,
             plane_out=PlaneKind.PUPIL,
         )

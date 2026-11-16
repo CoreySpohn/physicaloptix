@@ -4,8 +4,12 @@ import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import TEST_FRAME
+from hwoutils.grids import PixelGrid
+from hwoutils.spectral import Band
 
-from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind, Spectrum
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import SampledOptic
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.sources import broadcast_to_spectrum
@@ -16,8 +20,8 @@ NPIX = 16
 
 
 def _pupil_field(npix=NPIX):
-    grid = Grid.pupil(npix)
-    x = np.asarray(grid.coords)
+    grid = PixelGrid.pupil(npix)
+    x = np.asarray(_grid_axis(grid))
     xx, yy = np.meshgrid(x, x)
     disk = ((xx**2 + yy**2) <= 0.25).astype(complex)
     ramp = np.exp(1j * 2 * np.pi * 1.5 * xx)  # structure, so ports differ
@@ -26,7 +30,7 @@ def _pupil_field(npix=NPIX):
 
 
 def _binary_mask(npix=NPIX, radius=0.2):
-    x = np.asarray(Grid.pupil(npix).coords)
+    x = np.asarray(_grid_axis(PixelGrid.pupil(npix)))
     xx, yy = np.meshgrid(x, x)
     return ((xx**2 + yy**2) <= radius**2).astype(float)
 
@@ -136,7 +140,9 @@ class TestEnergySplit:
 class TestDichroic:
     def test_routes_color_and_conserves_per_wavelength(self):
         mono, grid = _pupil_field()
-        spectrum = Spectrum.tophat(500.0, 0.2, 3)  # 3 wavelengths
+        spectrum = Spectrum.from_band(
+            Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)), 3
+        )  # 3 wavelengths
         field = broadcast_to_spectrum(mono, spectrum)
         # Step from transmit to reflect across the band.
         split = BeamSplitter.dichroic(
@@ -184,7 +190,7 @@ class _Counting(eqx.Module):
 
 def _two_arm_system(npix=NPIX, counting=False):
     field, grid = _pupil_field(npix)
-    focal = Grid.focal(2 * npix, 0.5)
+    focal = PixelGrid.focal(2 * npix, 0.5, TEST_FRAME)
     disk = _binary_mask(npix, radius=0.45)
     stop = SampledOptic(
         transmission=jnp.asarray(disk), grid=grid, plane=PlaneKind.PUPIL
@@ -248,7 +254,9 @@ class TestOpticalSystem:
 
     def test_chromatic_threads_through(self):
         system, mono, _ = _two_arm_system()
-        spectrum = Spectrum.tophat(500.0, 0.1, 3)
+        spectrum = Spectrum.from_band(
+            Band(500.0 * (1 - 0.1 / 2), 500.0 * (1 + 0.1 / 2)), 3
+        )
         field = broadcast_to_spectrum(mono, spectrum)
         outs, _ = system.propagate(field)
         assert outs["sci"].data.shape[0] == 3
@@ -256,7 +264,7 @@ class TestOpticalSystem:
 
     def test_rejects_plane_discontinuity_at_construction(self):
         system, _, _ = _two_arm_system()
-        focal = Grid.focal(2 * NPIX, 0.5)
+        focal = PixelGrid.focal(2 * NPIX, 0.5, TEST_FRAME)
         bad_first = SampledOptic(
             transmission=jnp.ones((2 * NPIX, 2 * NPIX)),
             grid=focal,
@@ -305,7 +313,10 @@ class TestAsChannelPath:
 
     def test_flattened_chromatic_matches(self):
         system, mono, _ = _two_arm_system()
-        field = broadcast_to_spectrum(mono, Spectrum.tophat(500.0, 0.1, 3))
+        field = broadcast_to_spectrum(
+            mono,
+            Spectrum.from_band(Band(500.0 * (1 - 0.1 / 2), 500.0 * (1 + 0.1 / 2)), 3),
+        )
         outs, _ = system.propagate(field)
         flat, _ = system.as_channel_path("sci")
         out_flat, _ = flat.propagate(field)
@@ -352,8 +363,8 @@ class TestOptixstuffSeam:
         from physicaloptix.interop import PathCoronagraph
 
         npup = 32
-        grid = Grid.pupil(npup)
-        x = np.asarray(grid.coords)
+        grid = PixelGrid.pupil(npup)
+        x = np.asarray(_grid_axis(grid))
         xx, yy = np.meshgrid(x, x)
         disk = ((xx**2 + yy**2) <= 0.25).astype(float)
         lyot = ((xx**2 + yy**2) <= 0.45**2).astype(float)
@@ -400,9 +411,21 @@ class TestOptixstuffSeam:
             data=jnp.asarray(disk).astype(complex), grid=grid, plane=PlaneKind.PUPIL
         )
         flat, _ = system.as_channel_path("sci")
+        from optixstuff import SimplePrimary
+
         coronagraph = PathCoronagraph.from_path(
-            flat, field, diameter_m=6.0, owa_lod=6.0, pixel_scale_lod=0.5
+            flat,
+            field,
+            primary=SimplePrimary(
+                circumscribed_diameter_m=6.0, collecting_area_m2=9 * np.pi
+            ),
+            reference_wavelength_nm=600.0,
+            outer_working_angle_lod=6.0,
+            pixel_scale_lod=0.5,
         )
         assert isinstance(coronagraph, AbstractCoronagraph)
-        assert np.isfinite(float(coronagraph.IWA)) and float(coronagraph.IWA) > 0
-        assert np.all(np.isfinite(np.asarray(coronagraph.curve_throughput)))
+        assert (
+            np.isfinite(float(coronagraph.curves().iwa_lod))
+            and float(coronagraph.curves().iwa_lod) > 0
+        )
+        assert np.all(np.isfinite(np.asarray(coronagraph.curves().throughput)))

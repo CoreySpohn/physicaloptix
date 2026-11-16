@@ -5,7 +5,7 @@ direct-imaging simulation suite.
 
 `physicaloptix` turns a description of an optical system into point-spread
 functions by wave-optics propagation. It owns its propagation core: a
-plane-aware `Grid` / `Field` data model, the validated continuous-Fourier
+plane-aware `PixelGrid` / `Field` data model, the validated continuous-Fourier
 matrix-DFT pair, the multi-scale vortex, and the `OpticalPath` fold with
 construction-time sampling gates. Built on
 [JAX](https://github.com/google/jax) and
@@ -89,12 +89,18 @@ jax.config.update("jax_enable_x64", True)
 
 import jax.numpy as jnp
 import numpy as np
-from physicaloptix import Field, Fraunhofer, Grid, OpticalPath, PlaneKind, Stage
+from hwoutils.grids import PixelGrid
+from optixstuff import SimplePrimary
+
+primary = SimplePrimary(
+    circumscribed_diameter_m=1.0, collecting_area_m2=0.7853981633974483
+)
+from physicaloptix import Field, Fraunhofer, OpticalPath, PlaneKind, Stage
 
 # a pupil grid, a matching focal grid, and a clear circular aperture on it
-pupil = Grid.pupil(48)
-focal = Grid.focal(96, 0.2)
-x = np.asarray(pupil.coords)
+pupil = PixelGrid.pupil(48)
+focal = PixelGrid.focal(96, 0.2, primary.frame(500.0))
+x = np.asarray(_grid_axis(pupil))
 xg, yg = np.meshgrid(x, x)
 aperture = (np.hypot(xg, yg) <= 0.5).astype(complex)
 flat = Field(data=jnp.asarray(aperture), grid=pupil, plane=PlaneKind.PUPIL)

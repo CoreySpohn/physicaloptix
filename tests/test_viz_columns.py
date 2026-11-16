@@ -13,7 +13,9 @@ from matplotlib.colors import to_rgba
 # collectible when the viz extra is present.
 pytest.importorskip("eyepiece")
 
-from physicaloptix import Field, Grid, PlaneKind, Spectrum
+from hwoutils.grids import PixelGrid
+
+from physicaloptix import Field, PlaneKind, Spectrum
 from physicaloptix.viz import field_columns
 
 KEYS = ("pupil", "before", "after", "image")
@@ -287,12 +289,12 @@ def test_blank_hatch_without_keys_draws_no_swatch():
 
 
 def test_field_input_carries_its_grid_extent():
-    grid = Grid(npix=16, dx=0.25)
+    grid = PixelGrid.regular((16, 16), 0.25, "pupil_diameter")
     field = Field(
         data=jnp.asarray(_sequence()["pupil"]), grid=grid, plane=PlaneKind.PUPIL
     )
     res = field_columns([field])
-    e = float(grid.extent)
+    e = float(grid.shape[0] * grid.step / 2)
     assert tuple(res.artists["image"][0].get_extent()) == (-e, e, -e, e)
 
 
@@ -329,8 +331,8 @@ def test_rejects_malformed_arguments(kwargs, match):
 
 
 def test_rejects_a_chromatic_field():
-    grid = Grid(npix=8, dx=0.25)
-    spec = Spectrum(wavelengths_nm=jnp.linspace(500.0, 600.0, 3), weights=jnp.ones(3))
+    grid = PixelGrid.regular((8, 8), 0.25, "pupil_diameter")
+    spec = Spectrum(nodes_nm=jnp.linspace(500.0, 600.0, 3), weights=jnp.ones(3))
     field = Field(
         data=jnp.ones((3, 8, 8), dtype=complex),
         grid=grid,

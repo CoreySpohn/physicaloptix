@@ -4,8 +4,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import TEST_FRAME
+from hwoutils.grids import PixelGrid
+from hwoutils.spectral import Band
 
-from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind, Spectrum
 from physicaloptix.diagnostics import fresnel_pad_factor, fresnel_sampling_parameter
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.sources import broadcast_to_spectrum
@@ -86,14 +89,14 @@ def _fresnel(grid, alpha, *, plane_out=PlaneKind.INTERMEDIATE, **kw):
 
 
 def _pupil(data, npix):
-    return Field(data=data, grid=Grid.pupil(npix), plane=PlaneKind.PUPIL)
+    return Field(data=data, grid=PixelGrid.pupil(npix), plane=PlaneKind.PUPIL)
 
 
 class TestFresnelSamplingGate:
     def test_matches_physical_length_ratio(self):
         """p equals the physical D / sqrt(N lambda z) for a consistent geometry."""
         npix = 128
-        grid = Grid.pupil(npix)  # unit-diameter beam grid, extent L = 1
+        grid = PixelGrid.pupil(npix)  # unit-diameter beam grid, extent L = 1
         d_m, z_m, lam_m = 0.027, 0.5, 500e-9
         alpha = lam_m * z_m / d_m**2
         p = fresnel_sampling_parameter(grid, alpha)
@@ -101,33 +104,37 @@ class TestFresnelSamplingGate:
         np.testing.assert_allclose(p, p_physical, rtol=1e-12)
 
     def test_polarity_larger_alpha_is_worse(self):
-        grid = Grid.pupil(256)
+        grid = PixelGrid.pupil(256)
         assert fresnel_sampling_parameter(grid, 1e-4) > fresnel_sampling_parameter(
             grid, 1e-2
         )
 
     def test_zero_distance_is_perfectly_sampled(self):
-        assert np.isinf(fresnel_sampling_parameter(Grid.pupil(64), 0.0))
+        assert np.isinf(fresnel_sampling_parameter(PixelGrid.pupil(64), 0.0))
 
     def test_padding_improves_sampling_as_sqrt_of_points(self):
         """A 4x-padded grid (same dx) gains exactly 2x in the sampling ratio."""
         alpha = 1e-2
-        p1 = fresnel_sampling_parameter(Grid.pupil(128), alpha)
-        padded = Grid(npix=512, dx=1.0 / 128)  # 4x points, same pitch
+        p1 = fresnel_sampling_parameter(PixelGrid.pupil(128), alpha)
+        padded = PixelGrid.regular(
+            (512, 512), 1.0 / 128, "pupil_diameter"
+        )  # 4x points, same pitch
         p4 = fresnel_sampling_parameter(padded, alpha)
         np.testing.assert_allclose(p4 / p1, 2.0, rtol=1e-12)
 
     def test_pad_factor_reaches_nyquist(self):
-        grid = Grid.pupil(256)
+        grid = PixelGrid.pupil(256)
         alpha = 5e-3  # undersampled: p < 1
         assert fresnel_sampling_parameter(grid, alpha) < 1.0
         npad = fresnel_pad_factor(grid, alpha)
         assert npad >= 2
-        padded = Grid(npix=256 * npad, dx=grid.dx)
+        padded = PixelGrid.regular(
+            (256 * npad, 256 * npad), grid.step, "pupil_diameter"
+        )
         assert fresnel_sampling_parameter(padded, alpha) >= 1.0
 
     def test_pad_factor_is_one_when_well_sampled(self):
-        assert fresnel_pad_factor(Grid.pupil(512), 1e-6) == 1
+        assert fresnel_pad_factor(PixelGrid.pupil(512), 1e-6) == 1
 
 
 class TestFresnelParaxial:
@@ -135,7 +142,7 @@ class TestFresnelParaxial:
         """Backward (the adjoint = propagate -z) inverts forward, to roundoff."""
         npix = 256
         field = _pupil(_asymmetric_field(npix), npix)
-        prop = _fresnel(Grid.pupil(npix), 3e-3)
+        prop = _fresnel(PixelGrid.pupil(npix), 3e-3)
         back = prop.backward(prop.forward(field))
         np.testing.assert_allclose(
             np.asarray(back.data), np.asarray(field.data), atol=1e-12
@@ -145,7 +152,7 @@ class TestFresnelParaxial:
         """The no-fftshift form must be exact for odd npix too (shift guard)."""
         npix = 255
         field = _pupil(_asymmetric_field(npix), npix)
-        prop = _fresnel(Grid.pupil(npix), 3e-3)
+        prop = _fresnel(PixelGrid.pupil(npix), 3e-3)
         back = prop.backward(prop.forward(field))
         np.testing.assert_allclose(
             np.asarray(back.data), np.asarray(field.data), atol=1e-12
@@ -154,7 +161,7 @@ class TestFresnelParaxial:
     def test_conserves_energy(self):
         npix = 256
         field = _pupil(_asymmetric_field(npix), npix)
-        prop = _fresnel(Grid.pupil(npix), 5e-3)
+        prop = _fresnel(PixelGrid.pupil(npix), 5e-3)
         e_in = float(jnp.sum(jnp.abs(field.data) ** 2))
         e_out = float(jnp.sum(jnp.abs(prop.forward(field).data) ** 2))
         assert abs(e_out - e_in) / e_in < 1e-12
@@ -163,7 +170,7 @@ class TestFresnelParaxial:
         npix = 128
         field = _pupil(_asymmetric_field(npix), npix)
         prop = Fresnel(
-            grid=Grid.pupil(npix),
+            grid=PixelGrid.pupil(npix),
             distance_m=0.0,
             beam_diameter_m=DIAM_M,
             wavelength_nm=WL,
@@ -184,7 +191,7 @@ class TestFresnelParaxial:
         field = _pupil(_gaussian(npix, w0=0.12, carrier_nu0=nu0), npix)
         # The input intensity is centered (the carrier is pure phase).
         assert abs(_centroid_x(field.data, 1.0 / npix)) < 1e-6
-        out = _fresnel(Grid.pupil(npix), alpha).forward(field)
+        out = _fresnel(PixelGrid.pupil(npix), alpha).forward(field)
         shift = _centroid_x(out.data, 1.0 / npix)
         np.testing.assert_allclose(shift, alpha * nu0, rtol=2e-3)
 
@@ -198,7 +205,7 @@ class TestFresnelParaxial:
         rms0 = _rms_radius(field.data, 1.0 / npix)
         for ratio in (0.5, 1.0):
             alpha = ratio * alpha_r
-            out = _fresnel(Grid.pupil(npix), alpha).forward(field)
+            out = _fresnel(PixelGrid.pupil(npix), alpha).forward(field)
             broaden = _rms_radius(out.data, 1.0 / npix) / rms0
             np.testing.assert_allclose(broaden, np.sqrt(1.0 + ratio**2), rtol=1e-3)
 
@@ -207,7 +214,7 @@ class TestFresnelParaxial:
         npix = 256
         alpha = 4e-3
         field = _pupil(_gaussian(npix, w0=0.1, carrier_nu0=2.0), npix)
-        out = _fresnel(Grid.pupil(npix), alpha).forward(field)
+        out = _fresnel(PixelGrid.pupil(npix), alpha).forward(field)
         ref = _direct_fresnel(field.data, 1.0 / npix, alpha)
         rel = np.linalg.norm(np.asarray(out.data) - ref) / np.linalg.norm(ref)
         assert rel < 5e-3
@@ -216,24 +223,24 @@ class TestFresnelParaxial:
         npix = 64
         focal = Field(
             data=jnp.ones((npix, npix), complex),
-            grid=Grid.pupil(npix),
+            grid=PixelGrid.pupil(npix),
             plane=PlaneKind.FOCAL,
         )
         with pytest.raises(ValueError):
-            _fresnel(Grid.pupil(npix), 1e-3).forward(focal)
+            _fresnel(PixelGrid.pupil(npix), 1e-3).forward(focal)
 
     def test_rejects_grid_mismatch(self):
         npix = 64
         field = _pupil(_asymmetric_field(npix), npix)
-        prop = _fresnel(Grid.pupil(128), 1e-3)
+        prop = _fresnel(PixelGrid.pupil(128), 1e-3)
         with pytest.raises(ValueError, match="grid"):
             prop.forward(field)
 
     def test_composes_as_a_relay_in_optical_path(self):
         """Two Fresnel relay hops then a Fraunhofer reach the focal plane."""
         npix = 64
-        pupil = Grid.pupil(npix)
-        focal = Grid.focal(32, 0.5)
+        pupil = PixelGrid.pupil(npix)
+        focal = PixelGrid.focal(32, 0.5, TEST_FRAME)
         path = OpticalPath(
             stages=(
                 Stage("out", _fresnel(pupil, 1e-3)),
@@ -258,7 +265,7 @@ class TestFresnelParaxial:
     def test_is_differentiable_through_a_phase_parameter(self):
         """A defocus coefficient on the input yields a finite, nonzero gradient."""
         npix = 64
-        pupil = Grid.pupil(npix)
+        pupil = PixelGrid.pupil(npix)
         x = _coords(npix, 1.0 / npix)
         xg, yg = np.meshgrid(x, x)
         base = jnp.asarray(_gaussian(npix, 0.2))
@@ -276,7 +283,7 @@ class TestFresnelParaxial:
 
     def test_gate_warns_by_default_and_can_raise(self):
         """An undersampled configuration warns by default and raises on policy."""
-        grid = Grid.pupil(256)
+        grid = PixelGrid.pupil(256)
         big_alpha = 5e-2  # p ~ 0.28
         with pytest.warns(UserWarning, match="undersampled"):
             prop = _fresnel(grid, big_alpha, on_undersampled="warn")
@@ -286,7 +293,7 @@ class TestFresnelParaxial:
 
     def test_rejects_bad_undersampled_policy(self):
         with pytest.raises(ValueError, match="raise/warn/record"):
-            _fresnel(Grid.pupil(64), 1e-3, on_undersampled="explode")
+            _fresnel(PixelGrid.pupil(64), 1e-3, on_undersampled="explode")
 
 
 class TestPlaneWaveEigenfunction:
@@ -307,7 +314,7 @@ class TestPlaneWaveEigenfunction:
         x = _coords(npix, 1.0 / npix)
         xg, yg = np.meshgrid(x, x)
         carrier = jnp.asarray(np.exp(2j * np.pi * (nx * xg + ny * yg)))
-        prop = _fresnel(Grid.pupil(npix), alpha, method=method)
+        prop = _fresnel(PixelGrid.pupil(npix), alpha, method=method)
         out = prop.forward(_pupil(carrier, npix))
         nu2 = nx**2 + ny**2
         if method == "fresnel":
@@ -330,9 +337,11 @@ class TestPlaneWaveEigenfunction:
         x = _coords(npix, 1.0 / npix)
         xg, yg = np.meshgrid(x, x)
         carrier = jnp.asarray(np.exp(2j * np.pi * (nx * xg + ny * yg)))
-        prop = _fresnel(Grid.pupil(npix), alpha)
+        prop = _fresnel(PixelGrid.pupil(npix), alpha)
         out = prop.backward(
-            Field(data=carrier, grid=Grid.pupil(npix), plane=PlaneKind.INTERMEDIATE)
+            Field(
+                data=carrier, grid=PixelGrid.pupil(npix), plane=PlaneKind.INTERMEDIATE
+            )
         )
         transfer = np.exp(1j * np.pi * alpha * (nx**2 + ny**2))
         np.testing.assert_allclose(
@@ -344,12 +353,14 @@ class TestFresnelChromatic:
     def test_matches_per_slice_mono(self):
         """Each chromatic slice propagates with its own lambda-scaled alpha."""
         npix = 128
-        spectrum = Spectrum.tophat(500.0, 0.2, 3)  # 450, 500, 550 nm
+        spectrum = Spectrum.from_band(
+            Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)), 3
+        )  # 450, 500, 550 nm
         base = _pupil(_gaussian(npix, 0.15, carrier_nu0=2.0), npix)
         chrom = broadcast_to_spectrum(base, spectrum)
         distance_m = _distance_for_alpha(2e-3)
         prop = Fresnel(
-            grid=Grid.pupil(npix),
+            grid=PixelGrid.pupil(npix),
             distance_m=distance_m,
             beam_diameter_m=DIAM_M,
             wavelength_nm=500.0,
@@ -359,9 +370,9 @@ class TestFresnelChromatic:
         )
         out = prop.forward(chrom)
         assert out.data.shape == (3, npix, npix)
-        for k, wl in enumerate(np.asarray(spectrum.wavelengths_nm)):
+        for k, wl in enumerate(np.asarray(spectrum.nodes_nm)):
             mono = Fresnel(
-                grid=Grid.pupil(npix),
+                grid=PixelGrid.pupil(npix),
                 distance_m=distance_m,
                 beam_diameter_m=DIAM_M,
                 wavelength_nm=float(wl),
@@ -375,10 +386,12 @@ class TestFresnelChromatic:
 
     def test_chromatic_round_trip(self):
         npix = 128
-        spectrum = Spectrum.tophat(600.0, 0.15, 4)
+        spectrum = Spectrum.from_band(
+            Band(600.0 * (1 - 0.15 / 2), 600.0 * (1 + 0.15 / 2)), 4
+        )
         chrom = broadcast_to_spectrum(_pupil(_gaussian(npix, 0.15), npix), spectrum)
         prop = Fresnel(
-            grid=Grid.pupil(npix),
+            grid=PixelGrid.pupil(npix),
             distance_m=_distance_for_alpha(2e-3),
             beam_diameter_m=DIAM_M,
             wavelength_nm=600.0,
@@ -393,7 +406,7 @@ class TestFresnelChromatic:
 
     def test_gate_uses_reddest_wavelength(self):
         """The construction gate keys on max_wavelength_nm (alpha grows with lambda)."""
-        grid = Grid.pupil(256)
+        grid = PixelGrid.pupil(256)
         distance_m = _distance_for_alpha(2e-2, wavelength_nm=550.0)
         common = dict(
             grid=grid,
@@ -415,8 +428,10 @@ class TestFresnelExact:
         npix = 128
         field = _pupil(_gaussian(npix, 0.12, carrier_nu0=2.0), npix)
         alpha = 3e-3
-        paraxial = _fresnel(Grid.pupil(npix), alpha, method="fresnel").forward(field)
-        exact = _fresnel(Grid.pupil(npix), alpha, method="exact").forward(field)
+        paraxial = _fresnel(PixelGrid.pupil(npix), alpha, method="fresnel").forward(
+            field
+        )
+        exact = _fresnel(PixelGrid.pupil(npix), alpha, method="exact").forward(field)
         rel = np.linalg.norm(
             np.asarray(exact.data) - np.asarray(paraxial.data)
         ) / np.linalg.norm(np.asarray(paraxial.data))
@@ -425,7 +440,7 @@ class TestFresnelExact:
     def test_exact_diverges_from_paraxial_at_wide_angle(self):
         """A small beam (large beta) makes the non-paraxial term measurable."""
         npix = 128
-        pupil = Grid.pupil(npix)
+        pupil = PixelGrid.pupil(npix)
         field = _pupil(_gaussian(npix, 0.12, carrier_nu0=6.0), npix)
         # A ~5 micron beam: beta = lambda / D is no longer negligible.
         kw = dict(
@@ -449,7 +464,7 @@ class TestFresnelExact:
         it does not clamp to |H| = 1 or amplify."""
         npix = 64
         prop = Fresnel(
-            grid=Grid.pupil(npix),
+            grid=PixelGrid.pupil(npix),
             distance_m=1e-4,
             beam_diameter_m=1e-5,  # ~10 micron beam: beta * nu_max > 1
             wavelength_nm=WL,
@@ -465,7 +480,7 @@ class TestFresnelExact:
 
     def test_rejects_bad_method(self):
         with pytest.raises(ValueError, match="method"):
-            _fresnel(Grid.pupil(64), 1e-3, method="quantum")
+            _fresnel(PixelGrid.pupil(64), 1e-3, method="quantum")
 
 
 class TestFresnelPadding:
@@ -474,8 +489,8 @@ class TestFresnelPadding:
         (already wrap-free) result."""
         npix = 128
         field = _pupil(_gaussian(npix, 0.08, carrier_nu0=2.0), npix)
-        unpadded = _fresnel(Grid.pupil(npix), 3e-3, npad=1).forward(field)
-        padded = _fresnel(Grid.pupil(npix), 3e-3, npad=2).forward(field)
+        unpadded = _fresnel(PixelGrid.pupil(npix), 3e-3, npad=1).forward(field)
+        padded = _fresnel(PixelGrid.pupil(npix), 3e-3, npad=2).forward(field)
         rel = np.linalg.norm(
             np.asarray(padded.data) - np.asarray(unpadded.data)
         ) / np.linalg.norm(np.asarray(unpadded.data))
@@ -487,14 +502,14 @@ class TestFresnelPadding:
         npix, npad = 64, 4
         alpha = 8e-3
         field_small = _gaussian(npix, 0.1, carrier_nu0=3.0)
-        padded = _fresnel(Grid.pupil(npix), alpha, npad=npad).forward(
+        padded = _fresnel(PixelGrid.pupil(npix), alpha, npad=npad).forward(
             _pupil(field_small, npix)
         )
         n = npix * npad
         lo = (n - npix) // 2
         big = np.zeros((n, n), complex)
         big[lo : lo + npix, lo : lo + npix] = np.asarray(field_small)
-        big_grid = Grid(npix=n, dx=1.0 / npix)
+        big_grid = PixelGrid.regular((n, n), 1.0 / npix, "pupil_diameter")
         native = Fresnel(
             grid=big_grid,
             distance_m=_distance_for_alpha(alpha),
@@ -509,4 +524,4 @@ class TestFresnelPadding:
 
     def test_rejects_bad_npad(self):
         with pytest.raises(ValueError, match="npad"):
-            _fresnel(Grid.pupil(64), 1e-3, npad=0)
+            _fresnel(PixelGrid.pupil(64), 1e-3, npad=0)

@@ -50,6 +50,7 @@ import math
 import equinox as eqx
 import numpy as np
 import pytest
+from hwoutils.grids import Image, PixelGrid
 
 from physicaloptix.instruments import (
     NIRCamBand,
@@ -156,7 +157,7 @@ def _config(bench, stage, source, **overrides):
 def _mono_image(config, inputs):
     path, field = build_nircam(config, inputs)
     out, _ = path.propagate(field)
-    return np.asarray(out.intensity()) * out.grid.weights
+    return np.asarray(out.intensity().data) * out.grid.pixel_area
 
 
 def _mono_reference(bench, stage, source):
@@ -228,7 +229,20 @@ def test_monochromatic_case(bench, stage, source, bound, record_case):
     )
     config = _config(bench, stage, source)
     po = _mono_image(config, bench["inputs"])
-    det = np.asarray(integrate_detector_pixels(po, config.oversample))
+    det = np.asarray(
+        integrate_detector_pixels(
+            Image(
+                po,
+                PixelGrid.regular(
+                    po.shape, config.pixel_scale_arcsec / config.oversample, "arcsec"
+                ),
+                (),
+                "per_pixel",
+                "stellar_flux_fraction",
+            ),
+            config.oversample,
+        ).data
+    )
     _check(
         f"{_case_id(stage, source)} (3350 nm)",
         po,
@@ -253,8 +267,21 @@ def test_f335m_band_case(bench, stage, source, bound, record_case):
         float(a.max()) for a in _band_reference(bench, "a-pupil", (0.0, 0.0))
     )
     config = _config(bench, stage, source)
-    po = np.asarray(nircam_band_image(config, bench["inputs"], bench["band"]))
-    det = np.asarray(integrate_detector_pixels(po, config.oversample))
+    po = np.asarray(nircam_band_image(config, bench["inputs"], bench["band"]).data)
+    det = np.asarray(
+        integrate_detector_pixels(
+            Image(
+                po,
+                PixelGrid.regular(
+                    po.shape, config.pixel_scale_arcsec / config.oversample, "arcsec"
+                ),
+                (),
+                "per_pixel",
+                "stellar_flux_fraction",
+            ),
+            config.oversample,
+        ).data
+    )
     _check(
         f"{_case_id(stage, source)} (F335M, {BAND_NODES} nodes)",
         po,

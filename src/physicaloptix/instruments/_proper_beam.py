@@ -37,7 +37,7 @@ class PilotBeam:
 
     Attributes:
         lam_m: Wavelength.
-        n: Grid size (even).
+        n: PixelGrid size (even).
         dx: Sample spacing of the field at ``z``.
         z: Position along the beam.
         z_w0: Position of the pilot waist.
@@ -71,7 +71,7 @@ class PilotBeam:
         Args:
             beam_diameter_m: Entrance beam diameter.
             lam_m: Wavelength.
-            n: Grid size; must be even.
+            n: PixelGrid size; must be even.
             beam_diam_fraction: Fraction of the grid the beam diameter spans.
 
         Raises:

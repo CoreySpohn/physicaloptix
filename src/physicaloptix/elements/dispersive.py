@@ -6,12 +6,12 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.grids import PixelGrid
 from jaxtyping import Array
 
 from physicaloptix.core import (
     AbstractChromaticOp,
     Field,
-    Grid,
     PlaneKind,
     validate_field,
 )
@@ -42,7 +42,7 @@ class DispersiveScreen(Element, AbstractChromaticOp):
     basis: ModeBasis
     kernel: Array
     table_wavelengths_nm: Array
-    grid: Grid
+    grid: PixelGrid
     wavelength_nm: float = eqx.field(static=True)
     plane: PlaneKind = eqx.field(static=True)
 
@@ -77,7 +77,7 @@ class DispersiveScreen(Element, AbstractChromaticOp):
 
     def __check_init__(self):
         """Validate basis/grid/kernel shapes and table monotonicity."""
-        npix = self.grid.npix
+        npix = self.grid.shape[0]
         if self.basis.B.shape[-2:] != (npix, npix):
             raise ValueError(
                 f"basis B {tuple(self.basis.B.shape)} does not match grid "
@@ -131,7 +131,7 @@ class DispersiveScreen(Element, AbstractChromaticOp):
             d = self.kernel_at(self.wavelength_nm)[:, 0]
             log_response = jnp.tensordot(self.basis.coeffs * d, self.basis.B, axes=1)
         else:
-            d = self.kernel_at(field.spectrum.wavelengths_nm)
+            d = self.kernel_at(field.spectrum.nodes_nm)
             log_response = jnp.einsum(
                 "m,mw,myx->wyx", self.basis.coeffs, d, self.basis.B
             )

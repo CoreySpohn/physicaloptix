@@ -4,9 +4,14 @@ import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import TEST_FRAME
+from hwoutils.constants import s2d
+from hwoutils.grids import Image, PixelGrid
+from optixstuff import SimplePrimary
 from optixstuff.coronagraph import AbstractCoronagraph
 
-from physicaloptix.core import Field, Grid, PlaneKind
+from physicaloptix.core import Field, PlaneKind
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import MultiScaleVortex, SampledOptic
 from physicaloptix.interop import PathCoronagraph
 from physicaloptix.path import OpticalPath, Stage
@@ -14,17 +19,24 @@ from physicaloptix.path import OpticalPath, Stage
 NPUP = 64
 DIAMETER_M = 6.0
 OWA = 10.0
+PRIMARY = SimplePrimary(
+    circumscribed_diameter_m=DIAMETER_M, collecting_area_m2=np.pi * DIAMETER_M**2 / 4
+)
+
+
+def _grid(shape, step):
+    return PixelGrid.regular(shape, step, "lod", frame=PRIMARY.frame(600.0))
 
 
 def _disk(grid, radius):
-    x = np.asarray(grid.coords)
+    x = np.asarray(_grid_axis(grid))
     xx, yy = np.meshgrid(x, x)
     return ((xx**2 + yy**2) <= radius**2).astype(float)
 
 
 @pytest.fixture(scope="module")
 def vortex_coronagraph():
-    pupil_grid = Grid.pupil(NPUP)
+    pupil_grid = PixelGrid.pupil(NPUP)
     disk = _disk(pupil_grid, 0.5)
     lyot = _disk(pupil_grid, 0.45)
     core_path = OpticalPath(
@@ -53,8 +65,9 @@ def vortex_coronagraph():
     return PathCoronagraph.from_path(
         core_path,
         field,
-        diameter_m=DIAMETER_M,
-        owa_lod=OWA,
+        primary=PRIMARY,
+        reference_wavelength_nm=600.0,
+        outer_working_angle_lod=OWA,
         pixel_scale_lod=0.5,
     )
 
@@ -62,7 +75,7 @@ def vortex_coronagraph():
 @pytest.fixture(scope="module")
 def bare_telescope():
     """A no-mask adapter: the pupil stop is the only stage."""
-    pupil_grid = Grid.pupil(NPUP)
+    pupil_grid = PixelGrid.pupil(NPUP)
     disk = _disk(pupil_grid, 0.5)
     core_path = OpticalPath(
         stages=(
@@ -84,8 +97,9 @@ def bare_telescope():
     return PathCoronagraph.from_path(
         core_path,
         field,
-        diameter_m=DIAMETER_M,
-        owa_lod=OWA,
+        primary=PRIMARY,
+        reference_wavelength_nm=600.0,
+        outer_working_angle_lod=OWA,
         pixel_scale_lod=0.5,
     )
 
@@ -104,10 +118,14 @@ class TestConformance:
             return (
                 coro.throughput(sep, wl),
                 coro.core_area(sep, wl),
-                coro.core_mean_intensity(sep, wl),
+                coro.leakage_density_lod2(sep, wl),
                 coro.occulter_transmission(sep, wl),
-                coro.on_axis_psf(wl, _lod_rad(wl) * 0.5, 32),
-                coro.off_axis_psf(wl, sep, _lod_rad(wl) * 0.5, 32),
+                coro.on_axis_psf(
+                    wl, _grid((32, 32), (_lod_rad(wl) * 0.5) / _lod_rad(wl))
+                ).data,
+                coro.off_axis_psf(
+                    wl, sep, _grid((32, 32), (_lod_rad(wl) * 0.5) / _lod_rad(wl))
+                ).data,
             )
 
         results = consumer(vortex_coronagraph)
@@ -129,14 +147,32 @@ class TestNormalization:
         +-32 lambda/D band of a 64-sample pupil) captures all the energy;
         requesting a wider field would alias (the sampling gate warns).
         """
-        psf = np.asarray(bare_telescope.on_axis_psf(600.0, _lod_rad(600.0) * 0.5, 128))
+        psf = np.asarray(
+            bare_telescope.on_axis_psf(
+                600.0, _grid((128, 128), (_lod_rad(600.0) * 0.5) / _lod_rad(600.0))
+            ).data
+        )
         np.testing.assert_allclose(psf.sum(), 1.0, rtol=1e-10)
 
     def test_on_axis_is_suppressed_relative_to_off_axis(self, vortex_coronagraph):
         ps = _lod_rad(600.0) * 0.5
-        on = float(np.sum(np.asarray(vortex_coronagraph.on_axis_psf(600.0, ps, 64))))
+        on = float(
+            np.sum(
+                np.asarray(
+                    vortex_coronagraph.on_axis_psf(
+                        600.0, _grid((64, 64), (ps) / _lod_rad(600.0))
+                    ).data
+                )
+            )
+        )
         off = float(
-            np.sum(np.asarray(vortex_coronagraph.off_axis_psf(600.0, 6.0, ps, 64)))
+            np.sum(
+                np.asarray(
+                    vortex_coronagraph.off_axis_psf(
+                        600.0, 6.0, _grid((64, 64), (ps) / _lod_rad(600.0))
+                    ).data
+                )
+            )
         )
         assert on < off / 10.0
 
@@ -144,14 +180,22 @@ class TestNormalization:
 class TestImageInterface:
     def test_achromatic_pixel_scale_conversion(self, vortex_coronagraph):
         """Same lambda/D sampling at two wavelengths gives the same PSF."""
-        psf_a = vortex_coronagraph.on_axis_psf(500.0, _lod_rad(500.0) * 0.5, 48)
-        psf_b = vortex_coronagraph.on_axis_psf(1000.0, _lod_rad(1000.0) * 0.5, 48)
+        psf_a = vortex_coronagraph.on_axis_psf(
+            500.0, _grid((48, 48), (_lod_rad(500.0) * 0.5) / _lod_rad(500.0))
+        ).data
+        psf_b = vortex_coronagraph.on_axis_psf(
+            1000.0, _grid((48, 48), (_lod_rad(1000.0) * 0.5) / _lod_rad(1000.0))
+        ).data
         np.testing.assert_allclose(np.asarray(psf_a), np.asarray(psf_b), rtol=1e-12)
 
     def test_off_axis_peak_lands_at_separation(self, vortex_coronagraph):
         sep, ps_lod, npix = 6.0, 0.5, 64
         psf = np.asarray(
-            vortex_coronagraph.off_axis_psf(600.0, sep, _lod_rad(600.0) * ps_lod, npix)
+            vortex_coronagraph.off_axis_psf(
+                600.0,
+                sep,
+                _grid((npix, npix), (_lod_rad(600.0) * ps_lod) / _lod_rad(600.0)),
+            ).data
         )
         _, cx = np.unravel_index(int(np.argmax(psf)), psf.shape)
         x_lod = (cx - npix / 2 + 0.5) * ps_lod
@@ -160,10 +204,10 @@ class TestImageInterface:
 
 class TestDerivedCurves:
     def test_iwa_is_derived_and_inside_the_field(self, vortex_coronagraph):
-        assert 0.0 < vortex_coronagraph.IWA < OWA
+        assert 0.0 < vortex_coronagraph.curves().iwa_lod < OWA
 
     def test_owa_is_design_metadata(self, vortex_coronagraph):
-        assert vortex_coronagraph.OWA == OWA
+        assert vortex_coronagraph.outer_working_angle_lod == OWA
 
     def test_throughput_rises_from_the_null(self, vortex_coronagraph):
         near = float(vortex_coronagraph.throughput(0.5, 600.0))
@@ -175,8 +219,8 @@ class TestDerivedCurves:
         area = float(vortex_coronagraph.core_area(0.8 * OWA, 600.0))
         assert area > 0.0
 
-    def test_core_mean_intensity_is_deep(self, vortex_coronagraph):
-        cmi = float(vortex_coronagraph.core_mean_intensity(0.8 * OWA, 600.0))
+    def test_leakage_density_lod2_is_deep(self, vortex_coronagraph):
+        cmi = float(vortex_coronagraph.leakage_density_lod2(0.8 * OWA, 600.0))
         assert 0.0 <= cmi < 1e-3
 
     def test_occulter_transmission_is_a_fraction(self, vortex_coronagraph):
@@ -184,20 +228,23 @@ class TestDerivedCurves:
         assert 0.0 <= occ <= 1.0 + 1e-9
 
     def test_time_and_wavelength_arguments_accepted(self, vortex_coronagraph):
-        value = vortex_coronagraph.throughput(5.0, 750.0, time_s=3600.0)
+        value = vortex_coronagraph.throughput(5.0, 750.0, time_d=3600.0 * s2d)
         assert np.isfinite(float(value))
 
 
 class TestConstruction:
     def test_rejects_core_path_not_ending_in_pupil(self, vortex_coronagraph):
-        pupil_grid = Grid.pupil(NPUP)
+        pupil_grid = PixelGrid.pupil(NPUP)
         from physicaloptix.transforms import Fraunhofer
 
         bad_path = OpticalPath(
             stages=(
                 Stage(
                     "science",
-                    Fraunhofer(grid_in=pupil_grid, grid_out=Grid.focal(32, 0.5)),
+                    Fraunhofer(
+                        grid_in=pupil_grid,
+                        grid_out=PixelGrid.focal(32, 0.5, TEST_FRAME),
+                    ),
                 ),
             )
         )
@@ -210,8 +257,9 @@ class TestConstruction:
             PathCoronagraph.from_path(
                 bad_path,
                 field,
-                diameter_m=DIAMETER_M,
-                owa_lod=OWA,
+                primary=PRIMARY,
+                reference_wavelength_nm=600.0,
+                outer_working_angle_lod=OWA,
             )
 
 
@@ -223,21 +271,19 @@ class TestSamplingExplicitContract:
     def test_stellar_map_matches_on_axis_psf_at_same_sampling(self, vortex_coronagraph):
         c = vortex_coronagraph
         via_contract = np.asarray(
-            c.stellar_map(self.WL, 0.0, pixel_scale_lod=0.25, shape=(96, 96))
+            c.stellar_map(self.WL, 0.0, grid=_grid((96, 96), 0.25)).data
         )
         rad = 0.25 * self.WL * 1e-9 / DIAMETER_M
-        via_psf = np.asarray(c.on_axis_psf(self.WL, rad, 96))
+        via_psf = np.asarray(
+            c.on_axis_psf(self.WL, _grid((96, 96), (rad) / _lod_rad(self.WL))).data
+        )
         np.testing.assert_allclose(via_contract, via_psf, rtol=1e-10)
 
     def test_stellar_map_total_is_sampling_invariant(self, vortex_coronagraph):
         """Same leaked-energy total at two target samplings covering the FOV."""
         c = vortex_coronagraph
-        fine = np.asarray(
-            c.stellar_map(self.WL, 0.0, pixel_scale_lod=0.2, shape=(140, 140))
-        )
-        coarse = np.asarray(
-            c.stellar_map(self.WL, 0.0, pixel_scale_lod=0.5, shape=(56, 56))
-        )
+        fine = np.asarray(c.stellar_map(self.WL, 0.0, grid=_grid((140, 140), 0.2)).data)
+        coarse = np.asarray(c.stellar_map(self.WL, 0.0, grid=_grid((56, 56), 0.5)).data)
         np.testing.assert_allclose(fine.sum(), coarse.sum(), rtol=0.02)
 
     def test_source_psfs_peak_and_flux(self, vortex_coronagraph):
@@ -245,7 +291,7 @@ class TestSamplingExplicitContract:
         scale, npix = 0.25, 96
         xs, ys = jnp.asarray([4.0, 0.0]), jnp.asarray([0.0, -6.0])
         psfs = np.asarray(
-            c.source_psfs(self.WL, xs, ys, pixel_scale_lod=scale, shape=(npix, npix))
+            c.source_psfs(self.WL, xs, ys, grid=_grid((npix, npix), scale)).data
         )
         assert psfs.shape == (2, npix, npix)
         coords = (np.arange(npix) - npix / 2 + 0.5) * scale
@@ -261,9 +307,7 @@ class TestSamplingExplicitContract:
         c = vortex_coronagraph
         scale, npix = 0.5, 40
         served = np.asarray(
-            c.background_transmission(
-                self.WL, pixel_scale_lod=scale, shape=(npix, npix)
-            )
+            c.background_transmission(self.WL, grid=_grid((npix, npix), scale)).data
         )
         assert np.all(served >= 0.0)
         coords = (np.arange(npix) - npix / 2 + 0.5) * scale
@@ -276,23 +320,23 @@ class TestSamplingExplicitContract:
 
     def test_non_square_shape_center_crops(self, vortex_coronagraph):
         c = vortex_coronagraph
-        wide = np.asarray(
-            c.stellar_map(self.WL, 0.0, pixel_scale_lod=0.5, shape=(40, 56))
-        )
-        square = np.asarray(
-            c.stellar_map(self.WL, 0.0, pixel_scale_lod=0.5, shape=(56, 56))
-        )
+        wide = np.asarray(c.stellar_map(self.WL, 0.0, grid=_grid((40, 56), 0.5)).data)
+        square = np.asarray(c.stellar_map(self.WL, 0.0, grid=_grid((56, 56), 0.5)).data)
         assert wide.shape == (40, 56)
         np.testing.assert_allclose(wide, square[8:48, :], rtol=1e-12)
 
     def test_extended_scene_raises(self, vortex_coronagraph):
         with pytest.raises(NotImplementedError, match="extended scenes"):
             vortex_coronagraph.extended_scene(
-                jnp.ones((16, 16)),
-                0.5,
+                Image(
+                    jnp.ones((16, 16)),
+                    _grid((16, 16), 0.5),
+                    (),
+                    "per_pixel",
+                    "stellar_flux_fraction",
+                ),
                 self.WL,
-                pixel_scale_lod=0.5,
-                shape=(32, 32),
+                grid=_grid((32, 32), 0.5),
             )
 
 
@@ -306,7 +350,7 @@ class TestChromaticBuild:
         from physicaloptix.elements import PhaseScreen
         from physicaloptix.elements.modes import zernike_basis
 
-        pupil_grid = Grid.pupil(NPUP)
+        pupil_grid = PixelGrid.pupil(NPUP)
         disk = _disk(pupil_grid, 0.5)
         basis = zernike_basis(pupil_grid, 6, rms_nm=1.0)
         coeffs = jnp.zeros(6).at[4].set(amplitude_nm)
@@ -335,8 +379,9 @@ class TestChromaticBuild:
         return PathCoronagraph.from_path(
             core_path,
             field,
-            diameter_m=DIAMETER_M,
-            owa_lod=OWA,
+            primary=PRIMARY,
+            reference_wavelength_nm=600.0,
+            outer_working_angle_lod=OWA,
             pixel_scale_lod=0.5,
             wavelength_nm=build_wavelength_nm,
         )
@@ -349,11 +394,9 @@ class TestChromaticBuild:
         scatter the OPD screen adds on top, so measure the difference.
         """
         nominal = self._aberrated(None, amplitude_nm=0.0)
-        psf = np.asarray(
-            coro.stellar_map(600.0, 0.0, pixel_scale_lod=0.5, shape=(56, 56))
-        )
+        psf = np.asarray(coro.stellar_map(600.0, 0.0, grid=_grid((56, 56), 0.5)).data)
         ref = np.asarray(
-            nominal.stellar_map(600.0, 0.0, pixel_scale_lod=0.5, shape=(56, 56))
+            nominal.stellar_map(600.0, 0.0, grid=_grid((56, 56), 0.5)).data
         )
         n = psf.shape[0]
         yy, xx = np.mgrid[:n, :n]
@@ -364,12 +407,8 @@ class TestChromaticBuild:
         """Tagging the build wavelength equal to the screen's changes nothing."""
         mono = self._aberrated(None)
         tagged = self._aberrated(600.0)
-        a = np.asarray(
-            mono.stellar_map(600.0, 0.0, pixel_scale_lod=0.5, shape=(56, 56))
-        )
-        b = np.asarray(
-            tagged.stellar_map(600.0, 0.0, pixel_scale_lod=0.5, shape=(56, 56))
-        )
+        a = np.asarray(mono.stellar_map(600.0, 0.0, grid=_grid((56, 56), 0.5)).data)
+        b = np.asarray(tagged.stellar_map(600.0, 0.0, grid=_grid((56, 56), 0.5)).data)
         np.testing.assert_allclose(a, b, rtol=1e-10, atol=1e-18)
 
     def test_halo_scales_inverse_square_with_wavelength(self):
@@ -382,3 +421,44 @@ class TestChromaticBuild:
     def test_wavelength_metadata_recorded(self):
         assert self._aberrated(700.0).wavelength_nm == 700.0
         assert self._aberrated(None).wavelength_nm is None
+
+
+def test_rule_records_and_absolute_leakage(bare_telescope):
+    """Fails for per-pixel/density confusion or duplicated half-maximum masks.
+
+    Same-image records agree at 16 float64 eps. The independent aperture
+    sum has no pixel-area division: a factor step**-2 would fail by 4x.
+    """
+    from yippy import Circular, HalfMaximum, performance_curves
+
+    c = bare_telescope
+    star = c.stellar_map(600.0, 0.0, grid=c.grid)
+
+    def off(s):
+        return c.off_axis_psf(600.0, s, c.grid)
+
+    rule = HalfMaximum(0.5)
+    expected = performance_curves(
+        off, star, rule, separations_lod=c.curve_seps, stellar_diameter=0.0
+    )
+    record = c.curves(rule)
+    for name in (
+        "throughput",
+        "core_area_lod2",
+        "leakage_fraction",
+        "leakage_density_lod2",
+        "raw_contrast",
+    ):
+        np.testing.assert_allclose(
+            getattr(record, name),
+            getattr(expected, name),
+            rtol=16 * np.finfo(float).eps,
+            atol=0,
+        )
+    for rule in (HalfMaximum(0.5), Circular(0.7)):
+        weights = rule.weights(off(6.0), (6.0, 0.0))
+        absolute_sum = float(jnp.sum(star.data * weights))
+        measured = c.curves(rule).evaluate("leakage_fraction", 6.0)
+        np.testing.assert_allclose(
+            measured, absolute_sum, rtol=16 * np.finfo(float).eps, atol=0
+        )

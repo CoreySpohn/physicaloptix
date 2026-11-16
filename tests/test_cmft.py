@@ -5,10 +5,13 @@ import warnings
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import TEST_FRAME
+from hwoutils.grids import PixelGrid
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind, Spectrum
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.diagnostics import mft_sampling_parameter
 from physicaloptix.transforms import Fraunhofer, cmft_bwd, cmft_fwd
 
@@ -27,23 +30,25 @@ class TestCmftPair:
     def test_adjoint_identity(self, npup, nfoc, q):
         """<F f, g>_u == <f, B g>_x with the grids' integration weights."""
         rng = np.random.default_rng(0)
-        pupil_grid = Grid.pupil(npup)
-        focal_grid = Grid.focal(nfoc, 1.0 / q)
-        x = jnp.asarray(pupil_grid.coords)
-        u = jnp.asarray(focal_grid.coords)
+        pupil_grid = PixelGrid.pupil(npup)
+        focal_grid = PixelGrid.focal(nfoc, 1.0 / q, TEST_FRAME)
+        x = jnp.asarray(_grid_axis(pupil_grid))
+        u = jnp.asarray(_grid_axis(focal_grid))
         f = jnp.asarray(_rng_field(rng, npup))
         g = jnp.asarray(_rng_field(rng, nfoc))
-        lhs = jnp.vdot(cmft_fwd(f, x, u), g) * focal_grid.weights
-        rhs = jnp.vdot(f, cmft_bwd(g, x, u)) * pupil_grid.weights
+        lhs = jnp.vdot(cmft_fwd(f, x, u), g) * focal_grid.pixel_area
+        rhs = jnp.vdot(f, cmft_bwd(g, x, u)) * pupil_grid.pixel_area
         np.testing.assert_allclose(complex(lhs), complex(rhs), rtol=1e-12)
 
     def test_round_trip_on_complete_conjugate_grid(self):
         """bwd(fwd(f)) == f when the focal grid spans the full band."""
         npup, q = 32, 2
-        pupil_grid = Grid.pupil(npup)
-        focal_grid = Grid.focal(npup * q, 1.0 / q)  # num_airy = npup/2: complete
-        x = jnp.asarray(pupil_grid.coords)
-        u = jnp.asarray(focal_grid.coords)
+        pupil_grid = PixelGrid.pupil(npup)
+        focal_grid = PixelGrid.focal(
+            npup * q, 1.0 / q, TEST_FRAME
+        )  # num_airy = npup/2: complete
+        x = jnp.asarray(_grid_axis(pupil_grid))
+        u = jnp.asarray(_grid_axis(focal_grid))
         rng = np.random.default_rng(0)
         f = jnp.asarray(_rng_field(rng, npup))
         back = cmft_bwd(cmft_fwd(f, x, u), x, u)
@@ -51,27 +56,29 @@ class TestCmftPair:
 
     def test_parseval_on_complete_conjugate_grid(self):
         npup, q = 32, 2
-        pupil_grid = Grid.pupil(npup)
-        focal_grid = Grid.focal(npup * q, 1.0 / q)
-        x = jnp.asarray(pupil_grid.coords)
-        u = jnp.asarray(focal_grid.coords)
+        pupil_grid = PixelGrid.pupil(npup)
+        focal_grid = PixelGrid.focal(npup * q, 1.0 / q, TEST_FRAME)
+        x = jnp.asarray(_grid_axis(pupil_grid))
+        u = jnp.asarray(_grid_axis(focal_grid))
         rng = np.random.default_rng(0)
         f = jnp.asarray(_rng_field(rng, npup))
-        e_pupil = float(jnp.sum(jnp.abs(f) ** 2) * pupil_grid.weights)
+        e_pupil = float(jnp.sum(jnp.abs(f) ** 2) * pupil_grid.pixel_area)
         foc = cmft_fwd(f, x, u)
-        e_focal = float(jnp.sum(jnp.abs(foc) ** 2) * focal_grid.weights)
+        e_focal = float(jnp.sum(jnp.abs(foc) ** 2) * focal_grid.pixel_area)
         np.testing.assert_allclose(e_focal, e_pupil, rtol=1e-12)
 
     def test_airy_first_null(self):
         """A circular aperture's first null lands at 1.22 lambda/D."""
         npix = 256
-        grid = Grid.pupil(npix)
-        x1 = np.asarray(grid.coords)
+        grid = PixelGrid.pupil(npix)
+        x1 = np.asarray(_grid_axis(grid))
         xx, yy = np.meshgrid(x1, x1)
         pupil = ((xx**2 + yy**2) <= 0.25).astype(np.complex128)
         q = 16
-        focal_grid = Grid.focal(int(6 * 2 * q), 1.0 / q)  # +-6 lambda/D
-        u1 = np.asarray(focal_grid.coords)
+        focal_grid = PixelGrid.focal(
+            int(6 * 2 * q), 1.0 / q, TEST_FRAME
+        )  # +-6 lambda/D
+        u1 = np.asarray(_grid_axis(focal_grid))
         foc = cmft_fwd(jnp.asarray(pupil), jnp.asarray(x1), jnp.asarray(u1))
         psf = np.abs(np.asarray(foc)) ** 2
         # Radial profile along the row nearest the axis.
@@ -86,8 +93,8 @@ class TestCmftPair:
 
 class TestFraunhofer:
     def test_forward_retags_plane_and_grid(self):
-        pupil_grid = Grid.pupil(32)
-        focal_grid = Grid.focal(64, 0.5)
+        pupil_grid = PixelGrid.pupil(32)
+        focal_grid = PixelGrid.focal(64, 0.5, TEST_FRAME)
         prop = Fraunhofer(grid_in=pupil_grid, grid_out=focal_grid)
         field = Field(
             data=jnp.ones((32, 32), dtype=complex),
@@ -100,8 +107,8 @@ class TestFraunhofer:
         assert out.data.shape == (64, 64)
 
     def test_forward_rejects_wrong_plane(self):
-        pupil_grid = Grid.pupil(32)
-        focal_grid = Grid.focal(64, 0.5)
+        pupil_grid = PixelGrid.pupil(32)
+        focal_grid = PixelGrid.focal(64, 0.5, TEST_FRAME)
         prop = Fraunhofer(grid_in=pupil_grid, grid_out=focal_grid)
         field = Field(
             data=jnp.ones((32, 32), dtype=complex),
@@ -112,10 +119,12 @@ class TestFraunhofer:
             prop.forward(field)
 
     def test_forward_rejects_wrong_grid(self):
-        prop = Fraunhofer(grid_in=Grid.pupil(32), grid_out=Grid.focal(64, 0.5))
+        prop = Fraunhofer(
+            grid_in=PixelGrid.pupil(32), grid_out=PixelGrid.focal(64, 0.5, TEST_FRAME)
+        )
         field = Field(
             data=jnp.ones((16, 16), dtype=complex),
-            grid=Grid.pupil(16),
+            grid=PixelGrid.pupil(16),
             plane=PlaneKind.PUPIL,
         )
         with pytest.raises(ValueError, match="grid"):
@@ -123,8 +132,8 @@ class TestFraunhofer:
 
     def test_backward_is_adjoint_round_trip(self):
         npup, q = 32, 2
-        pupil_grid = Grid.pupil(npup)
-        focal_grid = Grid.focal(npup * q, 1.0 / q)
+        pupil_grid = PixelGrid.pupil(npup)
+        focal_grid = PixelGrid.focal(npup * q, 1.0 / q, TEST_FRAME)
         prop = Fraunhofer(grid_in=pupil_grid, grid_out=focal_grid)
         rng = np.random.default_rng(0)
         f = jnp.asarray(_rng_field(rng, npup))
@@ -135,8 +144,10 @@ class TestFraunhofer:
 
     def test_undersampled_kernel_raises_on_policy(self):
         """A focal grid far past the kernel Nyquist limit trips the gate."""
-        pupil_grid = Grid.pupil(16)
-        focal_grid = Grid.focal(16, 8.0)  # extends to ~64 lambda/D at dx=1/16
+        pupil_grid = PixelGrid.pupil(16)
+        focal_grid = PixelGrid.focal(
+            16, 8.0, TEST_FRAME
+        )  # extends to ~64 lambda/D at dx=1/16
         with pytest.raises(ValueError, match="sampl"):
             Fraunhofer(
                 grid_in=pupil_grid,
@@ -149,13 +160,15 @@ class TestFraunhofer:
         assert prop.sampling_parameter < 1.0
 
     def test_well_sampled_kernel_metric_is_healthy(self):
-        prop = Fraunhofer(grid_in=Grid.pupil(64), grid_out=Grid.focal(128, 0.25))
+        prop = Fraunhofer(
+            grid_in=PixelGrid.pupil(64), grid_out=PixelGrid.focal(128, 0.25, TEST_FRAME)
+        )
         assert prop.sampling_parameter >= 1.0
 
     def test_warn_policy_warns_and_record_policy_is_silent(self):
         """The default warn policy emits; record stores the metric silently."""
-        pupil_grid = Grid.pupil(16)
-        focal_grid = Grid.focal(16, 8.0)
+        pupil_grid = PixelGrid.pupil(16)
+        focal_grid = PixelGrid.focal(16, 8.0, TEST_FRAME)
         with pytest.warns(UserWarning, match="undersampled"):
             Fraunhofer(grid_in=pupil_grid, grid_out=focal_grid, on_undersampled="warn")
         with warnings.catch_warnings():
@@ -170,8 +183,8 @@ class TestFraunhofer:
         the gate coordinates by lambda_ref/lambda_min divides the sampling
         parameter by exactly that ratio (both kernel directions scale
         together)."""
-        pupil_grid = Grid.pupil(64)
-        focal_grid = Grid.focal(128, 0.25)
+        pupil_grid = PixelGrid.pupil(64)
+        focal_grid = PixelGrid.focal(128, 0.25, TEST_FRAME)
         p_ref = Fraunhofer(
             grid_in=pupil_grid,
             grid_out=focal_grid,
@@ -192,11 +205,11 @@ OFF_REFERENCE_NM = (500.0, 750.0, 1000.0)
 
 
 def _mono_spectrum(wavelength_nm):
-    return Spectrum(wavelengths_nm=jnp.array([wavelength_nm]), weights=jnp.ones(1))
+    return Spectrum(nodes_nm=jnp.array([wavelength_nm]), weights=jnp.ones(1))
 
 
 def _disk(grid):
-    x = np.asarray(grid.coords)
+    x = np.asarray(_grid_axis(grid))
     xx, yy = np.meshgrid(x, x)
     return ((xx**2 + yy**2) <= 0.25).astype(np.complex128)
 
@@ -220,8 +233,8 @@ class TestChromaticFixedGridAdjoint:
     def test_weighted_inner_product_identity(
         self, npup, nfoc, pixel_scale_lod, wavelength_nm
     ):
-        pupil = Grid.pupil(npup)
-        focal = Grid.focal(nfoc, pixel_scale_lod)
+        pupil = PixelGrid.pupil(npup)
+        focal = PixelGrid.focal(nfoc, pixel_scale_lod, TEST_FRAME)
         spectrum = _mono_spectrum(wavelength_nm)
         rng = np.random.default_rng(4821)
         a = jnp.asarray(_rng_field(rng, npup)[None])
@@ -235,8 +248,8 @@ class TestChromaticFixedGridAdjoint:
             min_wavelength_nm=wavelength_nm,
             on_undersampled="record",
         )
-        lhs = complex(jnp.vdot(prop.forward(x).data, b) * focal.weights)
-        rhs = complex(jnp.vdot(a, prop.backward(y).data) * pupil.weights)
+        lhs = complex(jnp.vdot(prop.forward(x).data, b) * focal.pixel_area)
+        rhs = complex(jnp.vdot(a, prop.backward(y).data) * pupil.pixel_area)
         assert abs(lhs) > 1e-3
         np.testing.assert_allclose(rhs, lhs, rtol=1e-12)
         np.testing.assert_allclose(rhs / lhs, 1.0 + 0.0j, atol=1e-12)
@@ -244,10 +257,10 @@ class TestChromaticFixedGridAdjoint:
     def test_identity_holds_per_slice_of_a_chromatic_stack(self):
         """One vmapped stack: every slice pairs on the same fixed-grid measure."""
         npup, nfoc = 24, 40
-        pupil = Grid.pupil(npup)
-        focal = Grid.focal(nfoc, 0.4)
+        pupil = PixelGrid.pupil(npup)
+        focal = PixelGrid.focal(nfoc, 0.4, TEST_FRAME)
         wavelengths = jnp.array([450.0, 500.0, 620.0, 800.0, 1000.0])
-        spectrum = Spectrum(wavelengths_nm=wavelengths, weights=jnp.ones(5) / 5)
+        spectrum = Spectrum(nodes_nm=wavelengths, weights=jnp.ones(5) / 5)
         rng = np.random.default_rng(7)
         a = jnp.asarray(np.stack([_rng_field(rng, npup) for _ in range(5)]))
         b = jnp.asarray(np.stack([_rng_field(rng, nfoc) for _ in range(5)]))
@@ -265,8 +278,8 @@ class TestChromaticFixedGridAdjoint:
             Field(data=b, grid=focal, plane=PlaneKind.FOCAL, spectrum=spectrum)
         ).data
         for i in range(5):
-            lhs = complex(jnp.vdot(fa[i], b[i]) * focal.weights)
-            rhs = complex(jnp.vdot(a[i], bb[i]) * pupil.weights)
+            lhs = complex(jnp.vdot(fa[i], b[i]) * focal.pixel_area)
+            rhs = complex(jnp.vdot(a[i], bb[i]) * pupil.pixel_area)
             np.testing.assert_allclose(rhs, lhs, rtol=1e-12)
 
     @pytest.mark.parametrize("wavelength_nm", OFF_REFERENCE_NM)
@@ -283,8 +296,8 @@ class TestChromaticFixedGridAdjoint:
         the pupil energy.
         """
         scale = REF_NM / wavelength_nm
-        pupil = Grid.pupil(npup)
-        focal = Grid.focal(nfoc, npup / (nfoc * scale))
+        pupil = PixelGrid.pupil(npup)
+        focal = PixelGrid.focal(nfoc, npup / (nfoc * scale), TEST_FRAME)
         prop = Fraunhofer(
             pupil,
             focal,
@@ -300,8 +313,8 @@ class TestChromaticFixedGridAdjoint:
             spectrum=_mono_spectrum(wavelength_nm),
         )
         focal_field = prop.forward(field)
-        e_pupil = float(jnp.sum(jnp.abs(field.data) ** 2) * pupil.weights)
-        e_focal = float(jnp.sum(jnp.abs(focal_field.data) ** 2) * focal.weights)
+        e_pupil = float(jnp.sum(jnp.abs(field.data) ** 2) * pupil.pixel_area)
+        e_focal = float(jnp.sum(jnp.abs(focal_field.data) ** 2) * focal.pixel_area)
         np.testing.assert_allclose(e_focal, e_pupil, rtol=1e-12)
         back = prop.backward(focal_field)
         np.testing.assert_allclose(np.asarray(back.data[0]), disk, atol=1e-12)
@@ -317,15 +330,19 @@ class TestMftSamplingParameter:
         for npup in (32, 128):
             q = 2
             p = mft_sampling_parameter(
-                Grid.pupil(npup).coords,
-                Grid.focal(npup * q, 1.0 / q).coords,
+                _grid_axis(PixelGrid.pupil(npup)),
+                _grid_axis(PixelGrid.focal(npup * q, 1.0 / q, TEST_FRAME)),
             )
             np.testing.assert_allclose(p, 1.0, atol=2.0 / npup)
 
     def test_doubling_the_focal_extent_halves_the_ratio(self):
-        x_in = Grid.pupil(64).coords
-        p1 = mft_sampling_parameter(x_in, Grid.focal(64, 0.25).coords)
-        p2 = mft_sampling_parameter(x_in, Grid.focal(128, 0.25).coords)
+        x_in = _grid_axis(PixelGrid.pupil(64))
+        p1 = mft_sampling_parameter(
+            x_in, _grid_axis(PixelGrid.focal(64, 0.25, TEST_FRAME))
+        )
+        p2 = mft_sampling_parameter(
+            x_in, _grid_axis(PixelGrid.focal(128, 0.25, TEST_FRAME))
+        )
         np.testing.assert_allclose(
             p1 / p2, (128 / 2 - 0.5) / (64 / 2 - 0.5), rtol=1e-12
         )
@@ -333,8 +350,8 @@ class TestMftSamplingParameter:
     def test_symmetric_in_input_and_output(self):
         """The kernel is symmetric in its two directions, so swapping the
         grids leaves the min-of-both-directions ratio unchanged."""
-        a = Grid.pupil(48).coords
-        b = Grid.focal(96, 0.4).coords
+        a = _grid_axis(PixelGrid.pupil(48))
+        b = _grid_axis(PixelGrid.focal(96, 0.4, TEST_FRAME))
         np.testing.assert_allclose(
             mft_sampling_parameter(a, b),
             mft_sampling_parameter(b, a),

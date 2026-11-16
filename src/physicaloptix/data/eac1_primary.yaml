@@ -2,10 +2,8 @@
 #
 # Geometry as recorded in the HWO Coronagraph Design Survey baseline pupil
 # FITS headers (pupil_eac1_*.fits.gz: NR / GS / SPTP parameter cards and the
-# D_CIRCUM / D_INSCRB keywords).
+# segment dimensions).
 name: EAC-1
-circumscribed_diameter_m: 7.2
-inscribed_diameter_m: 5.96
 segmentation:
   type: hexagonal
   n_rings: 2

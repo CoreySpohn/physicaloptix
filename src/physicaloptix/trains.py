@@ -28,9 +28,9 @@ def synthesize_psd_surface(seed, grid, *, rms_nm, k_min=1.0, k_max=None, slope=-
     if k_min <= 0:
         raise ValueError(f"k_min must be positive, got {k_min}")
     if k_max is None:
-        k_max = grid.npix / 4
+        k_max = grid.shape[0] / 4
     rng = np.random.default_rng(seed)
-    k = np.fft.fftfreq(grid.npix, d=grid.dx)
+    k = np.fft.fftfreq(grid.shape[0], d=grid.step)
     kk = np.hypot(*np.meshgrid(k, k))
     amplitude = np.zeros_like(kk)
     band = (kk >= k_min) & (kk <= k_max)

@@ -1,6 +1,6 @@
 """Field -> picture bridges (intensity, phase, complex, declared cut).
 
-``plot_field`` turns a physicaloptix ``Field`` (or a bare array) into a
+``plot_field`` turns a physicaloptix ``Field``, ``Image``, or a bare array into a
 picture by delegating the pixel work to eyepiece: ``imshow_log`` for
 intensity, a direct ``ax.imshow`` for phase (eyepiece has no phase-specific
 image primitive of its own), and ``show_field`` for the four-panel complex
@@ -15,6 +15,7 @@ import hwostyle
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
+from hwoutils.grids import Image
 from matplotlib.patches import Circle
 
 from physicaloptix.core import Field
@@ -63,11 +64,29 @@ def _resolve(field_or_map, channel, kind):
         ValueError: A chromatic Field with ``kind != "intensity"`` is
             given no ``channel`` -- there is no single 2D array to draw.
     """
+    if isinstance(field_or_map, Image):
+        if kind != "intensity":
+            raise ValueError("an Image contains intensity, not complex phase")
+        grid = field_or_map.grid
+        data = np.asarray(field_or_map.data)
+        if channel is not None:
+            data = data[channel]
+        if data.ndim != 2:
+            raise ValueError("an Image with leading axes requires channel=")
+        step = grid.step
+        extent = (
+            (-grid.center_x - 0.5) * step,
+            (grid.shape[1] - grid.center_x - 0.5) * step,
+            (-grid.center_y - 0.5) * step,
+            (grid.shape[0] - grid.center_y - 0.5) * step,
+        )
+        plane = {"lod": "focal", "pupil_diameter": "pupil"}.get(grid.unit, grid.unit)
+        return data, extent, plane
     if not isinstance(field_or_map, Field):
         return np.asarray(field_or_map), None, None
 
     data = np.asarray(field_or_map.data)
-    half = float(field_or_map.grid.extent)
+    half = float(field_or_map.grid.shape[0] * field_or_map.grid.step / 2)
     extent = (-half, half, -half, half)
     plane = field_or_map.plane.value
 
@@ -75,7 +94,7 @@ def _resolve(field_or_map, channel, kind):
         if channel is not None:
             data = data[channel]
         elif kind == "intensity":
-            return np.asarray(field_or_map.intensity()), extent, plane
+            return np.asarray(field_or_map.intensity().data), extent, plane
         else:
             msg = f"chromatic Field with kind={kind!r} requires channel="
             raise ValueError(msg)
@@ -86,6 +105,8 @@ def _label_plane(ep, ax, plane):
     """Apply eyepiece's axis labels for a plane, falling back to _LABELS."""
     if plane == "focal":
         ep.label_lod(ax)
+    elif plane == "arcsec":
+        ep.label_arcsec(ax)
     elif plane in _LABELS:
         xlabel, ylabel = _LABELS[plane]
         ax.set_xlabel(xlabel)

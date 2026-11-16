@@ -6,13 +6,13 @@ in this page are defined in the [glossary](glossary).
 
 ## Coordinates and units
 
-Each plane has its own natural unit, and a {class}`~physicaloptix.Grid` carries
+Each plane has its own natural unit, and a {class}`~hwoutils.grids.PixelGrid` carries
 its coordinates in that unit -- never in meters or pixels.
 
-- A **pupil** grid, `Grid.pupil(npix)`, spans one aperture diameter: its
+- A **pupil** grid, `PixelGrid.pupil(npix)`, spans one aperture diameter: its
   coordinates run over roughly $[-0.5, 0.5]$ in units of the pupil diameter, so
   a clear circular aperture is the disk $x^2 + y^2 \le 0.25$.
-- A **focal** grid, `Grid.focal(npix, pixel_scale)`, is sampled in
+- A **focal** grid, `PixelGrid.focal(npix, pixel_scale_lod, frame)`, is sampled in
   {term}`lambda/D`: its `pixel_scale` is the {term}`lambda/D` per pixel, and its
   coordinates are angular separations in {term}`lambda/D`.
 - **Wavelengths** are in nanometers everywhere they appear
@@ -158,12 +158,11 @@ Speckle sensitivity stacks keep the mode axis third from the end -- `G` is
 `(m, y, x)` monochromatic or `(w, m, y, x)` chromatic -- so a mode count is
 always `G.shape[-3]`, never `G.shape[0]`.
 
-`Spectrum.weights` sum to one: chromatic intensity is a weighted band
-*average*, never a band integral, and hand-built spectra must preserve the
-normalization (only the constructors enforce it). `Spectrum.midpoint_band`
-reproduces the design-survey band sampling (bin midpoints, endpoints
-excluded) and is required for any survey-comparable result;
-`Spectrum.tophat` includes the endpoints and is for standalone use. When a
+`Spectrum.from_band(Band(lo_nm, hi_nm), order, knots_nm=...)` builds
+one-band Gauss-Legendre nodes, split at declared knots. `nodes_nm` stores the
+wavelengths; `weights` are normalized to unit sum, so intensity is a band
+average. `Spectrum(nodes_nm, weights)` accepts explicit nodes and normalizes
+weights, including independently specified survey sampling. When a
 `Fraunhofer` projects a chromatic field onto a fixed reference-wavelength
 grid, each slice's amplitude carries the factor
 $\lambda_{\mathrm{ref}}/\lambda$: fixed-grid intensity is a surface
@@ -208,7 +207,7 @@ the trunk and silently decouple under `jit`.
 ## Fields, intensity, and contrast
 
 A `Field`'s `data` is the complex wavefront: its amplitude is the field
-magnitude and its argument is the phase. Intensity is `field.intensity()`
+magnitude and its argument is the phase. Intensity is `field.intensity().data`
 ($|\,\text{data}\,|^2$), and energy is the intensity integrated with the grid's
 cell-area weight $\mathrm{d}x^2$.
 
@@ -225,8 +224,7 @@ coexist in the stack and must not be mixed:
   derive this normalization at construction from the stored primitives
   (`input_energy`, `pixel_scale_lod`), which `linearize` records from the
   field it is handed.
-- **Peak-referenced contrast** (a derived *view*, and the
-  {func}`~physicaloptix.read_detector` reference): intensity divided by the
+- **Peak-referenced contrast** (a derived *view*): intensity divided by the
   unaberrated *telescope* PSF peak (the aperture with no coronagraph), so a
   raw stellar peak is $1$ and an Earth twin sits near $10^{-10}$. Obtain it
   from a flux-fraction field via
@@ -240,13 +238,17 @@ coexist in the stack and must not be mixed:
 - **Intensity density** (`emit_yip` map values before the cell-area factor):
   intensity per $(\lambda_0/D)^2$ for unit pre-coronagraph energy, the
   design-survey pipeline's internal convention -- larger than the per-pixel
-  fractions shipped survey packages carry by exactly the pixel cell area.
+  fractions shipped survey packages carry by the inverse pixel cell area.
   Check which convention a package uses before serving it to a table reader.
 
-{func}`~physicaloptix.read_detector` is sample-in, electron-out: one map
-sample is one detector pixel (no area integration), and its `flux` argument
-is the photon rate of the pixel where intensity equals 1 -- the stellar
-peak pixel's rate, not the star's total rate.
+Detectors consume named rates. Construct `optixstuff.Detector` or
+`IdealDetector`, form `PhotonRates` on a dimensional `Quadrature`, call
+`detector.electrons(rates, quadrature)` once, and then `detector.draw(key,
+electron_rates, FramePlan(frame_time_s, n_frames))`. For a differentiable
+Gaussian approximation use `physicaloptix.ReparameterizedDetector`, whose
+moments equal the shared detector moments. It is approximate at low counts.
+A peak-normalized sensor map must first be multiplied by its explicitly
+stated stellar peak photon rate at the caller.
 
 When a normalization crosses a library seam, pass the primitive references
 (input energy, pixel scale), never a pre-derived scalar: derived ratios such
@@ -341,3 +343,26 @@ jax.config.update("jax_enable_x64", True)
 The forward propagation is float32-safe; the deep-null and pinning quantities
 are not. Every tutorial that quotes a deep number sets this flag in its first
 cell.
+
+## Shared image boundaries
+
+`Field.intensity()` returns an `Image` with `measure="per_unit_area"` and
+`quantity="field_power"`; use `.data` for array arithmetic. Its numerical
+values and density convention are unchanged. `Field` subclasses `GridArray`.
+
+`PathCoronagraph` PSFs and stellar maps, `PolychromaticPath.image`,
+`nircam_band_image`, and the stellar/off-axis maps returned by `emit_yip`
+are `Image` objects with `measure="per_pixel"` and
+`quantity="stellar_flux_fraction"`. Their values are fractions of the
+unocculted source flux in each pixel. Background and sky transmission maps
+use `measure="per_unit_area"`, `quantity="transmission"`, and no area factor.
+`integrate_detector_pixels` takes and returns a per-pixel `Image`, preserving
+its quantity. `plot_field` accepts these Images directly.
+
+Construct `PathCoronagraph.from_path` with `primary`,
+`reference_wavelength_nm`, and `outer_working_angle_lod`. The adapter exposes
+its native `grid` and prepares `curves(Circular(0.7))` and
+`curves(HalfMaximum(0.5))`; request additional aperture rules with `rules=`.
+All coronagraph image methods take a target `PixelGrid`. Scalar performance
+and speckle methods take `time_d`; visualization `times_s` are second offsets
+from the speckle field epoch and are converted with `hwoutils.constants.s2d`.

@@ -15,8 +15,11 @@ computed once in a session fixture.
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import TEST_FRAME
+from hwoutils.grids import PixelGrid
 
-from physicaloptix.core import Field, Grid, PlaneKind
+from physicaloptix.core import Field, PlaneKind
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import MultiScaleVortex, SampledOptic
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.transforms import Fraunhofer, cmft_fwd
@@ -41,8 +44,8 @@ def aavc(eac1_cache):
     npup, _, _, _, charge, _, pixscale_lod, dims = z["meta"]
     npup, dims, charge = int(npup), int(dims), int(charge)
 
-    pupil_grid = Grid.pupil(npup)
-    science_grid = Grid.focal(dims, float(pixscale_lod))
+    pupil_grid = PixelGrid.pupil(npup)
+    science_grid = PixelGrid.focal(dims, float(pixscale_lod), TEST_FRAME)
 
     def pupil_optic(name):
         return SampledOptic(
@@ -65,7 +68,7 @@ def aavc(eac1_cache):
     )
 
     pupil = jnp.asarray(z["pupil"], float).astype(complex)
-    x = jnp.asarray(pupil_grid.coords)
+    x = jnp.asarray(_grid_axis(pupil_grid))
 
     def source(separation_lod=0.0):
         tilt = jnp.exp(2j * jnp.pi * separation_lod * x)[None, :]
@@ -73,9 +76,12 @@ def aavc(eac1_cache):
 
     def image(separation_lod=0.0, taps=()):
         out, tapped = path.propagate(source(separation_lod), taps=taps)
-        return np.asarray(out.intensity()), tapped
+        return np.asarray(out.intensity().data), tapped
 
-    tele = np.abs(np.asarray(cmft_fwd(pupil, x, jnp.asarray(science_grid.coords)))) ** 2
+    tele = (
+        np.abs(np.asarray(cmft_fwd(pupil, x, jnp.asarray(_grid_axis(science_grid)))))
+        ** 2
+    )
 
     psf_on, _ = image()
     psf_off7, _ = image(7.0)

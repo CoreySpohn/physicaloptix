@@ -1,7 +1,7 @@
 """Pupil geometry: the YAML loader and the segmented-aperture rasterizer.
 
-``load_primary_yaml`` reads a small pupil-geometry YAML (circumscribed and
-inscribed diameters plus a hexagonal segmentation block) into an optixstuff
+``load_primary_yaml`` reads a hexagonal ring, segment, and gap geometry
+YAML into an optixstuff
 ``SegmentedPrimary``, deriving the collecting area from the segment geometry.
 The EAC-1 parameters ship with the package (``eac1_primary``), sourced from
 the design-survey baseline pupil FITS headers.
@@ -29,8 +29,6 @@ def load_primary_yaml(path):
     The schema::
 
         name: EAC-1
-        circumscribed_diameter_m: 7.2
-        inscribed_diameter_m: 5.96        # optional
         segmentation:
           type: hexagonal
           n_rings: 2
@@ -57,19 +55,10 @@ def load_primary_yaml(path):
             f"{segmentation.get('type')!r}"
         )
     n_rings = int(segmentation["n_rings"])
-    n_segments = 1 + 3 * n_rings * (n_rings + 1)
-    point_to_point = float(segmentation["segment_point_to_point_m"])
-    hex_area = 3.0 * np.sqrt(3.0) / 8.0 * point_to_point**2
-
-    inscribed = config.get("inscribed_diameter_m")
     return SegmentedPrimary(
-        diameter_m=float(config["circumscribed_diameter_m"]),
-        area_m2=n_segments * hex_area,
         n_rings=n_rings,
-        n_segments=n_segments,
         segment_gap_m=float(segmentation["gap_m"]),
-        segment_point_to_point_m=point_to_point,
-        inscribed_diameter_m=None if inscribed is None else float(inscribed),
+        segment_point_to_point_m=float(segmentation["segment_point_to_point_m"]),
     )
 
 
@@ -85,7 +74,11 @@ def _segment_setup(primary, npix, extent_m, supersample):
             "rasterizing segments needs an exact segment size: set "
             "segment_point_to_point_m on the primary"
         )
-    extent = float(extent_m) if extent_m is not None else float(primary.diameter_m)
+    extent = (
+        float(extent_m)
+        if extent_m is not None
+        else float(primary.diameter("circumscribed"))
+    )
     delta = extent / npix
     coords = (np.arange(npix) - npix / 2 + 0.5) * delta
     offsets = ((np.arange(supersample) + 0.5) / supersample - 0.5) * delta

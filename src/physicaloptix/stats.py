@@ -42,14 +42,14 @@ def dark_zone_mask(grid, *, iwa_lod, owa_lod):
     from ``hwoutils.radial.radial_distance``.
 
     Args:
-        grid: The focal-plane ``Grid`` (coordinates in lambda/D).
+        grid: The focal-plane ``PixelGrid`` (coordinates in lambda/D).
         iwa_lod: Inner working angle.
         owa_lod: Outer working angle.
 
     Returns:
         Boolean array of shape ``(npix, npix)``.
     """
-    radius = radial_distance((grid.npix, grid.npix)) * grid.dx
+    radius = radial_distance((grid.shape[0], grid.shape[0])) * grid.step
     return (radius >= iwa_lod) & (radius <= owa_lod)
 
 

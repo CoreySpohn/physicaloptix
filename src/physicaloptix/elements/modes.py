@@ -7,7 +7,7 @@ These build the ``B`` stack that ``linearize`` propagates into the sensitivity
   wavelength (nanometers), so every constructor returns ``B`` already scaled to
   nanometers. A coefficient of 1 on a mode produces that mode's ``*_nm``
   amount of wavefront error, not a dimensionless shape.
-- **Grid.** The modes live on the dimensionless pupil ``Grid`` the field uses
+- **PixelGrid.** The modes live on the dimensionless pupil ``PixelGrid`` the field uses
   (coordinates in pupil diameters), not on a meter grid.
 """
 
@@ -17,6 +17,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from physicaloptix.apertures import rasterize_segments
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements.basis import ModeBasis
 
 _ZERNIKE_NAMES = {
@@ -121,7 +122,7 @@ def segment_ptt_basis(primary, grid, *, ptt_nm=1.0, supersample=16):
 
     Args:
         primary: A ``SegmentedPrimary`` with an exact segment size.
-        grid: The pupil ``Grid`` the field is sampled on (sets ``npix`` and the
+        grid: The pupil ``PixelGrid`` the field is sampled on (sets ``npix`` and the
             dimensionless tilt coordinates).
         ptt_nm: Per-mode RMS amplitude in nanometers for a unit coefficient.
         supersample: Subpixel samples per axis for the segment masks.
@@ -130,12 +131,12 @@ def segment_ptt_basis(primary, grid, *, ptt_nm=1.0, supersample=16):
         A ``ModeBasis`` with ``B`` of shape ``(3 * n_segments, npix, npix)`` in
         nanometers, zero coefficients, and ``kind="opd"``.
     """
-    npix = grid.npix
+    npix = grid.shape[0]
     masks = rasterize_segments(primary, npix, supersample=supersample)
-    coords = np.asarray(grid.coords)
+    coords = np.asarray(_grid_axis(grid))
     x_grid, y_grid = np.meshgrid(coords, coords)
     centers = np.asarray(primary.segment_centers_m, dtype=float) / float(
-        primary.diameter_m
+        primary.diameter("circumscribed")
     )
 
     modes = []
@@ -164,7 +165,7 @@ def fourier_dm_basis(grid, *, n_actuators, k_min=1.0, k_max=None, rms_nm=1.0):
     coefficient gives ``rms_nm`` of RMS wavefront error over the aperture.
 
     Args:
-        grid: The pupil ``Grid`` the field is sampled on.
+        grid: The pupil ``PixelGrid`` the field is sampled on.
         n_actuators: Actuators across the pupil; sets the Nyquist frequency cap
             ``n_actuators / 2`` on the controllable region.
         k_min: Smallest controlled frequency (inner working angle in lambda/D).
@@ -181,7 +182,7 @@ def fourier_dm_basis(grid, *, n_actuators, k_min=1.0, k_max=None, rms_nm=1.0):
     """
     nyquist = n_actuators / 2.0
     upper = nyquist if k_max is None else min(k_max, nyquist)
-    coords = np.asarray(grid.coords)
+    coords = np.asarray(_grid_axis(grid))
     x_grid, y_grid = np.meshgrid(coords, coords)
     aperture = (x_grid**2 + y_grid**2) <= 0.25
 
@@ -213,7 +214,7 @@ def zernike_basis(grid, n_modes, *, rms_nm=1.0, diameter=1.0):
     aperture to the discretization limit.
 
     Args:
-        grid: The pupil ``Grid`` the field is sampled on.
+        grid: The pupil ``PixelGrid`` the field is sampled on.
         n_modes: Number of Noll modes, starting from piston (j = 1).
         rms_nm: Per-mode RMS amplitude in nanometers for a unit coefficient.
         diameter: Aperture diameter in grid units (1.0 fills the pupil grid,
@@ -223,7 +224,7 @@ def zernike_basis(grid, n_modes, *, rms_nm=1.0, diameter=1.0):
         A ``ModeBasis`` with ``B`` of shape ``(n_modes, npix, npix)`` in
         nanometers, zero coefficients, and ``kind="opd"``.
     """
-    coords = np.asarray(grid.coords)
+    coords = np.asarray(_grid_axis(grid))
     x_grid, y_grid = np.meshgrid(coords, coords)
     radius = diameter / 2.0
     r = np.sqrt(x_grid**2 + y_grid**2)

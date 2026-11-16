@@ -8,9 +8,13 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from hwoutils import enable_x64, set_platform
+from hwoutils.constants import d2s
+from hwoutils.grids import Frame, PixelGrid
+from hwoutils.spectral import Band
 from hypothesis import settings
 
-from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind, Spectrum
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import ModeBasis, SampledOptic
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.transforms import Fraunhofer
@@ -30,23 +34,14 @@ settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "quick"))
 set_platform("cpu")
 enable_x64()
 
+TEST_FRAME = Frame(500.0, 1.0, "circumscribed")
+
 EAC1_CACHE_ENV = "PHYSICALOPTIX_EAC1_CACHE"
-_WORKSPACE = Path(__file__).parents[3] / "hwo-mission-control"  # internal-ref-ok
-# Development-workspace fallbacks, matched in any status folder so that a
-# project move cannot silently turn these gate tests into skips.
-DEV_DATA_PATTERNS = (
-    "*/eac1-simulation/scripts/eac1/data",  # internal-ref-ok
-    "*/physicaloptix-setup/scripts/eac1/data",  # internal-ref-ok
-    "*/physicaloptix-setup/scripts/eac1_dlux/data",  # internal-ref-ok
-)
-_DATA_DIRS = (
-    Path(__file__).parent / "data",
-    *(d for pat in DEV_DATA_PATTERNS for d in sorted(_WORKSPACE.glob(pat))),
-)
+_DATA_DIRS = (Path(__file__).parent / "data",)
 
 
 def find_data_file(name):
-    """Locate a reference data file in ``tests/data/`` or the workspace."""
+    """Locate a reference data file in ``tests/data/``."""
     for directory in _DATA_DIRS:
         path = directory / name
         if path.exists():
@@ -67,8 +62,8 @@ def dense_speckle_export():
 def eac1_cache():
     """The cds_pipeline EAC-1 AAVC reference cache (masks + reference PSFs).
 
-    Looked up from ``$PHYSICALOPTIX_EAC1_CACHE``, then ``tests/data/``, then
-    the hwo-dev project location. Gate tests skip when no copy is available
+    Looked up from ``$PHYSICALOPTIX_EAC1_CACHE``, then ``tests/data/``.
+    Gate tests skip when no copy is available
     (e.g. CI).
     """
     env = os.environ.get(EAC1_CACHE_ENV)
@@ -81,8 +76,8 @@ def eac1_cache():
 
 
 def _disk_pupil(npup=24):
-    grid = Grid.pupil(npup)
-    x = np.asarray(grid.coords)
+    grid = PixelGrid.pupil(npup)
+    x = np.asarray(_grid_axis(grid))
     xx, yy = np.meshgrid(x, x)
     return grid, ((xx**2 + yy**2) <= 0.25).astype(float)
 
@@ -99,7 +94,10 @@ def small_path():
                     transmission=jnp.asarray(disk), grid=grid, plane=PlaneKind.PUPIL
                 ),
             ),
-            Stage("science", Fraunhofer(grid_in=grid, grid_out=Grid.focal(32, 0.5))),
+            Stage(
+                "science",
+                Fraunhofer(grid_in=grid, grid_out=PixelGrid.focal(32, 0.5, TEST_FRAME)),
+            ),
         )
     )
 
@@ -126,7 +124,7 @@ def mono_field():
 def chromatic_field():
     """Three-band field with wavelength-identical slices (a flat input)."""
     grid, disk = _disk_pupil()
-    spectrum = Spectrum.tophat(500.0, 0.2, 3)
+    spectrum = Spectrum.from_band(Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)), 3)
     data = jnp.broadcast_to(jnp.asarray(disk).astype(complex), (3, 24, 24))
     return Field(data=data, grid=grid, plane=PlaneKind.PUPIL, spectrum=spectrum)
 
@@ -150,13 +148,13 @@ class ProtocolFake:
     def __init__(self):
         self.calls = 0
 
-    def realize(self, *, wavelength_nm, time_s=0.0):
+    def realize(self, *, wavelength_nm, time_d=0.0):
         # Asymmetric in x/y AND time-varying: a uniform or static fixture
         # cannot tell a shared norm from a per-panel one, nor an x/y
         # conflation from a correct one.
         self.calls += 1
         y, x = np.ogrid[:SPECKLE_NPIX, :SPECKLE_NPIX]
-        return 1e-9 * (1.0 + 0.5 * np.sin(time_s)) * (1.0 + x + 3.0 * y)
+        return 1e-9 * (1.0 + 0.5 * np.sin(time_d * d2s)) * (1.0 + x + 3.0 * y)
 
 
 @pytest.fixture
@@ -192,3 +190,17 @@ def analytic_speckle_field():
         )
 
     return build
+
+
+def as_image(data):
+    """Per-pixel energy fixture on a declared unit arcsecond grid."""
+    from hwoutils.grids import Image
+
+    data = jnp.asarray(data)
+    return Image(
+        data,
+        PixelGrid.regular(data.shape[-2:], 1.0, "arcsec"),
+        (),
+        "per_pixel",
+        "stellar_flux_fraction",
+    )

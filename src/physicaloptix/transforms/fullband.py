@@ -21,8 +21,9 @@ exp(+2j pi j k / N)``.
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.grids import Frame, PixelGrid
 
-from physicaloptix.core import Field, Grid, PlaneKind, validate_field
+from physicaloptix.core import Field, PlaneKind, validate_field
 
 
 def _ramps(n, n_full):
@@ -92,13 +93,15 @@ class FullBandFraunhofer(eqx.Module):
 
     Attributes:
         grid_in: Pupil-side grid.
+        frame: Primary frame defining the focal lambda/D unit.
         oversample: Integer focal samples per ``1 / (n * dx)`` of the band
             (the mask-plane samples per lambda/D for a unit-diameter pupil grid).
         plane_in: Plane the input field must be in.
         plane_out: Plane the output field is tagged with.
     """
 
-    grid_in: Grid
+    grid_in: PixelGrid
+    frame: Frame = eqx.field(static=True)
     oversample: int = eqx.field(static=True)
     plane_in: PlaneKind = eqx.field(static=True, default=PlaneKind.PUPIL)
     plane_out: PlaneKind = eqx.field(static=True, default=PlaneKind.FOCAL)
@@ -117,9 +120,11 @@ class FullBandFraunhofer(eqx.Module):
     @property
     def grid_out(self):
         """The full-band focal grid: ``n * oversample`` samples."""
-        n = self.grid_in.npix
-        return Grid.focal(
-            n * self.oversample, 1.0 / (self.oversample * n * self.grid_in.dx)
+        n = self.grid_in.shape[0]
+        return PixelGrid.focal(
+            n * self.oversample,
+            1.0 / (self.oversample * n * self.grid_in.step),
+            self.frame,
         )
 
     def _check_mono(self, field):
@@ -136,7 +141,7 @@ class FullBandFraunhofer(eqx.Module):
         )
         self._check_mono(field)
         grid_out = self.grid_out
-        data = self.grid_in.weights * fft_fwd(field.data, grid_out.npix)
+        data = self.grid_in.pixel_area * fft_fwd(field.data, grid_out.shape[0])
         return Field(
             data=data, grid=grid_out, plane=self.plane_out, spectrum=field.spectrum
         )
@@ -148,7 +153,7 @@ class FullBandFraunhofer(eqx.Module):
             field, plane=self.plane_out, grid=grid_out, context="FullBandFraunhofer"
         )
         self._check_mono(field)
-        data = grid_out.weights * fft_bwd(field.data, self.grid_in.npix)
+        data = grid_out.pixel_area * fft_bwd(field.data, self.grid_in.shape[0])
         return Field(
             data=data,
             grid=self.grid_in,

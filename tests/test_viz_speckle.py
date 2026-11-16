@@ -2,6 +2,7 @@
 
 import jax.numpy as jnp
 import matplotlib
+from hwoutils.constants import s2d
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -525,7 +526,7 @@ def test_field_ellipse_consumes_delta_e_from_a_real_field():
     field = process.draw(__import__("jax").random.key(0))
     times = np.linspace(0.0, 3600.0, 64)
     draws = np.stack(
-        [np.asarray(field.delta_e(wavelength_nm=500.0, time_s=t)) for t in times]
+        [np.asarray(field.delta_e(wavelength_nm=500.0, time_d=t * s2d)) for t in times]
     )
     _, ax = plt.subplots()
     result = plot_field_ellipse(

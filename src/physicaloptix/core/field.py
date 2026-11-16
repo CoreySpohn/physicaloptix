@@ -1,27 +1,18 @@
-"""The Field pytree: complex field data that knows where it is.
+"""Complex fields and normalized one-band spectral quadrature views."""
 
-A ``Field`` is ``(data, grid, plane, spectrum)`` with the static/dynamic
-partition done deliberately: ``data`` is the only hot leaf, ``grid`` is an
-all-static module, ``plane`` is a static tag, and ``spectrum`` (when present)
-adds the wavelength/weight leaves. Mono fields are 2D ``(y, x)``; chromatic
-fields are exactly 3D ``(nlam, y, x)`` -- the two locked layouts.
-
-Units are bound to the plane kind (the dimensionless core): pupil coordinates
-in pupil diameters, focal coordinates in lambda/D. Wavelength enters only
-through OPD phasors, near-field stages, and the detector boundary.
-"""
-
+from dataclasses import dataclass
 from enum import Enum
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
+from hwoutils.grids import GridArray, Image
+from hwoutils.spectral import Band, Quadrature
 from jaxtyping import Array
-
-from physicaloptix.core.grid import Grid
 
 
 class PlaneKind(Enum):
-    """Which plane a field or element lives in; units are bound to the kind."""
+    """Plane tag; pupil coordinates use diameters and focal coordinates lambda/D."""
 
     PUPIL = "pupil"
     FOCAL = "focal"
@@ -30,124 +21,108 @@ class PlaneKind(Enum):
 
 
 class Spectrum(eqx.Module):
-    """Wavelength samples and their incoherent-sum weights (both leaves)."""
+    """One-band quadrature nodes [nm] and dimensionless unit-sum weights."""
 
-    wavelengths_nm: Array
+    nodes_nm: Array
     weights: Array
+    band: Band | None = eqx.field(static=True)
+
+    def __init__(self, nodes_nm, weights, *, band=None):
+        """Normalize explicit nonnegative weights on positive wavelength nodes."""
+        self.band = band
+        self.nodes_nm = jnp.asarray(nodes_nm)
+        weights = jnp.asarray(weights)
+        if self.nodes_nm.ndim != 1 or weights.shape != self.nodes_nm.shape:
+            raise ValueError("nodes_nm and weights must be matching 1D vectors")
+        if not isinstance(weights, jax.core.Tracer):
+            if not bool(jnp.all(jnp.isfinite(weights) & (weights >= 0))) or not bool(
+                jnp.sum(weights) > 0
+            ):
+                raise ValueError(
+                    "weights must be finite, nonnegative and have positive sum"
+                )
+        if not isinstance(self.nodes_nm, jax.core.Tracer) and not bool(
+            jnp.all(jnp.isfinite(self.nodes_nm) & (self.nodes_nm > 0))
+        ):
+            raise ValueError("nodes_nm must be finite and positive")
+        self.weights = weights / jnp.sum(weights)
 
     @classmethod
-    def tophat(cls, center_nm, fractional_bandwidth, n_samples):
-        """An equal-weight band: ``n_samples`` wavelengths across the band.
-
-        Args:
-            center_nm: Band center in nanometers.
-            fractional_bandwidth: Full fractional width (0.2 spans
-                ``0.9 * center`` to ``1.1 * center``).
-            n_samples: Number of wavelength samples (endpoints included).
-
-        Returns:
-            The ``Spectrum`` with weights summing to one.
-        """
-        half = fractional_bandwidth / 2.0
-        wavelengths = center_nm * jnp.linspace(1.0 - half, 1.0 + half, n_samples)
-        weights = jnp.full(n_samples, 1.0 / n_samples)
-        return cls(wavelengths_nm=wavelengths, weights=weights)
-
-    @classmethod
-    def midpoint_band(cls, center_nm, fractional_bandwidth, n_samples):
-        """The survey band-sampling rule: bin midpoints, endpoints excluded.
-
-        Wavelengths sit at ``center * (1 + x * B)`` with
-        ``x = (k + 1/2) / n - 1/2`` -- the convention the yield-input-package
-        reference pipeline evaluates bands with.
-
-        Args:
-            center_nm: Band center in nanometers.
-            fractional_bandwidth: Full fractional width.
-            n_samples: Number of wavelength samples.
-
-        Returns:
-            The ``Spectrum`` with equal weights summing to one.
-        """
-        x = (jnp.arange(n_samples) + 0.5) / n_samples - 0.5
-        wavelengths = center_nm * (1.0 + x * fractional_bandwidth)
-        weights = jnp.full(n_samples, 1.0 / n_samples)
-        return cls(wavelengths_nm=wavelengths, weights=weights)
-
-    def __check_init__(self):
-        """Validate matching 1D wavelength and weight vectors."""
-        if self.wavelengths_nm.ndim != 1:
-            raise ValueError("wavelengths_nm must be 1D")
-        if self.weights.shape != self.wavelengths_nm.shape:
-            raise ValueError(
-                f"weights shape {self.weights.shape} does not match "
-                f"wavelengths shape {self.wavelengths_nm.shape}"
-            )
+    def from_band(cls, band, order, *, knots_nm=()):
+        """Gauss-Legendre quadrature, split at declared interior wavelength knots."""
+        quadrature = Quadrature.build((band,), knots_nm, order)
+        return cls(quadrature.nodes_nm[0], quadrature.weights_nm[0], band=band)
 
     def __len__(self):
-        """Number of wavelength samples."""
-        return self.wavelengths_nm.shape[0]
+        """Number of wavelength nodes."""
+        return self.nodes_nm.shape[0]
 
 
-class Field(eqx.Module):
-    """A complex field on a grid, tagged with the plane it lives in.
+@jax.tree_util.register_pytree_node_class
+@dataclass(frozen=True, eq=False, init=False)
+class Field(GridArray):
+    """Complex GridArray with static plane and dynamic spectral quadrature.
 
-    Attributes:
-        data: Complex field values, ``(y, x)`` mono or ``(nlam, y, x)``
-            chromatic. The only hot leaf.
-        grid: The static coordinate grid the data is sampled on.
-        plane: Static plane tag; elements and propagators validate against it.
-        spectrum: Wavelengths and weights for a chromatic field; ``None``
-            means monochromatic.
+    Mono data are (y, x); chromatic data are (wavelength, y, x).
+    Intensity retains continuous-field density units; energy includes pixel area.
     """
 
-    data: Array
-    grid: Grid
-    plane: PlaneKind = eqx.field(static=True)
-    spectrum: Spectrum | None = None
+    plane: PlaneKind
+    spectrum: Spectrum | None
 
-    def __check_init__(self):
-        """Enforce the two locked data layouts against grid and spectrum."""
-        shape = self.data.shape
-        if self.spectrum is None:
-            if len(shape) != 2:
-                raise ValueError(
-                    f"mono field data must be 2D (y, x), got {shape}; "
-                    "a leading wavelength axis requires a spectrum"
-                )
-        else:
-            if len(shape) != 3 or shape[0] != len(self.spectrum):
-                raise ValueError(
-                    f"chromatic field data must be (nlam, y, x) with nlam == "
-                    f"{len(self.spectrum)} wavelength samples, got {shape}"
-                )
-        npix = self.grid.npix
-        if shape[-2:] != (npix, npix):
-            raise ValueError(f"data shape {shape} does not match grid ({npix}, {npix})")
+    def __init__(self, data, grid, plane, spectrum=None):
+        """Construct the locked mono or chromatic layout on the shared grid."""
+        data = jnp.asarray(data, dtype=jnp.result_type(data, 1j))
+        object.__setattr__(self, "data", data)
+        object.__setattr__(self, "grid", grid)
+        object.__setattr__(self, "plane", plane)
+        object.__setattr__(self, "spectrum", spectrum)
+        object.__setattr__(
+            self, "leading_axes", () if spectrum is None else ("wavelength",)
+        )
+        if spectrum is None and data.ndim != 2:
+            raise ValueError(
+                "mono field data must be 2D (y, x); "
+                "supply a spectrum for wavelength axes"
+            )
+        if spectrum is not None and (data.ndim != 3 or data.shape[0] != len(spectrum)):
+            raise ValueError(
+                "chromatic field data must be (nlam, y, x) "
+                "matching spectrum wavelength nodes"
+            )
+        super().__post_init__()
+
+    def tree_flatten(self):
+        """Expose complex data and spectral leaves; retain static geometry/tags."""
+        return (self.data, self.spectrum), (self.grid, self.leading_axes, self.plane)
+
+    @classmethod
+    def tree_unflatten(cls, metadata, arrays):
+        """Reconstruct mapped fields without validating JAX placeholders."""
+        result = object.__new__(cls)
+        for name, value in zip(
+            ("grid", "leading_axes", "plane", "data", "spectrum"),
+            (*metadata, *arrays),
+            strict=True,
+        ):
+            object.__setattr__(result, name, value)
+        return result
 
     def intensity(self):
-        """Intensity: ``|data|^2``, weight-summed over wavelength if chromatic."""
+        """Intensity Image in field power per grid-unit area, summed over wavelength."""
         abs2 = self.data.real**2 + self.data.imag**2
-        if self.spectrum is None:
-            return abs2
-        return jnp.tensordot(self.spectrum.weights, abs2, axes=1)
+        if self.spectrum is not None:
+            abs2 = jnp.tensordot(self.spectrum.weights, abs2, axes=1)
+        return Image(abs2, self.grid, (), "per_unit_area", "field_power")
 
     def energy(self):
-        """Total power: ``sum(|data|^2) * weights``, per wavelength if chromatic."""
+        """Integrated power, per wavelength for a chromatic field."""
         abs2 = self.data.real**2 + self.data.imag**2
-        return jnp.sum(abs2, axis=(-2, -1)) * self.grid.weights
+        return jnp.sum(abs2, axis=(-2, -1)) * self.grid.pixel_area
 
 
 def validate_field(field, *, plane, grid, context):
-    """Raise if a field is not in the expected plane on the expected grid.
-
-    Args:
-        field: The field to check.
-        plane: Required ``PlaneKind``.
-        grid: Required ``Grid``.
-        context: Name of the element or propagator doing the checking, for
-            the error message.
-    """
+    """Reject fields with a plane tag or sampling different from the operator."""
     if field.plane is not plane:
         raise ValueError(
             f"{context} acts in the {plane.value} plane but the field is in "

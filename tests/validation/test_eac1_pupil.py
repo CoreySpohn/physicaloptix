@@ -13,13 +13,16 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import TEST_FRAME
+from hwoutils.grids import PixelGrid
 
 from physicaloptix.apertures import (
     eac1_primary,
     normalize_unit_energy,
     rasterize_primary,
 )
-from physicaloptix.core import Field, Grid, PlaneKind
+from physicaloptix.core import Field, PlaneKind
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import MultiScaleVortex, SampledOptic
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.transforms import Fraunhofer, cmft_fwd
@@ -27,13 +30,7 @@ from physicaloptix.transforms import Fraunhofer, cmft_fwd
 # Full-resolution comparisons require external reference data and a larger machine.
 pytestmark = pytest.mark.slow
 
-_FITS_CANDIDATES = (
-    Path(__file__).parents[1] / "data" / "pupil_eac1_2048.fits.gz",
-    # Development-workspace clone of the design-survey pipeline.
-    Path(__file__).parents[3]
-    / "cds_pipeline/cds_pipeline/baseline/data"  # internal-ref-ok
-    / "pupil_eac1_2048.fits.gz",
-)
+_FITS_CANDIDATES = (Path(__file__).parents[1] / "data" / "pupil_eac1_2048.fits.gz",)
 
 
 @pytest.fixture(scope="session")
@@ -81,8 +78,8 @@ def chain(synthesized_pupil, eac1_cache):
     z = eac1_cache
     npup, dims = int(z["meta"][0]), int(z["meta"][7])
     charge, ps_lod = int(z["meta"][4]), float(z["meta"][6])
-    pupil_grid = Grid.pupil(npup)
-    science_grid = Grid.focal(dims, ps_lod)
+    pupil_grid = PixelGrid.pupil(npup)
+    science_grid = PixelGrid.focal(dims, ps_lod, TEST_FRAME)
 
     def pupil_optic(name):
         return SampledOptic(
@@ -116,8 +113,8 @@ class TestGatesOnSynthesizedPupil:
     def test_gates_hold_on_synthesized_pupil(self, chain, eac1_cache):
         path, field, pupil_grid, science_grid = chain
         z = eac1_cache
-        x = jnp.asarray(pupil_grid.coords)
-        u = jnp.asarray(science_grid.coords)
+        x = jnp.asarray(_grid_axis(pupil_grid))
+        u = jnp.asarray(_grid_axis(science_grid))
 
         tele = np.abs(np.asarray(cmft_fwd(field.data, x, u))) ** 2
 
@@ -130,7 +127,7 @@ class TestGatesOnSynthesizedPupil:
         assert scale_fit_residual(tele, z["tele_psf"]) < 1e-6
 
         on, _ = path.propagate(field)
-        psf_on = np.asarray(on.intensity())
+        psf_on = np.asarray(on.intensity().data)
         floor = psf_on.max() / tele.max()
         cds_floor = float(z["onaxis_psf"].max() / z["tele_psf"].max())
         assert floor < 5e-11
@@ -139,5 +136,5 @@ class TestGatesOnSynthesizedPupil:
         tilt = jnp.exp(2j * jnp.pi * 7.0 * x)[None, :]
         off = Field(data=field.data * tilt, grid=pupil_grid, plane=PlaneKind.PUPIL)
         psf_off, _ = path.propagate(off)
-        resid = scale_fit_residual(np.asarray(psf_off.intensity()), z["offax_7"])
+        resid = scale_fit_residual(np.asarray(psf_off.intensity().data), z["offax_7"])
         assert resid < 1e-4

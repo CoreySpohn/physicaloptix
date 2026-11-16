@@ -126,13 +126,13 @@ def _band(nodes=NODES_NM, weights=RAW_WEIGHTS, cube="default"):
 
 def test_zero_seam_band_equals_nircam_band_image():
     config, inputs, band = _config(), _inputs(), _band()
-    reference = np.asarray(nircam_band_image(config, inputs, band))
+    reference = np.asarray(nircam_band_image(config, inputs, band).data)
     model, source = build_nircam_band(config, inputs, band)
-    eager = np.asarray(model.image((source,)))
+    eager = np.asarray(model.image((source,)).data)
     np.testing.assert_array_equal(eager, reference)
     assert reference.max() > 0.0
 
-    jitted = np.asarray(eqx.filter_jit(lambda m, s: m.image((s,)))(model, source))
+    jitted = np.asarray(eqx.filter_jit(lambda m, s: m.image((s,)).data)(model, source))
     np.testing.assert_allclose(jitted, reference, rtol=1e-13, atol=0)
 
 
@@ -182,9 +182,9 @@ def _seam_point():
 
 def test_seams_change_the_image():
     model, source = build_nircam_band(_config(), _inputs(), _band())
-    base = np.asarray(model.image((source,)))
+    base = np.asarray(model.image((source,)).data)
     offset, shift = _seam_point()
-    moved = np.asarray(_with_seams(model, offset, shift).image((source,)))
+    moved = np.asarray(_with_seams(model, offset, shift).image((source,)).data)
     assert np.abs(moved - base).max() > 1e-3 * base.max()
 
 
@@ -203,7 +203,9 @@ def test_shared_seam_gradient_is_the_sum_of_per_node_gradients():
         model, source = build_nircam_band(config, inputs, band)
 
         def loss(offset, shift):
-            return jnp.sum(probe * _with_seams(model, offset, shift).image((source,)))
+            return jnp.sum(
+                probe * _with_seams(model, offset, shift).image((source,)).data
+            )
 
         return jax.grad(loss, argnums=(0, 1))(offset, shift)
 
@@ -229,7 +231,7 @@ def test_checkpoint_on_and_off_agree_in_value_and_gradient():
 
         def loss(offset, shift, position):
             src = eqx.tree_at(lambda s: s.position_arcsec, source, position)
-            return jnp.sum(probe * _with_seams(tuned, offset, shift).image((src,)))
+            return jnp.sum(probe * _with_seams(tuned, offset, shift).image((src,)).data)
 
         point = (offset, shift, source.position_arcsec)
         return loss(*point), jax.grad(loss, argnums=(0, 1, 2))(*point)
@@ -250,8 +252,8 @@ def test_detector_plus_y_lands_on_plus_rows():
     config = _config(ote_opd=False, focal_mask=False, lyot_stop=False, si_wfe=False)
     model, _ = build_nircam_band(config, _inputs(), _band(cube=None))
     pitch = SCALE / OVERSAMPLE
-    on_axis = np.asarray(model.image((PointSource([0.0, 0.0]),)))
-    shifted = np.asarray(model.image((PointSource([0.0, m * pitch]),)))
+    on_axis = np.asarray(model.image((PointSource([0.0, 0.0]),)).data)
+    shifted = np.asarray(model.image((PointSource([0.0, m * pitch]),)).data)
     np.testing.assert_allclose(
         shifted[m:], on_axis[:-m], rtol=0, atol=1e-10 * on_axis.max()
     )

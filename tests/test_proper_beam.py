@@ -4,8 +4,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hwoutils.grids import PixelGrid
 
-from physicaloptix.core import Field, Grid, PlaneKind
+from physicaloptix.core import Field, PlaneKind
 from physicaloptix.instruments._proper_beam import (
     Op,
     PilotBeam,
@@ -99,7 +100,7 @@ def test_ptp_matches_same_grid_fresnel():
     rng = np.random.default_rng(0)
     a = jnp.asarray(rng.standard_normal((n, n)) + 1j * rng.standard_normal((n, n)))
     out = run_ops(_corner(a), (Op("ptp", 0.7, d / d_pix, True),), LAM)
-    grid = Grid(npix=n, dx=1.0 / d_pix)
+    grid = PixelGrid.regular((n, n), 1.0 / d_pix, "pupil_diameter")
     fres = Fresnel(
         grid,
         distance_m=0.7,

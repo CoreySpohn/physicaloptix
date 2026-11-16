@@ -11,7 +11,7 @@ library compares to hcipy, dLux, poppy, prysm, and chromatix, see
 
 A physicaloptix simulation is a **field pushed through a path**. A
 {class}`~physicaloptix.Field` is a complex wavefront living on a
-{class}`~physicaloptix.Grid`; an {class}`~physicaloptix.OpticalPath` is a
+{class}`~hwoutils.grids.PixelGrid`; an {class}`~physicaloptix.OpticalPath` is a
 sequence of {class}`~physicaloptix.Stage` operations. Calling
 `path.propagate(field)` folds the field through every stage and returns the
 field at the end. Everything else is a kind of stage, a kind of grid, or a way
@@ -23,15 +23,15 @@ Because the whole thing is built on [JAX](https://github.com/google/jax) and
 wavelength or field angle, and take gradients through it with respect to any
 leaf -- a mirror shape, a mask parameter, a source position.
 
-## The data model: `Grid`, `Field`, `PlaneKind`
+## The data model: `PixelGrid`, `Field`, `PlaneKind`
 
-A `Grid` is an all-static sampling of a plane. It carries its pixel count and
+A `PixelGrid` is an all-static sampling of a plane. It carries its pixel count and
 pitch and the coordinate weights the propagators need; nothing about it is
 traced, so it can be compared and validated at construction time. Two
 factories cover the common cases: a pupil-plane grid spanning the aperture,
 and a focal-plane grid sampled in units of $\lambda/D$.
 
-A `Field` is the complex array of the wavefront, stamped with the `Grid` it
+A `Field` is the complex array of the wavefront, stamped with the `PixelGrid` it
 lives on and a `PlaneKind` tag -- `PUPIL`, `INTERMEDIATE`, or `FOCAL`. The tag
 is not decoration: propagators declare which plane they consume and which they
 produce, so a mis-wired train (a focal-plane mask handed a pupil field, say)

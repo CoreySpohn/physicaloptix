@@ -93,7 +93,7 @@ def compile_train(steps, *, lam_m, n, beam_diameter_m, pupil_diam_pix):
     Args:
         steps: The step list (see the module docstring).
         lam_m: Wavelength.
-        n: Grid size (even).
+        n: PixelGrid size (even).
         beam_diameter_m: Entrance beam diameter.
         pupil_diam_pix: Entrance beam diameter in samples.
 
@@ -149,7 +149,7 @@ class RomanFull(eqx.Module):
         arrays: Element arrays by key, centered; DM keys hold actuator heights in
             meters (positive into the DM) beside ``<key>_influence``.
         program: The compiled program.
-        n: Grid size.
+        n: PixelGrid size.
         lam_m: Wavelength in meters.
         pupil_diam_pix: Entrance beam diameter in samples.
         final_dx_m: Sample spacing at the last plane.

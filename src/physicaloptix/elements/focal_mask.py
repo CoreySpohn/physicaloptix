@@ -9,37 +9,39 @@ MFT (``Fraunhofer``) on any other window.
 """
 
 import equinox as eqx
+from hwoutils.grids import PixelGrid
 from jaxtyping import Array
 
-from physicaloptix.core import Field, Grid, PlaneKind
+from physicaloptix.core import Field, PlaneKind
 from physicaloptix.transforms import Fraunhofer, FullBandFraunhofer
 
 __all__ = ["FocalPlaneMask", "mask_window", "select_mask_transform"]
 
 
-def mask_window(pupil_grid, oversample, *, extent_lod=None):
+def mask_window(pupil_grid, oversample, *, frame, extent_lod=None):
     """The mask-plane window grid for a pupil grid.
 
     Args:
         pupil_grid: The pupil grid (``npix`` samples spanning ``npix * dx``).
+        frame: Primary frame defining the mask-plane lambda/D unit.
         oversample: Window samples per lambda/D (a pitch of ``1 / oversample``).
         extent_lod: Full window width in lambda/D; ``None`` is the pupil
-            raster's full Nyquist band, ``pupil_grid.npix`` lambda/D.
+            raster's full Nyquist band, ``pupil_grid.shape[0]`` lambda/D.
 
     Returns:
-        The focal ``Grid`` of the window.
+        The focal ``PixelGrid`` of the window.
 
     Raises:
         ValueError: The window holds no sample.
     """
-    extent = pupil_grid.npix if extent_lod is None else extent_lod
+    extent = pupil_grid.shape[0] if extent_lod is None else extent_lod
     n_mask = round(extent * oversample)
     if n_mask < 1:
         raise ValueError(
             f"mask-plane window of {extent} lambda/D at {oversample} "
             "samples per lambda/D holds no sample"
         )
-    return Grid.focal(n_mask, 1.0 / oversample)
+    return PixelGrid.focal(n_mask, 1.0 / oversample, frame)
 
 
 def select_mask_transform(pupil_grid, window, oversample, mask_transform="auto"):
@@ -64,16 +66,16 @@ def select_mask_transform(pupil_grid, window, oversample, mask_transform="auto")
         raise ValueError(
             f"mask_transform must be auto, fft or mft, got {mask_transform!r}"
         )
-    full_band = window.npix == pupil_grid.npix * oversample
+    full_band = window.shape[0] == pupil_grid.shape[0] * oversample
     integer = float(oversample).is_integer()
     if mask_transform == "fft" and not (full_band and integer):
         raise ValueError(
             "mask_transform='fft' needs the full-band window (extent "
-            f"{pupil_grid.npix} lambda/D) and an integer oversample, got a "
-            f"window of {window.npix} samples at oversample {oversample}"
+            f"{pupil_grid.shape[0]} lambda/D) and an integer oversample, got a "
+            f"window of {window.shape[0]} samples at oversample {oversample}"
         )
     if mask_transform == "fft" or (mask_transform == "auto" and full_band and integer):
-        return FullBandFraunhofer(pupil_grid, int(oversample))
+        return FullBandFraunhofer(pupil_grid, window.frame, int(oversample))
     return Fraunhofer(pupil_grid, window, on_undersampled="raise")
 
 
@@ -106,7 +108,7 @@ class FocalPlaneMask(eqx.Module):
 
     def __check_init__(self):
         """Validate that the transmission matches the window grid."""
-        npix = self.transform.grid_out.npix
+        npix = self.transform.grid_out.shape[0]
         if self.transmission.shape != (npix, npix):
             raise ValueError(
                 f"transmission shape {self.transmission.shape} does not match "

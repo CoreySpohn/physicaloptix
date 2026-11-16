@@ -17,9 +17,11 @@ edges converge at ~first order, which the convergence pin would catch.
 
 import jax.numpy as jnp
 import numpy as np
+from conftest import TEST_FRAME
+from hwoutils.grids import PixelGrid
 from scipy.special import j0, j1
 
-from physicaloptix.core import Grid
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.transforms.cmft import cmft_fwd
 
 Q_FOC = 16
@@ -39,14 +41,14 @@ def _gray_disk(npix, supersample=16, radius=0.5):
 
 def _airy_setup(npup, supersample=16):
     """Propagate a gray-edge unit disk to the focal grid; return field + ref."""
-    grid = Grid.pupil(npup)
+    grid = PixelGrid.pupil(npup)
     pupil = _gray_disk(npup, supersample)
-    focal = Grid.focal(int(2 * Q_FOC * NUM_AIRY), 1.0 / Q_FOC)
-    u = np.asarray(focal.coords)
+    focal = PixelGrid.focal(int(2 * Q_FOC * NUM_AIRY), 1.0 / Q_FOC, TEST_FRAME)
+    u = np.asarray(_grid_axis(focal))
     foc = np.asarray(
         cmft_fwd(
             jnp.asarray(pupil, complex),
-            jnp.asarray(grid.coords),
+            jnp.asarray(_grid_axis(grid)),
             jnp.asarray(u),
         )
     )
@@ -77,8 +79,8 @@ class TestAiryAbsolute:
         """83.8% of the total energy lies inside the first null at 1.2197
         lambda/D (1 - J0^2 - J1^2 at the zero)."""
         pupil, grid, foc, _, r, focal = _airy_setup(256)
-        e_total = (np.abs(pupil) ** 2).sum() * grid.weights
-        e_core = (np.abs(foc[r < FIRST_ZERO]) ** 2).sum() * focal.weights
+        e_total = (np.abs(pupil) ** 2).sum() * grid.pixel_area
+        e_core = (np.abs(foc[r < FIRST_ZERO]) ** 2).sum() * focal.pixel_area
         expected = 1.0 - j0(np.pi * FIRST_ZERO) ** 2 - j1(np.pi * FIRST_ZERO) ** 2
         np.testing.assert_allclose(e_core / e_total, expected, atol=0.01)
 
@@ -100,12 +102,12 @@ class TestFourierIdentities:
         asserted at 1e-12. Anisotropic (a != b) so an x/y transpose cannot
         pass."""
         npup = 128
-        grid = Grid.pupil(npup)
-        x1 = np.asarray(grid.coords)
+        grid = PixelGrid.pupil(npup)
+        x1 = np.asarray(_grid_axis(grid))
         xx, yy = np.meshgrid(x1, x1)
         pupil = _gray_disk(npup, supersample=1)
-        focal = Grid.focal(int(2 * Q_FOC * NUM_AIRY), 1.0 / Q_FOC)
-        u = jnp.asarray(focal.coords)
+        focal = PixelGrid.focal(int(2 * Q_FOC * NUM_AIRY), 1.0 / Q_FOC, TEST_FRAME)
+        u = jnp.asarray(_grid_axis(focal))
         du = 1.0 / Q_FOC
         shift_x_px, shift_y_px = 24, 8
         tilt = np.exp(2j * np.pi * (shift_x_px * du * xx + shift_y_px * du * yy))
@@ -125,12 +127,12 @@ class TestFourierIdentities:
         The 1e-3 tolerance covers the +-16 lambda/D diffraction orders'
         Airy-tail leakage back to the axis."""
         npup = 256
-        grid = Grid.pupil(npup)
-        x1 = np.asarray(grid.coords)
+        grid = PixelGrid.pupil(npup)
+        x1 = np.asarray(_grid_axis(grid))
         xx, _ = np.meshgrid(x1, x1)
         pupil = _gray_disk(npup)
-        focal = Grid.focal(int(2 * Q_FOC * NUM_AIRY), 1.0 / Q_FOC)
-        u = jnp.asarray(focal.coords)
+        focal = PixelGrid.focal(int(2 * Q_FOC * NUM_AIRY), 1.0 / Q_FOC, TEST_FRAME)
+        u = jnp.asarray(_grid_axis(focal))
         x = jnp.asarray(x1)
         uu, vv = np.meshgrid(np.asarray(u), np.asarray(u))
         onaxis = np.unravel_index(np.hypot(uu, vv).argmin(), uu.shape)

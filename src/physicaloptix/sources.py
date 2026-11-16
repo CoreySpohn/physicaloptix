@@ -14,6 +14,7 @@ from hwoutils.conversions import arcsec_to_lambda_d
 from jaxtyping import Array
 
 from physicaloptix.core import Field
+from physicaloptix.core.grid import _grid_axis
 
 
 def broadcast_to_spectrum(field, spectrum):
@@ -58,7 +59,7 @@ def point_source(
     Returns:
         The source ``Field`` (mono 2D, or chromatic ``(nlam, y, x)``).
     """
-    x = jnp.asarray(field.grid.coords)
+    x = jnp.asarray(_grid_axis(field.grid))
     if position_lod is None:
         position_lod = (separation_lod, 0.0)
     px, py = position_lod
@@ -87,7 +88,7 @@ def point_source(
             "define the fixed angle"
         )
 
-    wavelengths = spectrum.wavelengths_nm
+    wavelengths = spectrum.nodes_nm
 
     def slice_for(wavelength_nm):
         data = field.data
@@ -160,7 +161,7 @@ class PointSource(eqx.Module):
         Returns:
             The tilted entrance ``Field``.
         """
-        x = jnp.asarray(entrance.grid.coords)
+        x = jnp.asarray(_grid_axis(entrance.grid))
         lod = arcsec_to_lambda_d(self.position_arcsec, wavelength_nm, pupil_diameter_m)
         phase = (parity[0] * lod[0]) * x[jnp.newaxis, :] + (parity[1] * lod[1]) * x[
             :, jnp.newaxis

@@ -5,8 +5,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hwoutils.grids import PixelGrid
+from hwoutils.spectral import Band
 
-from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind, Spectrum
 from physicaloptix.elements import DispersiveScreen, ModeBasis, PhaseScreen
 
 NPIX = 64
@@ -14,7 +16,7 @@ WL0 = 550.0
 
 
 def _grid():
-    return Grid.pupil(NPIX)
+    return PixelGrid.pupil(NPIX)
 
 
 def _basis(grid, m=3, seed=0):
@@ -52,8 +54,8 @@ class TestOpdEquivalence:
     def test_chromatic(self):
         grid = _grid()
         basis = _basis(grid)
-        spectrum = Spectrum.tophat(WL0, 0.2, 5)
-        table = spectrum.wavelengths_nm  # nodes AT the samples: interp exact
+        spectrum = Spectrum.from_band(Band(WL0 * (1 - 0.2 / 2), WL0 * (1 + 0.2 / 2)), 5)
+        table = spectrum.nodes_nm  # nodes AT the samples: interp exact
         kernel = jnp.broadcast_to(1j * 2.0 * jnp.pi / table, (basis.n_modes, 5))
         screen = DispersiveScreen(basis, kernel, table, grid, wavelength_nm=WL0)
         reference = PhaseScreen(basis, grid, wavelength_nm=WL0)
@@ -68,7 +70,7 @@ class TestDispersiveResponse:
         """A wavelength-constant kernel applies the identical multiplier per slice."""
         grid = _grid()
         basis = _basis(grid)
-        spectrum = Spectrum.tophat(WL0, 0.2, 5)
+        spectrum = Spectrum.from_band(Band(WL0 * (1 - 0.2 / 2), WL0 * (1 + 0.2 / 2)), 5)
         kernel = jnp.full((basis.n_modes, 2), 0.1 + 0.2j)
         screen = DispersiveScreen(
             basis, kernel, jnp.array([400.0, 700.0]), grid, wavelength_nm=WL0

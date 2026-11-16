@@ -49,8 +49,10 @@ not assumed, precisely because that inconsistency exists in the source.
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hwoutils.grids import PixelGrid
 
-from physicaloptix.core import Field, Grid, PlaneKind
+from physicaloptix.core import Field, PlaneKind
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import MultiScaleVortex
 from physicaloptix.transforms.cmft import cmft_fwd
 
@@ -83,8 +85,8 @@ def _lyot_contrast(charge, supersample):
     Returns (annulus mean, annulus max, peak, residual Lyot power), all as
     contrast against the non-coronagraphic focal peak of the same pupil.
     """
-    grid = Grid.pupil(NPUP)
-    x = jnp.asarray(grid.coords)
+    grid = PixelGrid.pupil(NPUP)
+    x = jnp.asarray(_grid_axis(grid))
     pupil = _gray_disk(NPUP, supersample)
     u, rfoc = _focal_grid()
     ref_peak = float(
@@ -147,11 +149,11 @@ _EXTERIOR_POLY = {
 @pytest.fixture(scope="module", params=[2, 4, 6])
 def lyot_field(request):
     charge = request.param
-    grid = Grid.pupil(NPUP)
+    grid = PixelGrid.pupil(NPUP)
     pupil = _gray_disk(NPUP)
     vortex = MultiScaleVortex.build(charge=charge, npup=NPUP, q=1024)
     field = Field(data=jnp.asarray(pupil, complex), grid=grid, plane=PlaneKind.PUPIL)
-    return charge, np.asarray(vortex(field).data), np.asarray(grid.coords)
+    return charge, np.asarray(vortex(field).data), np.asarray(_grid_axis(grid))
 
 
 class TestEvenChargeClosedForm:

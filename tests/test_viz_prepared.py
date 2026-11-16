@@ -10,11 +10,13 @@ field.
 import os
 
 import matplotlib
+from hwoutils.constants import s2d
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
+from hwoutils.constants import d2s
 
 pytest.importorskip("eyepiece")
 
@@ -40,7 +42,10 @@ def _times(n=4):
 
 def _cube_from(field, times):
     return np.stack(
-        [np.asarray(field.realize(wavelength_nm=500.0, time_s=float(t))) for t in times]
+        [
+            np.asarray(field.realize(wavelength_nm=500.0, time_d=float(t) * s2d))
+            for t in times
+        ]
     )
 
 
@@ -138,9 +143,9 @@ def test_default_total_bounds_are_whole_cube_percentiles():
 class _FakeCube:
     """Deterministic positive frames without the counter fixture."""
 
-    def realize(self, *, wavelength_nm, time_s=0.0):
+    def realize(self, *, wavelength_nm, time_d=0.0):
         y, x = np.ogrid[:SPECKLE_NPIX, :SPECKLE_NPIX]
-        return 1e-9 * (1.0 + 0.5 * np.sin(time_s)) * (1.0 + x + 3.0 * y)
+        return 1e-9 * (1.0 + 0.5 * np.sin(time_d * d2s)) * (1.0 + x + 3.0 * y)
 
 
 # --- declared sample semantics ------------------------------------------------

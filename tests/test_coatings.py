@@ -137,14 +137,14 @@ class TestFeedsDispersiveScreen:
     def test_thickness_kernel_feeds_dispersive_screen(
         self, small_path, chromatic_field
     ):
-        wavelengths = chromatic_field.spectrum.wavelengths_nm
+        wavelengths = chromatic_field.spectrum.nodes_nm
         kern = thickness_kernel(
             wavelengths, [2.35, 1.38], [60.0, 95.0], layer=0, n_substrate=1.5
         )
         grid = small_path.stages[0].op.grid
         rng = np.random.default_rng(2)
         basis = ModeBasis(
-            B=jnp.asarray(rng.standard_normal((1, grid.npix, grid.npix))),
+            B=jnp.asarray(rng.standard_normal((1, grid.shape[0], grid.shape[0]))),
             coeffs=jnp.array([0.3]),
         )
         screen = DispersiveScreen(

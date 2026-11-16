@@ -9,8 +9,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import TEST_FRAME
+from hwoutils.grids import PixelGrid
 
-from physicaloptix.core import Field, Grid, PlaneKind
+from physicaloptix.core import Field, PlaneKind
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import FocalPlaneMask, mask_window, select_mask_transform
 from physicaloptix.transforms import Fraunhofer, FullBandFraunhofer
 
@@ -30,7 +33,7 @@ def _pupil_field(npup):
 
 def _transmission(window):
     """Compact core, a box and a strip that both reach the window edge."""
-    c = window.coords
+    c = _grid_axis(window)
     xx, yy = np.meshgrid(c, c)
     t = 1.0 - np.exp(-((xx - 0.3) ** 2 + (yy + 0.2) ** 2) / 2.0)
     t[(xx > 2.0) & (yy > 1.0)] = 0.3
@@ -39,8 +42,8 @@ def _transmission(window):
 
 
 def _stages(npup, oversample):
-    pupil = Grid.pupil(npup)
-    window = mask_window(pupil, oversample)
+    pupil = PixelGrid.pupil(npup)
+    window = mask_window(pupil, oversample, frame=TEST_FRAME)
     transmission = _transmission(window)
     return pupil, {
         name: FocalPlaneMask(
@@ -109,22 +112,26 @@ class TestFullBandMaskStage:
         )
 
     def test_auto_picks_fft_on_the_full_band_and_mft_on_a_window(self):
-        pupil = Grid.pupil(16)
-        full = mask_window(pupil, 2)
-        small = mask_window(pupil, 2, extent_lod=8.0)
+        pupil = PixelGrid.pupil(16)
+        full = mask_window(pupil, 2, frame=TEST_FRAME)
+        small = mask_window(pupil, 2, extent_lod=8.0, frame=TEST_FRAME)
         assert isinstance(select_mask_transform(pupil, full, 2), FullBandFraunhofer)
         assert isinstance(select_mask_transform(pupil, small, 2), Fraunhofer)
 
     def test_fft_is_refused_where_it_does_not_apply(self):
-        pupil = Grid.pupil(16)
-        small = mask_window(pupil, 2, extent_lod=8.0)
+        pupil = PixelGrid.pupil(16)
+        small = mask_window(pupil, 2, extent_lod=8.0, frame=TEST_FRAME)
         with pytest.raises(ValueError, match="full-band"):
             select_mask_transform(pupil, small, 2, "fft")
         with pytest.raises(ValueError, match="integer"):
-            select_mask_transform(pupil, mask_window(pupil, 2.5), 2.5, "fft")
+            select_mask_transform(
+                pupil, mask_window(pupil, 2.5, frame=TEST_FRAME), 2.5, "fft"
+            )
         with pytest.raises(ValueError, match="mask_transform"):
-            select_mask_transform(pupil, mask_window(pupil, 2), 2, "dft")
+            select_mask_transform(
+                pupil, mask_window(pupil, 2, frame=TEST_FRAME), 2, "dft"
+            )
         with pytest.raises(ValueError, match="oversample"):
-            FullBandFraunhofer(pupil, 0)
+            FullBandFraunhofer(pupil, TEST_FRAME, 0)
         with pytest.raises(ValueError, match="no sample"):
-            mask_window(pupil, 2, extent_lod=0.1)
+            mask_window(pupil, 2, extent_lod=0.1, frame=TEST_FRAME)

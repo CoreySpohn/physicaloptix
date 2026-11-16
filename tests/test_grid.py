@@ -1,17 +1,19 @@
-"""Tests for the static Grid type (physicaloptix.core.grid)."""
+"""Tests for the static PixelGrid type (physicaloptix.core.grid)."""
 
 import jax
 import numpy as np
+from conftest import TEST_FRAME
+from hwoutils.grids import PixelGrid
 
-from physicaloptix.core import Grid
+from physicaloptix.core.grid import _grid_axis
 
 
 class TestGridConstruction:
     def test_pupil_grid_spans_one_diameter(self):
-        grid = Grid.pupil(64)
-        assert grid.npix == 64
-        assert grid.dx == 1.0 / 64
-        coords = np.asarray(grid.coords)
+        grid = PixelGrid.pupil(64)
+        assert grid.shape[0] == 64
+        assert grid.step == 1.0 / 64
+        coords = np.asarray(_grid_axis(grid))
         assert coords.shape == (64,)
         # Half-pixel-offset symmetric grid: no sample at 0, symmetric about 0.
         assert not np.any(coords == 0.0)
@@ -19,27 +21,27 @@ class TestGridConstruction:
         np.testing.assert_allclose(coords[0], -(64 / 2 - 0.5) / 64)
 
     def test_focal_grid_uses_pixel_scale(self):
-        grid = Grid.focal(256, 0.25)
-        assert grid.npix == 256
-        assert grid.dx == 0.25
-        coords = np.asarray(grid.coords)
+        grid = PixelGrid.focal(256, 0.25, TEST_FRAME)
+        assert grid.shape[0] == 256
+        assert grid.step == 0.25
+        coords = np.asarray(_grid_axis(grid))
         np.testing.assert_allclose(coords[-1], (256 / 2 - 0.5) * 0.25)
 
     def test_weights_are_cell_area(self):
-        grid = Grid.pupil(32)
-        np.testing.assert_allclose(grid.weights, (1.0 / 32) ** 2)
+        grid = PixelGrid.pupil(32)
+        np.testing.assert_allclose(grid.pixel_area, (1.0 / 32) ** 2)
 
 
 class TestGridStaticness:
     def test_grid_has_zero_leaves(self):
-        """Grid is all-static: it rides in the treedef, never in the leaves."""
-        grid = Grid.pupil(64)
+        """PixelGrid is all-static: it rides in the treedef, never in the leaves."""
+        grid = PixelGrid.pupil(64)
         assert len(jax.tree.leaves(grid)) == 0
 
     def test_equal_grids_compare_and_hash_equal(self):
-        a = Grid.pupil(64)
-        b = Grid.pupil(64)
-        c = Grid.pupil(128)
+        a = PixelGrid.pupil(64)
+        b = PixelGrid.pupil(64)
+        c = PixelGrid.pupil(128)
         assert a == b
         assert a != c
         assert hash(a) == hash(b)
@@ -55,11 +57,59 @@ class TestGridStaticness:
         @eqx.filter_jit
         def f(grid, x):
             traces.append(1)
-            return x * grid.npix
+            return x * grid.shape[0]
 
-        f(Grid.pupil(64), jnp.asarray(1.0))
-        f(Grid.pupil(64), jnp.asarray(2.0))
+        f(PixelGrid.pupil(64), jnp.asarray(1.0))
+        f(PixelGrid.pupil(64), jnp.asarray(2.0))
         assert len(traces) == 1
         # A different grid is a different static structure: it retraces.
-        f(Grid.pupil(128), jnp.asarray(1.0))
+        f(PixelGrid.pupil(128), jnp.asarray(1.0))
         assert len(traces) == 2
+
+
+def test_shared_coordinates_equal_old_formula():
+    """Fails for a half-pixel shift: exact algebra for even/odd pupil/focal grids."""
+    for n in (16, 17):
+        for grid in (PixelGrid.pupil(n), PixelGrid.focal(n, 0.3, TEST_FRAME)):
+            old = (np.arange(n) - n / 2 + 0.5) * grid.step
+            x, y = grid.coordinates()
+            np.testing.assert_array_equal(x, np.broadcast_to(old, (n, n)))
+            np.testing.assert_array_equal(y, np.broadcast_to(old[:, None], (n, n)))
+
+
+def test_explicit_spectrum_psf_equals_parent_formula():
+    """Fails for changed propagation arithmetic: bitwise parent MFT formula.
+
+    The independent reference uses the documented continuous Fourier sum and
+    old coordinate expression, with explicit nodes isolating grid migration.
+    """
+    import jax.numpy as jnp
+
+    from physicaloptix import Field, Fraunhofer, PlaneKind, Spectrum, point_source
+
+    n, m, step = 24, 32, 0.5
+    x = jnp.asarray((np.arange(n) - n / 2 + 0.5) * (1.0 / n))
+    u = jnp.asarray((np.arange(m) - m / 2 + 0.5) * step)
+    disk = ((x[:, None] ** 2 + x[None, :] ** 2) <= 0.25).astype(complex)
+    nodes, weights = jnp.array([450.0, 500.0, 550.0]), jnp.array([0.25, 0.5, 0.25])
+    source = point_source(
+        Field(disk, PixelGrid.pupil(n), PlaneKind.PUPIL),
+        spectrum=Spectrum(nodes, weights),
+    )
+    actual = (
+        Fraunhofer(
+            source.grid,
+            PixelGrid.focal(m, step, TEST_FRAME),
+            reference_wavelength_nm=500.0,
+        )(source)
+        .intensity()
+        .data
+    )
+
+    def old_slice(data, scale):
+        kernel = jnp.exp(-2j * jnp.pi * jnp.outer(u * scale, x))
+        return (x[1] - x[0]) ** 2 * (kernel @ data @ kernel.T) * scale
+
+    old = jax.vmap(old_slice)(source.data, 500.0 / nodes)
+    expected = jnp.tensordot(weights, old.real**2 + old.imag**2, axes=1)
+    np.testing.assert_array_equal(actual, expected)

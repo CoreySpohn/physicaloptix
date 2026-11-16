@@ -29,11 +29,13 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.grids import Frame, PixelGrid
 from hwoutils.map_coordinates import map_coordinates
 from jax.scipy.signal import fftconvolve
 from jaxtyping import Array
 
-from physicaloptix.core import Field, Grid, PlaneKind
+from physicaloptix.core import Field, PlaneKind
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.sources import point_source
 from physicaloptix.transforms import Fraunhofer, Fresnel
 
@@ -320,6 +322,7 @@ class RomanCompact(eqx.Module):
         fpm_sampling_lod: Mask sampling in lambda/D at ``fpm_lam0_nm``.
         fpm_lam0_nm: Wavelength that defines the mask sampling.
         lam0_nm: Design wavelength defining the source-offset unit.
+        primary_diameter_m: Circumscribed primary diameter defining focal lambda/D.
         beam_diameter_m: Beam diameter at DM1.
         dm_separation_m: DM1 to DM2 distance.
         dm1_surface_m, dm2_surface_m: DM surface maps on ``(n_small, n_small)``
@@ -342,6 +345,7 @@ class RomanCompact(eqx.Module):
     fpm_sampling_lod: float = eqx.field(static=True)
     fpm_lam0_nm: float = eqx.field(static=True)
     lam0_nm: float = eqx.field(static=True)
+    primary_diameter_m: float = eqx.field(static=True, default=2.4)
     beam_diameter_m: float = eqx.field(static=True, default=0.0463)
     dm_separation_m: float = eqx.field(static=True, default=1.0)
     dm1_surface_m: Array | None = None
@@ -389,7 +393,7 @@ class RomanCompact(eqx.Module):
                 )
 
     def _pupil_grid(self, n):
-        return Grid(npix=n, dx=1.0 / self.pupil_diam_pix)
+        return PixelGrid.regular((n, n), 1.0 / self.pupil_diam_pix, "pupil_diameter")
 
     def _as_field(self, data, n):
         return Field(data=data, grid=self._pupil_grid(n), plane=PlaneKind.PUPIL)
@@ -469,7 +473,9 @@ class RomanCompact(eqx.Module):
         du = self.pupil_diam_pix / self.n_small
         to_image = Fraunhofer(
             grid,
-            Grid.focal(output_dim, du),
+            PixelGrid.focal(
+                output_dim, du, Frame(wl, self.primary_diameter_m, "circumscribed")
+            ),
             plane_in=PlaneKind.PUPIL,
             plane_out=PlaneKind.FOCAL,
             on_undersampled="record",
@@ -479,7 +485,7 @@ class RomanCompact(eqx.Module):
         if self.n_small % 2 == 0:
             # on an even grid, physicaloptix pupil samples sit half a pixel from the
             # prescription's integer-centered samples: a known linear image phase
-            u = jnp.asarray(to_image.grid_out.coords)
+            u = jnp.asarray(_grid_axis(to_image.grid_out))
             data = data * jnp.exp(1j * jnp.pi * dx * (u[:, None] + u[None, :]))
         stages["image"] = jnp.transpose(data)
         return stages
@@ -498,11 +504,11 @@ class RomanCompact(eqx.Module):
     def _mask_plane_record(at_mask, pupil_grid, dout):
         """Mask-plane field in prescription units, orientation and phase reference."""
         data = (at_mask.data * dout)[::-1, ::-1]
-        if pupil_grid.npix % 2 == 0:
+        if pupil_grid.shape[0] % 2 == 0:
             # half-pixel pupil samples on an even grid: remove the known linear phase
-            u = jnp.asarray(at_mask.grid.coords)
+            u = jnp.asarray(_grid_axis(at_mask.grid))
             data = data * jnp.exp(
-                -1j * jnp.pi * pupil_grid.dx * (u[:, None] + u[None, :])
+                -1j * jnp.pi * pupil_grid.step * (u[:, None] + u[None, :])
             )
         return data
 
@@ -510,7 +516,9 @@ class RomanCompact(eqx.Module):
         assert self.fpm is not None, "fpm must be present when applying a focal mask"
         m = self.fpm.shape[0]
         dout = self.fpm_sampling_lod * self.fpm_lam0_nm / wl
-        focal = Grid.focal(m, dout)
+        focal = PixelGrid.focal(
+            m, dout, Frame(wl, self.primary_diameter_m, "circumscribed")
+        )
         flipped = self.fpm[::-1, ::-1]
         if self.kind == "spc":
             fwd = Fraunhofer(

@@ -3,12 +3,16 @@
 import matplotlib
 import numpy as np
 import pytest
+from conftest import TEST_FRAME
+
+from physicaloptix.core.grid import _grid_axis
 
 matplotlib.use("Agg")
 
 import jax.numpy as jnp
+from hwoutils.grids import PixelGrid
 
-from physicaloptix.core import Field, Grid, PlaneKind
+from physicaloptix.core import Field, PlaneKind
 from physicaloptix.elements import MultiScaleVortex, SampledOptic
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.transforms import Fraunhofer
@@ -19,8 +23,8 @@ NPUP = 32
 
 @pytest.fixture
 def chain():
-    pupil_grid = Grid.pupil(NPUP)
-    x = np.asarray(pupil_grid.coords)
+    pupil_grid = PixelGrid.pupil(NPUP)
+    x = np.asarray(_grid_axis(pupil_grid))
     xx, yy = np.meshgrid(x, x)
     disk = ((xx**2 + yy**2) <= 0.25).astype(float)
     path = OpticalPath(
@@ -49,7 +53,9 @@ def chain():
             ),
             Stage(
                 "science",
-                Fraunhofer(grid_in=pupil_grid, grid_out=Grid.focal(48, 0.5)),
+                Fraunhofer(
+                    grid_in=pupil_grid, grid_out=PixelGrid.focal(48, 0.5, TEST_FRAME)
+                ),
             ),
         )
     )

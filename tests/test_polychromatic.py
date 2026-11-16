@@ -24,9 +24,12 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import TEST_FRAME
+from hwoutils.grids import PixelGrid
 from jax.test_util import check_grads
 
-from physicaloptix.core import ChromaticTable, Field, Grid, PlaneKind
+from physicaloptix.core import ChromaticTable, Field, PlaneKind
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import (
     ModeBasis,
     PhaseScreen,
@@ -48,11 +51,13 @@ NFOCAL = 24
 
 
 def _grids():
-    return Grid.pupil(NPUP), {wl: Grid.focal(NFOCAL, 0.5 * wl / REF_NM) for wl in NODES}
+    return PixelGrid.pupil(NPUP), {
+        wl: PixelGrid.focal(NFOCAL, 0.5 * wl / REF_NM, TEST_FRAME) for wl in NODES
+    }
 
 
 def _pupil_amplitude():
-    x = np.asarray(Grid.pupil(NPUP).coords)
+    x = np.asarray(_grid_axis(PixelGrid.pupil(NPUP)))
     xx, yy = np.meshgrid(x, x)
     amp = ((xx**2 + yy**2) <= 0.25).astype(float)
     amp[(np.abs(xx) < 0.05) & (yy > 0)] = 0.0
@@ -67,15 +72,15 @@ def _fixed_opd_basis():
 
 
 def _stop():
-    x = np.asarray(Grid.pupil(NPUP).coords)
+    x = np.asarray(_grid_axis(PixelGrid.pupil(NPUP)))
     xx, yy = np.meshgrid(x, x)
     return jnp.asarray(((xx**2 + yy**2) <= 0.2).astype(float))
 
 
 def _entrance():
     amp = _pupil_amplitude()
-    grid = Grid.pupil(NPUP)
-    energy = jnp.sum(amp**2) * grid.weights
+    grid = PixelGrid.pupil(NPUP)
+    energy = jnp.sum(amp**2) * grid.pixel_area
     return Field(
         data=jnp.full((NPUP, NPUP), 1.0 / jnp.sqrt(energy), dtype=complex),
         grid=grid,
@@ -158,7 +163,7 @@ def _direct_node_image(wavelength_nm, source, offset, shift):
     )
     field = source.entrance_field(_entrance(), wavelength_nm, DIAMETER_M, (1, 1))
     out, _ = OpticalPath(stages).propagate(field)
-    return out.intensity() * out.grid.weights
+    return out.intensity().data * out.grid.pixel_area
 
 
 def test_image_equals_independent_per_node_paths_summed():
@@ -166,7 +171,7 @@ def test_image_equals_independent_per_node_paths_summed():
     shift = jnp.asarray([0.3, -0.4])
     model = _with_seams(_fold(), offset, shift)
     sources = _sources()
-    image = model.image(sources)
+    image = model.image(sources).data
     weights = np.asarray(RAW_WEIGHTS) / np.sum(RAW_WEIGHTS)
     expected = 0.0
     for k, wl in enumerate(NODES):
@@ -187,7 +192,7 @@ def test_a_single_source_may_be_passed_bare():
     source = _sources()[0]
     model = _fold()
     np.testing.assert_array_equal(
-        np.asarray(model.image(source)), np.asarray(model.image((source,)))
+        np.asarray(model.image(source).data), np.asarray(model.image((source,)).data)
     )
 
 
@@ -203,7 +208,7 @@ def _loss_fn(checkpoint):
             ),
             sources[1],
         )
-        return jnp.sum(weights * model.image(src))
+        return jnp.sum(weights * model.image(src).data)
 
     return loss
 
@@ -236,7 +241,7 @@ def test_shared_leaf_gradient_is_the_sum_of_per_node_gradients():
     offset, shift = _POINT[0], _POINT[1]
 
     def loss(model, offset, shift):
-        return jnp.sum(probe * _with_seams(model, offset, shift).image((source,)))
+        return jnp.sum(probe * _with_seams(model, offset, shift).image((source,)).data)
 
     full = jax.grad(loss, argnums=(1, 2))(_fold(), offset, shift)
     parts = [

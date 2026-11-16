@@ -22,8 +22,9 @@ import warnings
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from hwoutils.grids import PixelGrid
 
-from physicaloptix.core import Field, Grid, PlaneKind, validate_field
+from physicaloptix.core import Field, PlaneKind, validate_field
 from physicaloptix.diagnostics import fresnel_sampling_parameter
 
 
@@ -36,7 +37,7 @@ class Fresnel(eqx.Module):
     handled per ``on_undersampled`` ("raise", "warn", or "record").
     """
 
-    grid: Grid
+    grid: PixelGrid
     plane_in: PlaneKind = eqx.field(static=True)
     plane_out: PlaneKind = eqx.field(static=True)
     distance_m: float = eqx.field(static=True)
@@ -126,7 +127,7 @@ class Fresnel(eqx.Module):
         The pitch ``dx`` is unchanged by padding, so a larger ``npix`` only
         refines the frequency grid (which is why padding improves sampling).
         """
-        nu = jnp.fft.fftfreq(npix, d=self.grid.dx)
+        nu = jnp.fft.fftfreq(npix, d=self.grid.step)
         return nu[:, jnp.newaxis] ** 2 + nu[jnp.newaxis, :] ** 2
 
     def _transfer(self, wavelength_nm, npix):
@@ -160,7 +161,7 @@ class Fresnel(eqx.Module):
         if self.npad == 1:
             spectrum = jnp.fft.fft2(data, norm="ortho")
             return jnp.fft.ifft2(spectrum * transfer, norm="ortho")
-        npix = self.grid.npix
+        npix = self.grid.shape[0]
         n = npix * self.npad
         lo = (n - npix) // 2
         window = jnp.zeros((n, n), dtype=data.dtype)
@@ -171,15 +172,13 @@ class Fresnel(eqx.Module):
 
     def _propagate(self, field, conjugate):
         """Apply the (optionally conjugated) transfer function per wavelength."""
-        n = self.grid.npix * self.npad
+        n = self.grid.shape[0] * self.npad
         if field.spectrum is None:
             transfer = self._transfer(self.wavelength_nm, n)
             if conjugate:
                 transfer = jnp.conj(transfer)
             return self._apply_data(field.data, transfer)
-        transfers = jax.vmap(lambda wl: self._transfer(wl, n))(
-            field.spectrum.wavelengths_nm
-        )
+        transfers = jax.vmap(lambda wl: self._transfer(wl, n))(field.spectrum.nodes_nm)
         if conjugate:
             transfers = jnp.conj(transfers)
         return jax.vmap(self._apply_data)(field.data, transfers)

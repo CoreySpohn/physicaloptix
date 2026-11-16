@@ -46,6 +46,7 @@ from eyepiece.prepared import (
     Sequence,
     resolve_bounds,
 )
+from hwoutils.constants import d2s, s2d
 from hwoutils.radial import radial_distance
 
 # Stable element IDs of a prepared speckle view. The image, its acquisition
@@ -62,7 +63,7 @@ ACTIVE_ID = "active"
 
 _QUANTITIES = ("total", "delta")
 _INSTANTANEOUS = "instantaneous"
-_SECONDS = (("d", 86400.0), ("h", 3600.0), ("min", 60.0), ("s", 1.0))
+_SECONDS = (("d", d2s), ("h", 3600.0), ("min", 60.0), ("s", 1.0))
 _LOW_PERCENTILE = 1.0
 _HIGH_PERCENTILE = 99.9
 _CLOCK_XY = (0.03, 0.97)
@@ -252,10 +253,15 @@ def _protocol_cube(
                 peak_contrast(
                     telescope_peak=float(telescope_peak),
                     wavelength_nm=wavelength_nm,
-                    time_s=float(t),
+                    time_d=getattr(field, "epoch_d", 0.0) + float(t) * s2d,
                 )
             )
-        frame = np.asarray(field.realize(wavelength_nm=wavelength_nm, time_s=float(t)))
+        frame = np.asarray(
+            field.realize(
+                wavelength_nm=wavelength_nm,
+                time_d=getattr(field, "epoch_d", 0.0) + float(t) * s2d,
+            )
+        )
         if floor_map is not None:
             frame = frame + floor_map
         if factor is not None:
@@ -519,7 +525,7 @@ def prepare_speckles(
 
     Args:
         field_or_cube: A speckle field implementing ``realize(wavelength_nm=,
-            time_s=)`` (and, for lambda/D axes, ``pixel_scale_lod``); or a
+            time_d=)`` (and, for lambda/D axes, ``pixel_scale_lod``); or a
             precomputed ``(n_t, y, x)`` array (a ``numpy.ma.MaskedArray``'s
             mask is captured as validity). A field is evaluated once per
             epoch into one allocated cube; a bare array is borrowed as given

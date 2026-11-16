@@ -3,8 +3,12 @@
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import TEST_FRAME
+from hwoutils.grids import PixelGrid
+from hwoutils.spectral import Band
 
-from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind, Spectrum
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.sources import broadcast_to_spectrum, point_source
 from physicaloptix.transforms import Fraunhofer
 
@@ -14,8 +18,8 @@ REF_NM = 1000.0
 
 @pytest.fixture
 def pupil_field():
-    grid = Grid.pupil(NPUP)
-    x = np.asarray(grid.coords)
+    grid = PixelGrid.pupil(NPUP)
+    x = np.asarray(_grid_axis(grid))
     xx, yy = np.meshgrid(x, x)
     disk = ((xx**2 + yy**2) <= 0.25).astype(np.complex128)
     return Field(data=jnp.asarray(disk), grid=grid, plane=PlaneKind.PUPIL)
@@ -23,25 +27,31 @@ def pupil_field():
 
 @pytest.fixture
 def band():
-    return Spectrum.tophat(REF_NM, 0.2, 5)
+    return Spectrum.from_band(Band(REF_NM * (1 - 0.2 / 2), REF_NM * (1 + 0.2 / 2)), 5)
 
 
 class TestSpectrum:
     def test_midpoint_band_matches_the_survey_rule(self):
-        band = Spectrum.midpoint_band(1000.0, 0.1, 5)
-        x = (np.arange(5) + 0.5) / 5 - 0.5
-        np.testing.assert_allclose(
-            np.asarray(band.wavelengths_nm), 1000.0 * (1 + x * 0.1)
+        band = Spectrum(
+            1000.0 * (1 + ((jnp.arange(5) + 0.5) / 5 - 0.5) * 0.1), jnp.ones(5)
         )
+        x = (np.arange(5) + 0.5) / 5 - 0.5
+        np.testing.assert_allclose(np.asarray(band.nodes_nm), 1000.0 * (1 + x * 0.1))
         np.testing.assert_allclose(np.asarray(band.weights).sum(), 1.0)
 
-    def test_tophat_samples_and_weights(self, band):
-        assert len(band) == 5
-        wl = np.asarray(band.wavelengths_nm)
-        np.testing.assert_allclose(wl.min(), REF_NM * 0.9)
-        np.testing.assert_allclose(wl.max(), REF_NM * 1.1)
-        np.testing.assert_allclose(np.asarray(band.weights).sum(), 1.0)
-        np.testing.assert_allclose(np.diff(wl), np.diff(wl)[0])
+    def test_gauss_legendre_samples_and_weights(self, band):
+        """Fails for endpoint averaging; polynomial moments use a 16-eps floor."""
+        x = (np.asarray(band.nodes_nm) - REF_NM) / (0.1 * REF_NM)
+        w = np.asarray(band.weights)
+        for degree in range(10):
+            expected = 0.0 if degree % 2 else 1.0 / (degree + 1)
+            np.testing.assert_allclose(
+                w @ x**degree, expected, rtol=0, atol=16 * np.finfo(float).eps
+            )
+        split = Spectrum.from_band(Band(400, 800), 3, knots_nm=(500, 650))
+        np.testing.assert_allclose(
+            split.weights.sum(), 1.0, rtol=0, atol=2 * np.finfo(float).eps
+        )
 
 
 class TestSources:
@@ -68,8 +78,8 @@ class TestSources:
             separation_lod=5.0,
             reference_wavelength_nm=REF_NM,
         )
-        x = jnp.asarray(pupil_field.grid.coords)
-        for i, wl in enumerate(np.asarray(band.wavelengths_nm)):
+        x = jnp.asarray(_grid_axis(pupil_field.grid))
+        for i, wl in enumerate(np.asarray(band.nodes_nm)):
             tilt = jnp.exp(2j * jnp.pi * 5.0 * (REF_NM / wl) * x)[None, :]
             np.testing.assert_allclose(
                 np.asarray(source.data[i]),
@@ -81,7 +91,7 @@ class TestSources:
         rng = np.random.default_rng(0)
         opd_nm = jnp.asarray(rng.standard_normal((NPUP, NPUP)))
         source = point_source(pupil_field, spectrum=band, opd_nm=opd_nm)
-        for i, wl in enumerate(np.asarray(band.wavelengths_nm)):
+        for i, wl in enumerate(np.asarray(band.nodes_nm)):
             expected = pupil_field.data * jnp.exp(2j * jnp.pi * opd_nm / wl)
             np.testing.assert_allclose(
                 np.asarray(source.data[i]), np.asarray(expected), atol=1e-14
@@ -96,7 +106,9 @@ class TestSources:
 class TestNativeChromaticPropagation:
     def test_achromatic_core_broadcasts(self, pupil_field, band):
         """Without a reference wavelength the MFT is truly achromatic."""
-        prop = Fraunhofer(grid_in=pupil_field.grid, grid_out=Grid.focal(64, 0.5))
+        prop = Fraunhofer(
+            grid_in=pupil_field.grid, grid_out=PixelGrid.focal(64, 0.5, TEST_FRAME)
+        )
         chromatic = prop(broadcast_to_spectrum(pupil_field, band))
         mono = prop(pupil_field)
         assert chromatic.data.shape == (5, 64, 64)
@@ -111,17 +123,17 @@ class TestFixedAngularPropagation:
     def angular_prop(self, pupil_field):
         return Fraunhofer(
             grid_in=pupil_field.grid,
-            grid_out=Grid.focal(96, 0.5),
+            grid_out=PixelGrid.focal(96, 0.5, TEST_FRAME),
             reference_wavelength_nm=REF_NM,
         )
 
     def test_reference_wavelength_slice_matches_native(self, pupil_field, angular_prop):
         """At lambda = lambda_ref the fixed-angular MFT is the native MFT."""
-        single = Spectrum.tophat(REF_NM, 0.0, 1)
+        single = Spectrum([REF_NM], [1.0])
         out = angular_prop(broadcast_to_spectrum(pupil_field, single))
-        native = Fraunhofer(grid_in=pupil_field.grid, grid_out=Grid.focal(96, 0.5))(
-            pupil_field
-        )
+        native = Fraunhofer(
+            grid_in=pupil_field.grid, grid_out=PixelGrid.focal(96, 0.5, TEST_FRAME)
+        )(pupil_field)
         np.testing.assert_allclose(
             np.asarray(out.data[0]), np.asarray(native.data), atol=1e-13
         )
@@ -148,7 +160,7 @@ class TestFixedAngularPropagation:
         outward with wavelength on the fixed angular grid, and its lobe
         energy scales as (lambda_ref / lambda)^2 (the OPD sideband energy)."""
         k = 8.0
-        x = np.asarray(pupil_field.grid.coords)
+        x = np.asarray(_grid_axis(pupil_field.grid))
         ripple = np.broadcast_to(np.cos(2 * np.pi * k * x), (NPUP, NPUP))
         source = point_source(
             pupil_field, spectrum=band, opd_nm=jnp.asarray(3.0 * ripple)
@@ -159,8 +171,8 @@ class TestFixedAngularPropagation:
         # difference isolates |G eps|^2 exactly (the linear speckle identity).
         delta = out.data - angular_prop(nominal).data
         intensity = np.asarray(delta.real**2 + delta.imag**2)
-        coords = np.asarray(out.grid.coords)
-        wavelengths = np.asarray(band.wavelengths_nm)
+        coords = np.asarray(_grid_axis(out.grid))
+        wavelengths = np.asarray(band.nodes_nm)
         mid = intensity.shape[1] // 2
         peak_positions, peak_values = [], []
         for i in range(len(band)):
@@ -174,7 +186,7 @@ class TestFixedAngularPropagation:
         # Peak values wobble with grid sampling of the breathing lobe; the
         # lobe ENERGY is robust. On the energy-conserving fixed grid it is
         # the pupil-side OPD sideband energy: proportional to 1/lambda^2.
-        du = float(out.grid.dx)
+        du = float(out.grid.step)
         energies = []
         for i in range(len(band)):
             window = (np.abs(coords[None, :] - expected[i]) < 1.5) & (
@@ -194,15 +206,15 @@ class TestFixedAngularPropagation:
         )
         focal = Field(
             data=g,
-            grid=Grid.focal(96, 0.5),
+            grid=PixelGrid.focal(96, 0.5, TEST_FRAME),
             plane=PlaneKind.FOCAL,
             spectrum=band,
         )
         source = broadcast_to_spectrum(pupil_field, band)
         forward = angular_prop(source)
         back = angular_prop.backward(focal)
-        du_angular = focal.grid.dx
-        dx = source.grid.dx
+        du_angular = focal.grid.step
+        dx = source.grid.step
         for i in range(len(band)):
             lhs = jnp.vdot(forward.data[i], g[i]) * du_angular**2
             rhs = jnp.vdot(source.data[i], back.data[i]) * dx**2
@@ -211,9 +223,9 @@ class TestFixedAngularPropagation:
     def test_mono_field_requires_no_reference_scaling(self, pupil_field, angular_prop):
         """A mono field through a referenced propagator uses the native grid."""
         out = angular_prop(pupil_field)
-        native = Fraunhofer(grid_in=pupil_field.grid, grid_out=Grid.focal(96, 0.5))(
-            pupil_field
-        )
+        native = Fraunhofer(
+            grid_in=pupil_field.grid, grid_out=PixelGrid.focal(96, 0.5, TEST_FRAME)
+        )(pupil_field)
         np.testing.assert_allclose(
             np.asarray(out.data), np.asarray(native.data), atol=1e-15
         )
@@ -233,7 +245,7 @@ class TestFixedGridEnergyConservation:
 
     def test_per_slice_energy_matches_the_pupil(self, pupil_field, band):
         q = 4
-        focal = Grid.focal(NPUP * q, 1.0 / q)
+        focal = PixelGrid.focal(NPUP * q, 1.0 / q, TEST_FRAME)
         prop = Fraunhofer(
             grid_in=pupil_field.grid,
             grid_out=focal,
@@ -243,10 +255,44 @@ class TestFixedGridEnergyConservation:
         )
         out = prop.forward(broadcast_to_spectrum(pupil_field, band))
         e_pupil = float(
-            (jnp.abs(pupil_field.data) ** 2).sum() * pupil_field.grid.weights
+            (jnp.abs(pupil_field.data) ** 2).sum() * pupil_field.grid.pixel_area
         )
-        wavelengths = np.asarray(band.wavelengths_nm)
+        wavelengths = np.asarray(band.nodes_nm)
         for k, wl in enumerate(wavelengths):
-            e_slice = float((jnp.abs(out.data[k]) ** 2).sum() * focal.weights)
+            e_slice = float((jnp.abs(out.data[k]) ** 2).sum() * focal.pixel_area)
             tol = 1e-14 if wl == REF_NM else 5e-3
             np.testing.assert_allclose(e_slice, e_pupil, rtol=tol)
+
+
+def test_broadband_airy_quadrature_convergence():
+    """Fails for endpoint averaging: smooth Airy EE converges at orders 2,4,8.
+
+    Closed form EE=1-J0(z)^2-J1(z)^2, z=pi*r*lambda_ref/lambda.
+    A 32-node reference is at the float64 floor; increasing observed order is
+    expected for Gaussian quadrature on this analytic integrand, not a fixed
+    algebraic order.
+    """
+    from scipy.special import j0, j1
+
+    band = Band(300.0, 700.0)
+
+    def ee(nodes):
+        z = np.pi * 0.7 * 500.0 / np.asarray(nodes)
+        return 1 - j0(z) ** 2 - j1(z) ** 2
+
+    def value(order):
+        spectrum = Spectrum.from_band(band, order)
+        return float(np.asarray(spectrum.weights) @ ee(spectrum.nodes_nm))
+
+    reference = value(32)
+    values = np.array([value(n) for n in (2, 4, 8)])
+    errors = np.abs(values - reference)
+    observed = np.log2(errors[:-1] / errors[1:])
+    assert np.all(np.diff(errors) < 0)
+    assert np.all(observed > 4)
+    old = float(ee(np.linspace(300, 700, 5)).mean())
+    print(
+        f"Airy EE orders 2,4,8: {values.tolist()}; ref={reference:.16g}; "
+        f"observed={observed.tolist()}; old5={old:.16g}; "
+        f"new5={value(5):.16g}; delta={value(5) - old:.16g}"
+    )

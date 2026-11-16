@@ -6,7 +6,7 @@ source offset), and ``sky_trans`` (extended-source transmission) -- in the
 FITS layout the table-backed readers consume. Recipes follow the design-survey
 reference implementation exactly:
 
-- Band images are the equal-weight mean of per-wavelength intensities on ONE
+- Band images are the quadrature-weighted mean of per-wavelength intensities on ONE
   fixed angular grid (reference-wavelength lambda/D).
 - A stellar diameter is 50 pointings drawn area-uniformly over the stellar
   disk (radius ``sqrt(U)/2`` in diameter units, uniform azimuth, seeded per
@@ -19,8 +19,8 @@ reference implementation exactly:
 The input field is normalized to unit pre-coronagraph energy on the
 dimensionless pupil grid, and ``stellar_intens`` / ``offax_psf`` values are
 per-pixel flux fractions (intensity density times the pixel cell area) --
-the convention shipped survey packages carry; ``sky_trans`` is a per-pixel
-transmission and carries no area factor. This is
+the convention shipped survey packages carry; ``sky_trans`` samples
+dimensionless transmission (``per_unit_area``) and carries no area factor. This is
 builder-tier code: a full-scale package is many propagations; freeze once and
 serve from the tables.
 """
@@ -29,6 +29,7 @@ from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.grids import Image
 
 from physicaloptix.core import Field, Spectrum
 from physicaloptix.sources import point_source
@@ -48,7 +49,7 @@ def _fits():
 
 
 def _unit_energy(field):
-    energy = jnp.sum(field.data.real**2 + field.data.imag**2) * field.grid.weights
+    energy = jnp.sum(field.data.real**2 + field.data.imag**2) * field.grid.pixel_area
     return Field(
         data=field.data / jnp.sqrt(energy),
         grid=field.grid,
@@ -58,7 +59,7 @@ def _unit_energy(field):
 
 
 def _band_image(core_path, science, source):
-    """Equal-weight band-averaged per-pixel flux fraction on the fixed grid.
+    """Quadrature-weighted band-averaged per-pixel flux fraction on the fixed grid.
 
     The band-averaged intensity density is multiplied by the science-grid
     cell area, so map values are the fraction of the unit pre-coronagraph
@@ -67,7 +68,9 @@ def _band_image(core_path, science, source):
     are the bare density, larger by exactly ``1 / dx**2``.
     """
     lyot, _ = core_path.propagate(source)
-    return np.asarray(science(lyot).intensity()) * float(science.grid_out.dx) ** 2
+    return (
+        np.asarray(science(lyot).intensity().data) * float(science.grid_out.step) ** 2
+    )
 
 
 def _make_header(
@@ -90,23 +93,30 @@ def _make_header(
         # from; nine decimals is far beyond any physical meaning here.
         return float(np.round(value, 9))
 
-    center = science_grid.npix / 2 - 0.5  # 00LL pixel coordinate of the axis
+    center_x = science_grid.center_x + 0.5  # FITS corner-count coordinate
+    center_y = science_grid.center_y + 0.5
     lambda_um = tidy(reference_wavelength_nm * 1e-3)
-    wavelengths = np.asarray(spectrum.wavelengths_nm)
+    wavelengths = np.asarray(spectrum.nodes_nm)
     header = fits.Header()
     header["DESIGN"] = design_name
-    header["PIXSCALE"] = (tidy(science_grid.dx), "pixel scale in units of lambda0/D")
+    header["PIXSCALE"] = (tidy(science_grid.step), "pixel scale in units of lambda0/D")
     header["LAMBDA"] = (lambda_um, "central wavelength of the bandpass in microns")
     header["MINLAM"] = (
-        tidy(wavelengths.min() * 1e-3),
+        tidy(
+            (spectrum.band.lo_nm if spectrum.band is not None else wavelengths.min())
+            * 1e-3
+        ),
         "shortest wavelength of the bandpass in microns",
     )
     header["MAXLAM"] = (
-        tidy(wavelengths.max() * 1e-3),
+        tidy(
+            (spectrum.band.hi_nm if spectrum.band is not None else wavelengths.max())
+            * 1e-3
+        ),
         "longest wavelength of the bandpass in microns",
     )
-    header["XCENTER"] = (center, "center of the image in 00LL pixel coordinates")
-    header["YCENTER"] = (center, "center of the image in 00LL pixel coordinates")
+    header["XCENTER"] = (center_x, "image x center in corner counts")
+    header["YCENTER"] = (center_y, "image y center in corner counts")
     header["OBSCURED"] = (
         obscured,
         "obscured aperture-area fraction vs circular",
@@ -185,7 +195,7 @@ def emit_yip(
         time_multiplier_characterization: Header metadata.
 
     Returns:
-        Dict with the emitted arrays (``stellar_intens``,
+        Dict with the emitted Image maps and array axes (``stellar_intens``,
         ``stellar_intens_diam_list``, ``offax_psf``,
         ``offax_psf_offset_list``, ``sky_trans``).
     """
@@ -203,7 +213,7 @@ def emit_yip(
         grid_in=base.grid,
         grid_out=science_grid,
         reference_wavelength_nm=reference_wavelength_nm,
-        min_wavelength_nm=float(np.asarray(spectrum.wavelengths_nm).min()),
+        min_wavelength_nm=float(np.asarray(spectrum.nodes_nm).min()),
     )
 
     # -- off-axis PSFs ------------------------------------------------------
@@ -260,20 +270,22 @@ def emit_yip(
     # -- stochastic sky transmission ----------------------------------------
     rng = np.random.default_rng(seed)
     if sky_band_nm is None:
-        wavelengths = np.asarray(spectrum.wavelengths_nm, dtype=float)
-        min_wl, max_wl = wavelengths.min(), wavelengths.max()
+        wavelengths = np.asarray(spectrum.nodes_nm, dtype=float)
+        min_wl, max_wl = (
+            (spectrum.band.lo_nm, spectrum.band.hi_nm)
+            if spectrum.band is not None
+            else (wavelengths.min(), wavelengths.max())
+        )
     else:
         min_wl, max_wl = float(sky_band_nm[0]), float(sky_band_nm[1])
-    npix = base.grid.npix
+    npix = base.grid.shape[0]
     sky = 0.0
     for _ in range(n_sky_screens):
         screen = rng.standard_normal((npix, npix)) + 1j * rng.standard_normal(
             (npix, npix)
         )
         wavelength = rng.uniform(min_wl, max_wl)
-        single = Spectrum(
-            wavelengths_nm=jnp.array([wavelength]), weights=jnp.array([1.0])
-        )
+        single = Spectrum(nodes_nm=jnp.array([wavelength]), weights=jnp.array([1.0]))
         data = base.data * jnp.asarray(screen) * (wavelength / reference_wavelength_nm)
         source = Field(
             data=data[None, ...],
@@ -317,9 +329,17 @@ def emit_yip(
     fits.writeto(output_dir / "sky_trans.fits", sky, header, overwrite=True)
 
     return {
-        "stellar_intens": stellar,
+        "stellar_intens": Image(
+            stellar,
+            science_grid,
+            ("stellar_diameter",),
+            "per_pixel",
+            "stellar_flux_fraction",
+        ),
         "stellar_intens_diam_list": stellar_diams_lod,
-        "offax_psf": offax,
+        "offax_psf": Image(
+            offax, science_grid, ("source",), "per_pixel", "stellar_flux_fraction"
+        ),
         "offax_psf_offset_list": offsets_lod,
-        "sky_trans": sky,
+        "sky_trans": Image(sky, science_grid, (), "per_unit_area", "transmission"),
     }

@@ -56,7 +56,7 @@ PROFILE = snapshot_profile(
 ## A speckle field to prepare
 
 `prepare_speckles` is typed on the speckle-field protocol, not on a concrete
-class: anything with `realize(wavelength_nm=..., time_s=...)` returning a
+class: anything with `realize(wavelength_nm=..., time_d=...)` returning a
 `(y, x)` map and a `pixel_scale_lod` drives it. The synthetic field below
 follows that protocol. A static pupil phase error behind an ideal
 coronagraph sets the deterministic field `e_nom`, and twelve sine ripples
@@ -126,10 +126,13 @@ class DriftingSpeckles:
         # An ideal coronagraph removes the unaberrated field exactly.
         return focal(pupil * (np.exp(1j * phase_rad) - 1.0))
 
-    def realize(self, *, wavelength_nm, time_s=0.0):
+    epoch_d = 0.0
+
+    def realize(self, *, wavelength_nm, time_d=0.0):
+        from hwoutils.constants import d2s
         self.calls += 1
         drift = self.amplitude_rad * np.sin(
-            2.0 * np.pi * time_s / self.period_s + self.phase_rad
+            2.0 * np.pi * (time_d - self.epoch_d) * d2s / self.period_s + self.phase_rad
         )
         phase = self.static_rad + np.tensordot(drift, self.ripples, axes=1)
         total = np.abs(self._field(phase)) ** 2

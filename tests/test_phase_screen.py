@@ -5,9 +5,12 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import TEST_FRAME
+from hwoutils.grids import PixelGrid
+from hwoutils.spectral import Band
 from jax.test_util import check_grads
 
-from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind, Spectrum
 from physicaloptix.elements import ModeBasis, PhaseScreen, SampledPhaseScreen
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.sources import broadcast_to_spectrum
@@ -26,13 +29,13 @@ def _basis(npix=8, m=2, seed=0):
 def _pupil_field(npix, data=None):
     if data is None:
         data = jnp.ones((npix, npix), dtype=complex)
-    return Field(data=data, grid=Grid.pupil(npix), plane=PlaneKind.PUPIL)
+    return Field(data=data, grid=PixelGrid.pupil(npix), plane=PlaneKind.PUPIL)
 
 
 class TestPhaseScreen:
     def test_applies_the_opd_phasor(self):
         npix = 8
-        grid = Grid.pupil(npix)
+        grid = PixelGrid.pupil(npix)
         basis = eqx.tree_at(lambda b: b.coeffs, _basis(npix), jnp.array([1.0, -0.5]))
         out = PhaseScreen(basis, grid, wavelength_nm=WL)(_pupil_field(npix))
         expected = np.exp(1j * 2 * np.pi * np.asarray(basis.opd()) / WL)
@@ -40,22 +43,24 @@ class TestPhaseScreen:
 
     def test_chromatic_applies_per_wavelength_phase(self):
         npix = 8
-        grid = Grid.pupil(npix)
+        grid = PixelGrid.pupil(npix)
         basis = eqx.tree_at(lambda b: b.coeffs, _basis(npix), jnp.array([1.0, -0.5]))
-        spectrum = Spectrum.tophat(500.0, 0.2, 3)  # 450, 500, 550 nm
+        spectrum = Spectrum.from_band(
+            Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)), 3
+        )  # 450, 500, 550 nm
         ones = jnp.ones((npix, npix), complex)
         mono = Field(data=ones, grid=grid, plane=PlaneKind.PUPIL)
         chrom = broadcast_to_spectrum(mono, spectrum)
         out = PhaseScreen(basis, grid, wavelength_nm=WL)(chrom)
         opd = np.asarray(basis.opd())
-        for k, wl in enumerate(np.asarray(spectrum.wavelengths_nm)):
+        for k, wl in enumerate(np.asarray(spectrum.nodes_nm)):
             expected = np.exp(1j * 2 * np.pi * opd / wl)
             np.testing.assert_allclose(np.asarray(out.data[k]), expected, rtol=1e-12)
 
     def test_zero_command_is_identity(self):
         npix = 8
         data = jnp.asarray(np.random.default_rng(1).standard_normal((npix, npix)) + 0j)
-        out = PhaseScreen(_basis(npix), Grid.pupil(npix), wavelength_nm=WL)(
+        out = PhaseScreen(_basis(npix), PixelGrid.pupil(npix), wavelength_nm=WL)(
             _pupil_field(npix, data)
         )
         np.testing.assert_array_equal(np.asarray(out.data), np.asarray(data))
@@ -63,14 +68,14 @@ class TestPhaseScreen:
     def test_rejects_amplitude_basis(self):
         amp = ModeBasis(B=_basis(8).B, coeffs=jnp.zeros(2), kind="amplitude")
         with pytest.raises(ValueError, match="opd"):
-            PhaseScreen(amp, Grid.pupil(8), wavelength_nm=WL)
+            PhaseScreen(amp, PixelGrid.pupil(8), wavelength_nm=WL)
 
     def test_rejects_grid_mismatch(self):
         with pytest.raises(ValueError, match="match"):
-            PhaseScreen(_basis(8), Grid.pupil(16), wavelength_nm=WL)
+            PhaseScreen(_basis(8), PixelGrid.pupil(16), wavelength_nm=WL)
 
     def test_validates_field_plane(self):
-        grid = Grid.pupil(8)
+        grid = PixelGrid.pupil(8)
         screen = PhaseScreen(_basis(8), grid, wavelength_nm=WL)
         focal = Field(data=jnp.ones((8, 8), complex), grid=grid, plane=PlaneKind.FOCAL)
         with pytest.raises(ValueError):
@@ -78,7 +83,7 @@ class TestPhaseScreen:
 
     def test_command_is_a_differentiable_leaf(self):
         npix = 8
-        grid = Grid.pupil(npix)
+        grid = PixelGrid.pupil(npix)
         basis = _basis(npix)
         field = _pupil_field(npix)
 
@@ -95,8 +100,8 @@ class TestPhaseScreen:
 
     def test_composes_as_a_pupil_stage(self):
         npix = 8
-        pupil = Grid.pupil(npix)
-        focal = Grid.focal(16, 0.5)
+        pupil = PixelGrid.pupil(npix)
+        focal = PixelGrid.focal(16, 0.5, TEST_FRAME)
         path = OpticalPath(
             stages=(
                 Stage("dm", PhaseScreen(_basis(npix), pupil, wavelength_nm=WL)),
@@ -125,7 +130,7 @@ class TestSampledPhaseScreen:
     def test_phasor_matches_the_closed_form_and_phase_screen(self):
         """Tolerance basis: exact-algebra against ``PhaseScreen`` (the same
         expression on the same array); floating-point 1e-12 against NumPy."""
-        grid = Grid.pupil(self.NPIX)
+        grid = PixelGrid.pupil(self.NPIX)
         opd = self._opd()
         screen = SampledPhaseScreen(opd, grid).at_wavelength(WL)
         out = screen(_pupil_field(self.NPIX))
@@ -137,18 +142,20 @@ class TestSampledPhaseScreen:
 
     def test_positive_opd_is_a_positive_phase(self):
         """Only a sign error can fail this: +lambda/4 of OPD is phase +pi/2."""
-        grid = Grid.pupil(self.NPIX)
+        grid = PixelGrid.pupil(self.NPIX)
         opd = jnp.full((self.NPIX, self.NPIX), WL / 4.0)
         out = SampledPhaseScreen(opd, grid, wavelength_nm=WL)(_pupil_field(self.NPIX))
         np.testing.assert_allclose(np.asarray(out.data), 1j, atol=1e-12)
 
     def test_chromatic_field_converts_per_wavelength_without_binding(self):
-        grid = Grid.pupil(self.NPIX)
+        grid = PixelGrid.pupil(self.NPIX)
         opd = self._opd()
-        spectrum = Spectrum.tophat(500.0, 0.2, 3)
+        spectrum = Spectrum.from_band(
+            Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)), 3
+        )
         chrom = broadcast_to_spectrum(_pupil_field(self.NPIX), spectrum)
         out = SampledPhaseScreen(opd, grid)(chrom)
-        for k, wl in enumerate(np.asarray(spectrum.wavelengths_nm)):
+        for k, wl in enumerate(np.asarray(spectrum.nodes_nm)):
             np.testing.assert_allclose(
                 np.asarray(out.data[k]),
                 np.exp(2j * np.pi * np.asarray(opd) / wl),
@@ -156,19 +163,19 @@ class TestSampledPhaseScreen:
             )
 
     def test_unbound_monochromatic_use_raises(self):
-        screen = SampledPhaseScreen(self._opd(), Grid.pupil(self.NPIX))
+        screen = SampledPhaseScreen(self._opd(), PixelGrid.pupil(self.NPIX))
         with pytest.raises(ValueError, match="no wavelength"):
             screen(_pupil_field(self.NPIX))
 
     def test_shape_mismatch_raises(self):
         with pytest.raises(ValueError, match="does not match grid"):
-            SampledPhaseScreen(jnp.zeros((4, 4)), Grid.pupil(self.NPIX))
+            SampledPhaseScreen(jnp.zeros((4, 4)), PixelGrid.pupil(self.NPIX))
 
     def test_opd_gradient_matches_central_differences(self):
         """``check_grads`` (order 1, reverse mode) of a real functional of the
         output field with respect to the OPD leaf. Tolerance basis:
         finite-difference error, rtol 1e-5."""
-        grid = Grid.pupil(self.NPIX)
+        grid = PixelGrid.pupil(self.NPIX)
         base = SampledPhaseScreen(self._opd(), grid, wavelength_nm=WL)
         weights = jnp.asarray(
             np.random.default_rng(1).standard_normal((self.NPIX, self.NPIX))

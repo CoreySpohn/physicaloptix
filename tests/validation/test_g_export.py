@@ -16,8 +16,11 @@ relative-to-peak through the full chain (measured), not bitwise.
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import TEST_FRAME
+from hwoutils.grids import PixelGrid
 
-from physicaloptix.core import Field, Grid, PlaneKind
+from physicaloptix.core import Field, PlaneKind
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import ModeBasis, MultiScaleVortex, SampledOptic
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.transforms import Fraunhofer, cmft_fwd
@@ -47,8 +50,8 @@ def aavc_speckle_path(eac1_cache):
     z = eac1_cache
     npup = int(z["meta"][0])
     dims, pix_lod = 256, 0.25
-    pupil_grid = Grid.pupil(npup)
-    science_grid = Grid.focal(dims, pix_lod)
+    pupil_grid = PixelGrid.pupil(npup)
+    science_grid = PixelGrid.focal(dims, pix_lod, TEST_FRAME)
 
     def pupil_optic(name):
         return SampledOptic(
@@ -86,7 +89,7 @@ def regenerate_basis(npup, pupil_amplitude, pupil_grid):
     ang = rng.uniform(0.0, 2 * np.pi, N_MODES)
     psi = rng.uniform(0.0, 2 * np.pi, N_MODES)
     kx, ky = kr * np.cos(ang), kr * np.sin(ang)
-    x = np.asarray(pupil_grid.coords)
+    x = np.asarray(_grid_axis(pupil_grid))
     xp, yp = np.meshgrid(x, x)
 
     def mode(k):
@@ -101,7 +104,7 @@ class TestGExportReproduction:
         self, dense_export, aavc_speckle_path
     ):
         _, _, pupil_grid, _ = aavc_speckle_path
-        kx, ky, _ = regenerate_basis(pupil_grid.npix, jnp.ones((1, 1)), pupil_grid)
+        kx, ky, _ = regenerate_basis(pupil_grid.shape[0], jnp.ones((1, 1)), pupil_grid)
         # Same seeded stream; ulp-level libm differences between builds.
         np.testing.assert_allclose(kx, dense_export["kx"], rtol=1e-12)
         np.testing.assert_allclose(ky, dense_export["ky"], rtol=1e-12)
@@ -124,8 +127,8 @@ class TestGExportReproduction:
             jnp.abs(
                 cmft_fwd(
                     field.data,
-                    jnp.asarray(pupil_grid.coords),
-                    jnp.asarray(science_grid.coords),
+                    jnp.asarray(_grid_axis(pupil_grid)),
+                    jnp.asarray(_grid_axis(science_grid)),
                 )
             )
             ** 2
@@ -147,12 +150,14 @@ class TestGExportReproduction:
         np.testing.assert_allclose(
             float(dense_export["input_energy"]), float(field.energy()), rtol=1e-12
         )
-        assert float(dense_export["pixel_scale_lod"]) == pytest.approx(science_grid.dx)
+        assert float(dense_export["pixel_scale_lod"]) == pytest.approx(
+            science_grid.step
+        )
 
     def test_linearize_reproduces_g_columns(self, dense_export, aavc_speckle_path):
         path, field, pupil_grid, _ = aavc_speckle_path
         amp = jnp.abs(field.data)
-        _, _, mode = regenerate_basis(pupil_grid.npix, amp, pupil_grid)
+        _, _, mode = regenerate_basis(pupil_grid.shape[0], amp, pupil_grid)
         b = jnp.stack([mode(k) for k in CHECK_COLUMNS])
         basis = ModeBasis(B=b, coeffs=jnp.zeros(len(CHECK_COLUMNS)))
         lin = path.linearize(field, basis, wavelength_nm=WL_NM, method="analytic")

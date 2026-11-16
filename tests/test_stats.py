@@ -6,8 +6,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import TEST_FRAME
+from hwoutils.constants import s2d
+from hwoutils.grids import PixelGrid
 
-from physicaloptix.core import Grid
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.speckle import SpeckleProcess
 from physicaloptix.stats import (
     coherent_intensity,
@@ -26,9 +29,9 @@ _integrate = getattr(np, "trapezoid", None) or np.trapz
 
 class TestDarkZoneMask:
     def test_annulus_geometry(self):
-        grid = Grid.focal(64, 0.5)  # spans +-16 lambda/D
+        grid = PixelGrid.focal(64, 0.5, TEST_FRAME)  # spans +-16 lambda/D
         mask = np.asarray(dark_zone_mask(grid, iwa_lod=3.0, owa_lod=10.0))
-        coords = np.asarray(grid.coords)
+        coords = np.asarray(_grid_axis(grid))
         xx, yy = np.meshgrid(coords, coords)
         r = np.hypot(xx, yy)
         expected = (r >= 3.0) & (r <= 10.0)
@@ -105,7 +108,7 @@ class TestMonteCarloConsistency:
         total = np.zeros((n, n))
         for key in keys:
             field = process.draw(key)
-            eps = field._eps(0.0)
+            eps = field._eps((0.0) * s2d)
             e = e_nom + jnp.tensordot(eps, g, axes=1)
             total += np.asarray(jnp.abs(e) ** 2)
         mean = total / len(keys)

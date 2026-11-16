@@ -2,15 +2,17 @@
 
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.grids import PixelGrid
 
-from physicaloptix import Field, Grid, PlaneKind
+from physicaloptix import Field, PlaneKind
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import ZernikeWavefrontSensor
 from physicaloptix.transforms.cmft import cmft_bwd, cmft_fwd
 
 
 def _aperture_field(npup):
-    grid = Grid.pupil(npup)
-    coords = np.asarray(grid.coords)
+    grid = PixelGrid.pupil(npup)
+    coords = np.asarray(_grid_axis(grid))
     xg, yg = np.meshgrid(coords, coords)
     disk = (xg**2 + yg**2 <= 0.25).astype(complex)
     return Field(data=jnp.asarray(disk), grid=grid, plane=PlaneKind.PUPIL), disk
@@ -37,7 +39,7 @@ class TestZernikeWavefrontSensor:
         sensor = ZernikeWavefrontSensor.build(npup=48, q=4)
         field, disk = _aperture_field(48)
         grid = field.grid
-        coords = np.asarray(grid.coords)
+        coords = np.asarray(_grid_axis(grid))
         xg, _ = np.meshgrid(coords, coords)
         tilt = disk * np.exp(1j * 2 * np.pi * 3.0 * xg / 500.0 * 5.0)  # ~tip, 5 nm
         ref = np.abs(np.asarray(sensor(field).data)) ** 2
@@ -70,8 +72,8 @@ class TestNdiayeLinearResponse:
     @staticmethod
     def _setup():
         npup = 64
-        grid = Grid.pupil(npup)
-        coords = np.asarray(grid.coords)
+        grid = PixelGrid.pupil(npup)
+        coords = np.asarray(_grid_axis(grid))
         x_grid, y_grid = np.meshgrid(coords, coords)
         disk = ((x_grid**2 + y_grid**2) <= 0.25).astype(complex)
         sensor = ZernikeWavefrontSensor.build(npup)

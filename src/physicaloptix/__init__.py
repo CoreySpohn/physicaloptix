@@ -4,8 +4,8 @@ A downstream consumer of optixstuff, parallel to coronagraphoto (image sim)
 and jaxedith (ETC): optixstuff stays free of physical optics; diffraction
 lives here.
 
-The propagation core is owned: ``Grid`` /
-``PlaneKind`` / ``Field`` data model, the continuous-FT MFT pair
+The propagation core uses shared ``hwoutils.grids.PixelGrid`` geometry,
+with its own ``PlaneKind`` / ``Field`` data model, the continuous-FT MFT pair
 (``cmft_fwd`` / ``cmft_bwd``) with the plane-aware ``Fraunhofer`` wrapper and
 construction-time sampling gates, ``SampledOptic`` / ``ModeBasis`` and the
 ``MultiScaleVortex`` ladder, and the ``OpticalPath`` fold with static taps
@@ -33,11 +33,10 @@ from physicaloptix.core import (
     AbstractChromaticOp,
     ChromaticTable,
     Field,
-    Grid,
     PlaneKind,
     Spectrum,
 )
-from physicaloptix.detector import read_detector
+from physicaloptix.detector import ReparameterizedDetector
 from physicaloptix.diagnostics import (
     QuadratureAudit,
     mft_sampling_parameter,
@@ -119,7 +118,6 @@ __all__ = [
     "Field",
     "Fraunhofer",
     "Fresnel",
-    "Grid",
     "LensletChain",
     "Linearization",
     "MirrorSpec",
@@ -135,6 +133,7 @@ __all__ = [
     "PointSource",
     "PolychromaticPath",
     "QuadratureAudit",
+    "ReparameterizedDetector",
     "SampledOptic",
     "SampledPhaseScreen",
     "SensitivityBudget",
@@ -174,7 +173,6 @@ __all__ = [
     "quadrature_partner",
     "rasterize_primary",
     "rasterize_segments",
-    "read_detector",
     "render_path",
     "save_psflet_pack",
     "segment_ptt_basis",

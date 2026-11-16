@@ -29,6 +29,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.constants import d2s
 from jaxtyping import Array
 from optixstuff.speckle import AbstractSpeckleField
 
@@ -47,13 +48,13 @@ def telescope_peak(field, grid_out):
 
     Args:
         field: The unocculted aperture ``Field`` at the pupil plane.
-        grid_out: The focal ``Grid`` the peak is sampled on.
+        grid_out: The focal ``PixelGrid`` the peak is sampled on.
 
     Returns:
         The peak intensity density as a float.
     """
     transform = Fraunhofer(field.grid, grid_out)
-    return float(jnp.max(transform(field).intensity()))
+    return float(jnp.max(transform(field).intensity().data))
 
 
 def lambda_scaled_channels(
@@ -218,7 +219,8 @@ class AnalyticSpeckleField(AbstractSpeckleField):
             pixel_scale_lod: Native pixel scale in lambda/D per pixel
                 (shared by every channel: the maps live in lambda/D units,
                 where the morphology is achromatic).
-            epoch_d: Days from the scene epoch mapping to ``time_s = 0``. Default 0.0.
+            epoch_d: Days from the scene epoch at which elapsed time is zero.
+                Default 0.0.
             coherent: Include the pinning cross term. Default ``False``
                 (incoherent halo).
             wavelengths_nm: Channel wavelengths, shape ``(w,)``, enabling
@@ -250,13 +252,13 @@ class AnalyticSpeckleField(AbstractSpeckleField):
             self.e_nom, self.G, self.input_energy, self.wavelengths_nm
         )
 
-    def _eps(self, time_s):
+    def _eps(self, time_d):
         """Mode coefficients ``eps(t)`` by spectral synthesis, shape ``(m,)``."""
-        t = jnp.asarray(time_s)
+        t = (jnp.asarray(time_d) - self.epoch_d) * d2s
         phase = 2.0 * jnp.pi * self.frequencies_hz * t + self.phases
         return jnp.sum(self.amplitudes * jnp.cos(phase), axis=-1)
 
-    def eps(self, time_s):
+    def eps(self, time_d):
         """The mode coefficients at an elapsed time, shape ``(m,)``.
 
         The public accessor for the drifting coefficients themselves, as
@@ -269,14 +271,14 @@ class AnalyticSpeckleField(AbstractSpeckleField):
         already contracted against ``G``.
 
         Args:
-            time_s: Time since ``epoch_d`` in seconds.
+            time_d: Time in days from the scene epoch.
 
         Returns:
             The coefficients in the basis's own length unit.
         """
-        return self._eps(time_s)
+        return self._eps(time_d)
 
-    def delta_e(self, *, wavelength_nm, time_s=0.0):
+    def delta_e(self, *, wavelength_nm, time_d=0.0):
         """Complex field increment ``G eps(t)`` added to ``E_nom``.
 
         The complex counterpart of :meth:`realize`, which squares this
@@ -288,7 +290,7 @@ class AnalyticSpeckleField(AbstractSpeckleField):
         Args:
             wavelength_nm: Wavelength in nanometers (chromatic fields select
                 the nearest channel, as in :meth:`realize`).
-            time_s: Time since ``epoch_d`` in seconds.
+            time_d: Time in days from the scene epoch.
 
         Returns:
             Complex 2D array, shape ``(y, x)``, in the same field units as
@@ -298,14 +300,14 @@ class AnalyticSpeckleField(AbstractSpeckleField):
         _, g, _ = _select_channel(
             self.e_nom, self.G, self.normalization, self.wavelengths_nm, wavelength_nm
         )
-        return jnp.tensordot(self._eps(time_s), g, axes=1)
+        return jnp.tensordot(self._eps(time_d), g, axes=1)
 
-    def realize(self, *, wavelength_nm, time_s=0.0):
-        """Per-pixel flux-fraction delta at ``time_s`` (see class docstring)."""
+    def realize(self, *, wavelength_nm, time_d=0.0):
+        """Per-pixel flux-fraction delta at ``time_d`` (see class docstring)."""
         e_nom, _, normalization = _select_channel(
             self.e_nom, self.G, self.normalization, self.wavelengths_nm, wavelength_nm
         )
-        g_eps = self.delta_e(wavelength_nm=wavelength_nm, time_s=time_s)
+        g_eps = self.delta_e(wavelength_nm=wavelength_nm, time_d=time_d)
         if self.coherent:
             # The stable form of |E_nom + g_eps|^2 - |E_nom|^2: computing the
             # cross term directly avoids subtracting two floor-magnitude numbers
@@ -315,7 +317,7 @@ class AnalyticSpeckleField(AbstractSpeckleField):
             delta = jnp.abs(g_eps) ** 2
         return delta / normalization
 
-    def peak_contrast(self, *, telescope_peak, wavelength_nm, time_s=0.0):
+    def peak_contrast(self, *, telescope_peak, wavelength_nm, time_d=0.0):
         """The :meth:`realize` map as peak-referenced contrast (a view).
 
         Contrast curves are quoted against the unocculted telescope PSF peak;
@@ -330,7 +332,7 @@ class AnalyticSpeckleField(AbstractSpeckleField):
                 telescope PSF on this field's grid.
             wavelength_nm: Wavelength in nanometers (chromatic fields select
                 the nearest channel, as in :meth:`realize`).
-            time_s: Time since ``epoch_d`` in seconds.
+            time_d: Time in days from the scene epoch.
 
         Returns:
             2D contrast-delta array (dimensionless, peak-referenced).
@@ -342,7 +344,7 @@ class AnalyticSpeckleField(AbstractSpeckleField):
             self.wavelengths_nm,
             wavelength_nm,
         )
-        delta = self.realize(wavelength_nm=wavelength_nm, time_s=time_s)
+        delta = self.realize(wavelength_nm=wavelength_nm, time_d=time_d)
         return delta * norm / telescope_peak
 
     def broadened(self, *, reference_wavelength_nm, wavelengths_nm, scale_e_nom=False):
@@ -662,7 +664,8 @@ class SpeckleProcess(eqx.Module):
             pixel_scale_lod: Native pixel scale in lambda/D per pixel
                 (shared by every channel: the maps live in lambda/D units,
                 where the morphology is achromatic).
-            epoch_d: Days from the scene epoch mapping to ``time_s = 0``. Default 0.0.
+            epoch_d: Days from the scene epoch at which elapsed time is zero.
+                Default 0.0.
             coherent: Drawn fields include the pinning cross term.
             n_freq: Number of spectral-synthesis frequencies.
             decades_below: Frequency-grid extent below the knee (decades).

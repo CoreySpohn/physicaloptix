@@ -61,7 +61,7 @@ def ellipse_mask(n, dx, radius_m, xc_m=0.0, yc_m=0.0, nsub=11):
     """Antialiased circular aperture (PROPER's prop_ellipse for a circle), NumPy.
 
     Args:
-        n: Grid size.
+        n: PixelGrid size.
         dx: Sample spacing in meters.
         radius_m: Aperture radius.
         xc_m: Offset of the aperture center from sample ``n // 2`` along x.

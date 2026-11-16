@@ -43,9 +43,10 @@ differentiable runtime: a fixed unrolled sum of matmuls.
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.grids import PixelGrid
 from jaxtyping import Array
 
-from physicaloptix.core import Field, Grid, PlaneKind, validate_field
+from physicaloptix.core import Field, PlaneKind, validate_field
 from physicaloptix.transforms.cmft import cmft_bwd, cmft_fwd
 
 
@@ -197,7 +198,7 @@ class MultiScaleVortex(eqx.Module):
 
     pupil_coords: Array
     levels: tuple
-    grid: Grid
+    grid: PixelGrid
     plane_in: PlaneKind = eqx.field(static=True)
     plane_out: PlaneKind = eqx.field(static=True)
 
@@ -207,7 +208,7 @@ class MultiScaleVortex(eqx.Module):
 
         Args:
             charge: Vortex topological charge.
-            npup: Pupil grid size; the stage stamps ``Grid.pupil(npup)``.
+            npup: Pupil grid size; the stage stamps ``PixelGrid.pupil(npup)``.
             **kwargs: Forwarded to :func:`build_multiscale_vortex`.
 
         Returns:
@@ -217,7 +218,7 @@ class MultiScaleVortex(eqx.Module):
         return cls(
             pupil_coords=x,
             levels=tuple((u, mask) for u, mask in levels),
-            grid=Grid.pupil(npup),
+            grid=PixelGrid.pupil(npup),
             plane_in=PlaneKind.PUPIL,
             plane_out=PlaneKind.PUPIL,
         )

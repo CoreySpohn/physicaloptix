@@ -12,9 +12,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hwoutils.grids import PixelGrid
 from jax.test_util import check_grads
 
-from physicaloptix.core import Field, Grid, PlaneKind
+from physicaloptix.core import Field, PlaneKind
 from physicaloptix.elements import SampledOptic
 
 NPIX = 16
@@ -23,13 +24,13 @@ NPIX = 16
 def _field():
     return Field(
         data=jnp.ones((NPIX, NPIX), dtype=complex),
-        grid=Grid.pupil(NPIX),
+        grid=PixelGrid.pupil(NPIX),
         plane=PlaneKind.PUPIL,
     )
 
 
 def _optic(transmission, **kwargs):
-    return SampledOptic(transmission, Grid.pupil(NPIX), PlaneKind.PUPIL, **kwargs)
+    return SampledOptic(transmission, PixelGrid.pupil(NPIX), PlaneKind.PUPIL, **kwargs)
 
 
 def _ramp():
@@ -43,7 +44,7 @@ def _bump():
 
 
 def test_default_has_no_shift_and_positional_construction_still_works():
-    optic = SampledOptic(jnp.ones((NPIX, NPIX)), Grid.pupil(NPIX), PlaneKind.PUPIL)
+    optic = SampledOptic(jnp.ones((NPIX, NPIX)), PixelGrid.pupil(NPIX), PlaneKind.PUPIL)
     assert optic.shift_px is None
     assert optic.shift_order == 1
 

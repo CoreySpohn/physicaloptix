@@ -4,8 +4,11 @@ import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import TEST_FRAME
+from hwoutils.grids import PixelGrid
 
-from physicaloptix.core import Field, Grid, PlaneKind
+from physicaloptix.core import Field, PlaneKind
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import SampledOptic
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.transforms import Fraunhofer
@@ -13,9 +16,9 @@ from physicaloptix.transforms import Fraunhofer
 
 @pytest.fixture
 def simple_chain():
-    pupil_grid = Grid.pupil(32)
-    focal_grid = Grid.focal(64, 0.5)
-    x = np.asarray(pupil_grid.coords)
+    pupil_grid = PixelGrid.pupil(32)
+    focal_grid = PixelGrid.focal(64, 0.5, TEST_FRAME)
+    x = np.asarray(_grid_axis(pupil_grid))
     xx, yy = np.meshgrid(x, x)
     disk = ((xx**2 + yy**2) <= 0.25).astype(float)
     stop = SampledOptic(
@@ -48,12 +51,12 @@ class TestSampledOptic:
     def test_rejects_mismatched_grid(self):
         optic = SampledOptic(
             transmission=jnp.ones((16, 16)),
-            grid=Grid.pupil(16),
+            grid=PixelGrid.pupil(16),
             plane=PlaneKind.PUPIL,
         )
         field = Field(
             data=jnp.ones((32, 32), dtype=complex),
-            grid=Grid.pupil(32),
+            grid=PixelGrid.pupil(32),
             plane=PlaneKind.PUPIL,
         )
         with pytest.raises(ValueError, match="grid"):
@@ -92,7 +95,7 @@ class TestOpticalPath:
         path, _, _ = simple_chain
         focal_optic = SampledOptic(
             transmission=jnp.ones((64, 64)),
-            grid=Grid.focal(64, 0.5),
+            grid=PixelGrid.focal(64, 0.5, TEST_FRAME),
             plane=PlaneKind.FOCAL,
         )
         with pytest.raises(ValueError, match="plane"):
@@ -130,7 +133,7 @@ class TestStageByName:
         """Truth source: identity (the op object is the stage's op) and the
         ``tree_at`` replacement landing on the named stage only. Exact.
         """
-        grid = Grid.pupil(8)
+        grid = PixelGrid.pupil(8)
         first = SampledOptic(jnp.ones((8, 8)), grid, PlaneKind.PUPIL)
         second = SampledOptic(2.0 * jnp.ones((8, 8)), grid, PlaneKind.PUPIL)
         path = OpticalPath((Stage("a", first), Stage("b", second)))
@@ -142,7 +145,7 @@ class TestStageByName:
         np.testing.assert_array_equal(swapped.stage("a").transmission, 1.0)
 
     def test_unknown_stage_raises(self):
-        grid = Grid.pupil(8)
+        grid = PixelGrid.pupil(8)
         path = OpticalPath(
             (Stage("a", SampledOptic(jnp.ones((8, 8)), grid, PlaneKind.PUPIL)),)
         )

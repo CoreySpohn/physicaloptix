@@ -101,7 +101,7 @@ def _infer_kind(op, name):
 
 def _panel(field):
     """The (name-free) render dict for one tapped field."""
-    extent = field.grid.extent
+    extent = field.grid.shape[0] * field.grid.step / 2
     return {
         "field": np.asarray(field.data),
         "plane": field.plane.value,

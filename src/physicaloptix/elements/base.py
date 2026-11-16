@@ -2,10 +2,11 @@
 
 import equinox as eqx
 import jax.numpy as jnp
+from hwoutils.grids import PixelGrid
 from hwoutils.transforms import shift_image
 from jaxtyping import Array
 
-from physicaloptix.core import Field, Grid, PlaneKind, validate_field
+from physicaloptix.core import Field, PlaneKind, validate_field
 
 
 class Element(eqx.Module):
@@ -52,14 +53,14 @@ class SampledOptic(Element):
     """
 
     transmission: Array
-    grid: Grid
+    grid: PixelGrid
     plane: PlaneKind = eqx.field(static=True)
     shift_px: Array | None = None
     shift_order: int = eqx.field(static=True, default=1)
 
     def __check_init__(self):
         """Validate that the transmission matches its stamped grid."""
-        npix = self.grid.npix
+        npix = self.grid.shape[0]
         if self.transmission.shape != (npix, npix):
             raise ValueError(
                 f"transmission shape {self.transmission.shape} does not "

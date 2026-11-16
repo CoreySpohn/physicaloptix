@@ -70,8 +70,8 @@ def fresnel_sampling_parameter(grid, alpha):
     """
     if alpha <= 0.0:
         return float("inf")
-    extent = grid.npix * grid.dx
-    return float(extent / np.sqrt(grid.npix * alpha))
+    extent = grid.shape[0] * grid.step
+    return float(extent / np.sqrt(grid.shape[0] * alpha))
 
 
 def fresnel_pad_factor(grid, alpha):

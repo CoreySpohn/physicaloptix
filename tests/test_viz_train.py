@@ -4,6 +4,7 @@ import io
 
 import jax.numpy as jnp
 import matplotlib
+from conftest import TEST_FRAME
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -15,7 +16,9 @@ from matplotlib.colors import LogNorm
 # collectible when the viz extra is present.
 pytest.importorskip("eyepiece")
 
-from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
+from hwoutils.grids import PixelGrid
+
+from physicaloptix.core import Field, PlaneKind, Spectrum
 from physicaloptix.elements import MultiScaleVortex, SampledOptic
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.system import BeamSplitter, Branch, OpticalSystem
@@ -25,8 +28,8 @@ from physicaloptix.viz.train import _GLYPH_FOR_KIND, _infer_kind, _minimap_accen
 
 
 def _setup():
-    grid = Grid.pupil(16)
-    focal = Grid.focal(16, 0.5)
+    grid = PixelGrid.pupil(16)
+    focal = PixelGrid.focal(16, 0.5, TEST_FRAME)
     field = Field(
         data=jnp.ones((16, 16), dtype=jnp.complex128), grid=grid, plane=PlaneKind.PUPIL
     )
@@ -36,8 +39,8 @@ def _setup():
 
 def _rectangular_setup():
     """Non-square npix, asymmetric extent (dx differs pupil vs focal)."""
-    grid = Grid.pupil(24)
-    focal = Grid.focal(20, 0.35)
+    grid = PixelGrid.pupil(24)
+    focal = PixelGrid.focal(20, 0.35, TEST_FRAME)
     disk = np.ones((24, 24))
     field = Field(
         data=jnp.asarray(disk).astype(complex), grid=grid, plane=PlaneKind.PUPIL
@@ -50,8 +53,8 @@ def _rectangular_setup():
 
 def _system_setup():
     """A minimal two-branch OpticalSystem: one trunk stage, two one-stage arms."""
-    grid = Grid.pupil(16)
-    focal = Grid.focal(16, 0.5)
+    grid = PixelGrid.pupil(16)
+    focal = PixelGrid.focal(16, 0.5, TEST_FRAME)
     disk = np.ones((16, 16))
     stop = SampledOptic(
         transmission=jnp.asarray(disk), grid=grid, plane=PlaneKind.PUPIL
@@ -134,19 +137,17 @@ def test_plot_path_chromatic_field_works():
     # Channel amplitudes 1 and 3 (|E|^2 = 1, 9) with weights 0.25/0.75 give a
     # weighted-sum intensity of exactly 7.0 -- distinct from a naive mean
     # (5.0) or an amplitude-mean-then-square (6.25), so this pins the panel
-    # to Field.intensity() specifically, not merely "did not raise".
-    grid = Grid.pupil(16)
-    focal = Grid.focal(16, 0.5)
-    spec = Spectrum(
-        wavelengths_nm=jnp.array([500.0, 600.0]), weights=jnp.array([0.25, 0.75])
-    )
+    # to Field.intensity().data specifically, not merely "did not raise".
+    grid = PixelGrid.pupil(16)
+    focal = PixelGrid.focal(16, 0.5, TEST_FRAME)
+    spec = Spectrum(nodes_nm=jnp.array([500.0, 600.0]), weights=jnp.array([0.25, 0.75]))
     data = jnp.stack([jnp.full((16, 16), 1.0 + 0j), jnp.full((16, 16), 3.0 + 0j)])
     field = Field(data=data, grid=grid, plane=PlaneKind.PUPIL, spectrum=spec)
     path = OpticalPath(stages=(Stage("cam", Fraunhofer(grid_in=grid, grid_out=focal)),))
     res = plot_path(path, field)
 
     input_image = res.axes[1].get_images()[0]
-    expected = np.asarray(field.intensity())
+    expected = np.asarray(field.intensity().data)
     assert np.allclose(expected, 7.0)
     assert np.allclose(input_image.get_array(), expected)
     plt.close(res.fig)
@@ -155,9 +156,9 @@ def test_plot_path_chromatic_field_works():
 def test_plot_path_phase_chromatic_defaults_to_mid_band_channel():
     # I2: show_phase=True on a chromatic Field must not raise, and the
     # auto-selected band is the middle one (index nlam // 2).
-    grid = Grid.pupil(8)
+    grid = PixelGrid.pupil(8)
     spec = Spectrum(
-        wavelengths_nm=jnp.array([500.0, 550.0, 600.0]),
+        nodes_nm=jnp.array([500.0, 550.0, 600.0]),
         weights=jnp.array([0.2, 0.3, 0.5]),
     )
     data = jnp.stack(
@@ -184,9 +185,9 @@ def test_plot_path_phase_chromatic_defaults_to_mid_band_channel():
 def test_plot_path_phase_channel_out_of_range_raises_named_error():
     # B3: an out-of-range channel= used to raise a bare IndexError from deep
     # inside fields._resolve, naming neither plot_path nor channel.
-    grid = Grid.pupil(8)
+    grid = PixelGrid.pupil(8)
     spec = Spectrum(
-        wavelengths_nm=jnp.array([500.0, 550.0, 600.0]),
+        nodes_nm=jnp.array([500.0, 550.0, 600.0]),
         weights=jnp.array([0.2, 0.3, 0.5]),
     )
     data = jnp.stack([jnp.full((8, 8), 1.0 + 0j) for _ in range(3)])
@@ -204,11 +205,13 @@ def test_plot_path_rectangular_grid_extents_differ_per_panel():
     input_extent = res.axes[1].get_images()[0].get_extent()
     stage_extent = res.axes[2].get_images()[0].get_extent()
     assert input_extent != stage_extent
-    input_half = float(field.grid.extent)
+    input_half = float(field.grid.shape[0] * field.grid.step / 2)
     assert input_extent == pytest.approx(
         [-input_half, input_half, -input_half, input_half]
     )
-    stage_half = float(path.stages[0].op.grid_out.extent)
+    stage_half = float(
+        path.stages[0].op.grid_out.shape[0] * path.stages[0].op.grid_out.step / 2
+    )
     assert stage_extent == pytest.approx(
         [-stage_half, stage_half, -stage_half, stage_half]
     )
@@ -295,8 +298,8 @@ def test_glyph_for_kind_covers_every_infer_kind_output():
 def test_plot_path_rail_labels_match_inferred_kinds():
     """A lyot/apodizer/Fraunhofer path: rail labels pin _infer_kind's
     stage-name-sniffing branches end to end, not just in isolation."""
-    grid = Grid.pupil(16)
-    focal = Grid.focal(16, 0.5)
+    grid = PixelGrid.pupil(16)
+    focal = PixelGrid.focal(16, 0.5, TEST_FRAME)
     disk = np.ones((16, 16))
     apod = SampledOptic(
         transmission=jnp.asarray(disk), grid=grid, plane=PlaneKind.PUPIL

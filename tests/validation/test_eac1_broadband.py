@@ -10,8 +10,12 @@ per-wavelength core propagation, and its peak must sit at a fixed angle.
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import TEST_FRAME
+from hwoutils.grids import PixelGrid
+from hwoutils.spectral import Band
 
-from physicaloptix.core import Field, Grid, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind, Spectrum
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import MultiScaleVortex, SampledOptic
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.sources import broadcast_to_spectrum, point_source
@@ -28,7 +32,7 @@ def aavc_core(eac1_cache):
     z = eac1_cache
     npup = int(z["meta"][0])
     charge = int(z["meta"][4])
-    pupil_grid = Grid.pupil(npup)
+    pupil_grid = PixelGrid.pupil(npup)
 
     def pupil_optic(name):
         return SampledOptic(
@@ -55,7 +59,7 @@ def aavc_core(eac1_cache):
     dims, ps_lod = int(z["meta"][7]), float(z["meta"][6])
     science = Fraunhofer(
         grid_in=pupil_grid,
-        grid_out=Grid.focal(dims, ps_lod),
+        grid_out=PixelGrid.focal(dims, ps_lod, TEST_FRAME),
         reference_wavelength_nm=REF_NM,
         min_wavelength_nm=0.9 * REF_NM,
     )
@@ -72,24 +76,26 @@ class TestBroadbandNull:
         (measured: 7.8e-12 vs 3.05e-11, a 4x dilution of the max statistic).
         """
         core, field, science = aavc_core
-        band = Spectrum.tophat(REF_NM, 0.1, 5)
+        band = Spectrum.from_band(
+            Band(REF_NM * (1 - 0.1 / 2), REF_NM * (1 + 0.1 / 2)), 5
+        )
 
         lyot_mono, _ = core.propagate(field)
-        mono_psf = np.asarray(science(lyot_mono).intensity())
+        mono_psf = np.asarray(science(lyot_mono).intensity().data)
 
         lyot_band = broadcast_to_spectrum(lyot_mono, band)
         out = science(lyot_band)
         slices = np.asarray(out.data.real**2 + out.data.imag**2)
-        broadband = np.asarray(out.intensity())
+        broadband = np.asarray(out.intensity().data)
 
         # The reference-wavelength slice IS the mono propagation.
         np.testing.assert_allclose(slices[2], mono_psf, rtol=1e-10)
 
-        x = jnp.asarray(field.grid.coords)
+        x = jnp.asarray(_grid_axis(field.grid))
         tele = (
             np.abs(
                 np.asarray(
-                    cmft_fwd(field.data, x, jnp.asarray(science.grid_out.coords))
+                    cmft_fwd(field.data, x, jnp.asarray(_grid_axis(science.grid_out)))
                 )
             )
             ** 2
@@ -104,7 +110,9 @@ class TestBroadbandNull:
 class TestBroadbandPlanet:
     def test_chromatic_planet_sits_at_fixed_angle(self, aavc_core):
         core, field, science = aavc_core
-        band = Spectrum.tophat(REF_NM, 0.1, 3)
+        band = Spectrum.from_band(
+            Band(REF_NM * (1 - 0.1 / 2), REF_NM * (1 + 0.1 / 2)), 3
+        )
         source = point_source(
             field,
             spectrum=band,
@@ -119,6 +127,6 @@ class TestBroadbandPlanet:
             for i in range(len(band))
         ]
         assert len({tuple(p) for p in peaks}) == 1
-        coords = np.asarray(out.grid.coords)
+        coords = np.asarray(_grid_axis(out.grid))
         peak_x = coords[peaks[0][1]]
         assert abs(peak_x - 7.875) < 0.25

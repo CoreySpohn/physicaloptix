@@ -11,12 +11,13 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import TEST_FRAME
+from hwoutils.grids import PixelGrid
 
 from physicaloptix.core import (
     AbstractChromaticOp,
     ChromaticTable,
     Field,
-    Grid,
     PlaneKind,
 )
 from physicaloptix.elements import (
@@ -39,21 +40,21 @@ def _opd_basis():
 
 
 def _field():
-    grid = Grid.pupil(NPIX)
+    grid = PixelGrid.pupil(NPIX)
     return Field(
         data=jnp.ones((NPIX, NPIX), dtype=complex), grid=grid, plane=PlaneKind.PUPIL
     )
 
 
 def _path(wavelength_nm):
-    grid = Grid.pupil(NPIX)
+    grid = PixelGrid.pupil(NPIX)
     stop = SampledOptic(jnp.ones((NPIX, NPIX)), grid, PlaneKind.PUPIL)
     screen = PhaseScreen(_opd_basis(), grid, wavelength_nm=wavelength_nm)
     return OpticalPath(
         (
             Stage("stop", stop),
             Stage("screen", screen),
-            Stage("science", Fraunhofer(grid, Grid.focal(24, 0.5))),
+            Stage("science", Fraunhofer(grid, PixelGrid.focal(24, 0.5, TEST_FRAME))),
         )
     )
 
@@ -68,7 +69,7 @@ class TestAtWavelength:
         assert screen.wavelength_nm == 500.0
 
     def test_dispersive_screen_rebinds_the_monochromatic_wavelength(self):
-        grid = Grid.pupil(NPIX)
+        grid = PixelGrid.pupil(NPIX)
         kernel = jnp.asarray([[1j, 1j]])
         screen = DispersiveScreen(
             _opd_basis(), kernel, [400.0, 800.0], grid, wavelength_nm=500.0
@@ -100,7 +101,9 @@ class TestAtWavelength:
         def loss(coeff, wavelength_nm):
             tree = eqx.tree_at(lambda p: p.stage("screen").basis.coeffs, path, coeff)
             out, _ = tree.at_wavelength(wavelength_nm).propagate(_field())
-            return jnp.sum(out.intensity() * jnp.arange(out.data.size).reshape(24, 24))
+            return jnp.sum(
+                out.intensity().data * jnp.arange(out.data.size).reshape(24, 24)
+            )
 
         coeff = jnp.asarray([0.7])
         grad = jax.grad(loss)(coeff, 650.0)
@@ -110,7 +113,7 @@ class TestAtWavelength:
 
 
 def test_unknown_wavelength_bind_is_a_noop_on_a_path_without_chromatic_stages():
-    grid = Grid.pupil(NPIX)
+    grid = PixelGrid.pupil(NPIX)
     path = OpticalPath(
         (Stage("stop", SampledOptic(jnp.ones((NPIX, NPIX)), grid, PlaneKind.PUPIL)),)
     )
@@ -121,7 +124,7 @@ class TestChromaticTable:
     NODES = (500.0, 700.0)
 
     def _table(self):
-        grid = Grid.pupil(NPIX)
+        grid = PixelGrid.pupil(NPIX)
         ops = tuple(
             SampledOptic(jnp.full((NPIX, NPIX), 0.5 + 0.25 * k), grid, PlaneKind.PUPIL)
             for k in range(2)
@@ -161,7 +164,7 @@ class TestChromaticTable:
         assert table.plane_out is PlaneKind.PUPIL
 
     def test_construction_rejects_bad_tables(self):
-        grid = Grid.pupil(NPIX)
+        grid = PixelGrid.pupil(NPIX)
         pupil = SampledOptic(jnp.ones((NPIX, NPIX)), grid, PlaneKind.PUPIL)
         with pytest.raises(ValueError, match="at least one"):
             ChromaticTable((), ())
@@ -169,6 +172,6 @@ class TestChromaticTable:
             ChromaticTable((pupil,), (500.0, 700.0))
         with pytest.raises(ValueError, match="distinct"):
             ChromaticTable((pupil, pupil), (500.0, 500.0))
-        focal = Fraunhofer(grid, Grid.focal(24, 0.5))
+        focal = Fraunhofer(grid, PixelGrid.focal(24, 0.5, TEST_FRAME))
         with pytest.raises(ValueError, match="same planes"):
             ChromaticTable((pupil, focal), self.NODES)

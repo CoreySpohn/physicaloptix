@@ -3,15 +3,18 @@
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import TEST_FRAME
+from hwoutils.grids import PixelGrid
+from hwoutils.spectral import Band
 
 from physicaloptix import (
     Field,
-    Grid,
     ModeBasis,
     PlaneKind,
     Spectrum,
     broadcast_to_spectrum,
 )
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.trains import (
     REFLECTION_OPD_FACTOR,
     MirrorSpec,
@@ -23,14 +26,14 @@ from physicaloptix.trains import (
 
 class TestSynthesizePsdSurface:
     def test_rms_zero_mean_and_shape(self):
-        grid = Grid.pupil(128)
+        grid = PixelGrid.pupil(128)
         surf = synthesize_psd_surface(3, grid, rms_nm=1.0)
         assert surf.shape == (128, 128)
         assert abs(float(surf.mean())) < 1e-12
         assert float(surf.std()) == pytest.approx(1.0, rel=1e-12)
 
     def test_deterministic_and_seed_dependent(self):
-        grid = Grid.pupil(64)
+        grid = PixelGrid.pupil(64)
         a = synthesize_psd_surface(7, grid, rms_nm=0.5)
         b = synthesize_psd_surface(7, grid, rms_nm=0.5)
         c = synthesize_psd_surface(8, grid, rms_nm=0.5)
@@ -38,20 +41,20 @@ class TestSynthesizePsdSurface:
         assert not np.array_equal(a, c)
 
     def test_band_limited(self):
-        grid = Grid.pupil(128)
+        grid = PixelGrid.pupil(128)
         surf = synthesize_psd_surface(1, grid, rms_nm=1.0, k_min=4.0, k_max=20.0)
-        k = np.fft.fftfreq(grid.npix, d=grid.dx)
+        k = np.fft.fftfreq(grid.shape[0], d=grid.step)
         kk = np.hypot(*np.meshgrid(k, k))
         power = np.abs(np.fft.fft2(surf)) ** 2
         out_of_band = power[(kk > 0) & ((kk < 4.0) | (kk > 20.0))].sum()
         assert out_of_band < 1e-20 * power.sum()
 
     def test_power_law_slope(self):
-        grid = Grid.pupil(128)
+        grid = PixelGrid.pupil(128)
         surf = synthesize_psd_surface(
             2, grid, rms_nm=1.0, k_min=2.0, k_max=30.0, slope=-2.5
         )
-        k = np.fft.fftfreq(grid.npix, d=grid.dx)
+        k = np.fft.fftfreq(grid.shape[0], d=grid.step)
         kk = np.hypot(*np.meshgrid(k, k))
         power = np.abs(np.fft.fft2(surf)) ** 2
         lo = power[(kk >= 2.0) & (kk < 6.0)].mean()
@@ -60,18 +63,18 @@ class TestSynthesizePsdSurface:
         assert measured_slope == pytest.approx(-2.5, abs=0.6)
 
     def test_rejects_nonpositive_k_min(self):
-        grid = Grid.pupil(64)
+        grid = PixelGrid.pupil(64)
         with pytest.raises(ValueError, match="k_min must be positive"):
             synthesize_psd_surface(1, grid, rms_nm=1.0, k_min=0.0)
 
     def test_rejects_empty_band(self):
-        grid = Grid.pupil(16)
+        grid = PixelGrid.pupil(16)
         with pytest.raises(ValueError, match="no grid frequencies fall in"):
             synthesize_psd_surface(1, grid, rms_nm=1.0, k_min=50.0, k_max=51.0)
 
 
 def _aperture_field(grid, spectrum=None):
-    coords = grid.coords
+    coords = _grid_axis(grid)
     xx, yy = np.meshgrid(coords, coords)
     aperture = (np.hypot(xx, yy) <= 0.5).astype(complex)
     field = Field(data=jnp.asarray(aperture), grid=grid, plane=PlaneKind.PUPIL)
@@ -102,7 +105,7 @@ def _specs(grid):
 
 class TestBuildMirrorTrain:
     def test_stage_layout_and_planes(self):
-        grid = Grid.pupil(128)
+        grid = PixelGrid.pupil(128)
         path = build_mirror_train(
             _specs(grid), grid, wavelength_nm=500.0, beam_diameter_m=0.085
         )
@@ -120,10 +123,12 @@ class TestBuildMirrorTrain:
         assert path.stages[-1].op.plane_out == PlaneKind.PUPIL
 
     def test_zero_error_train_is_identity(self):
-        grid = Grid.pupil(128)
+        grid = PixelGrid.pupil(128)
         specs = tuple(
             MirrorSpec(
-                name=s.name, alpha=s.alpha, surface_nm=np.zeros((grid.npix, grid.npix))
+                name=s.name,
+                alpha=s.alpha,
+                surface_nm=np.zeros((grid.shape[0], grid.shape[0])),
             )
             for s in _specs(grid)
         )
@@ -137,7 +142,7 @@ class TestBuildMirrorTrain:
         )
 
     def test_pupil_mirror_matches_direct_phasor(self):
-        grid = Grid.pupil(128)
+        grid = PixelGrid.pupil(128)
         surface = synthesize_psd_surface(4, grid, rms_nm=1.0, k_max=45)
         spec = (MirrorSpec(name="m", alpha=0.0, surface_nm=surface),)
         path = build_mirror_train(
@@ -151,7 +156,7 @@ class TestBuildMirrorTrain:
         np.testing.assert_allclose(np.asarray(out.data), expected, atol=1e-12)
 
     def test_drift_stage_present_with_zero_coeffs_is_inert(self):
-        grid = Grid.pupil(128)
+        grid = PixelGrid.pupil(128)
         drift = ModeBasis(
             B=jnp.stack(
                 [
@@ -177,8 +182,10 @@ class TestBuildMirrorTrain:
         )
 
     def test_chromatic_field_propagates(self):
-        grid = Grid.pupil(128)
-        spectrum = Spectrum.tophat(500.0, 0.2, 3)
+        grid = PixelGrid.pupil(128)
+        spectrum = Spectrum.from_band(
+            Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)), 3
+        )
         path = build_mirror_train(
             _specs(grid), grid, wavelength_nm=500.0, beam_diameter_m=0.085
         )
@@ -194,8 +201,8 @@ class TestSpeckleProcessWiring:
         from physicaloptix.linearize import linearize_stages
         from physicaloptix.path import OpticalPath, Stage
 
-        grid = Grid.pupil(96)
-        coords = grid.coords
+        grid = PixelGrid.pupil(96)
+        coords = _grid_axis(grid)
         xx, yy = np.meshgrid(coords, coords)
         aperture = (np.hypot(xx, yy) <= 0.5).astype(complex)
         drift = ModeBasis(
@@ -214,15 +221,17 @@ class TestSpeckleProcessWiring:
         train = build_mirror_train(
             specs, grid, wavelength_nm=500.0, beam_diameter_m=0.085
         )
-        focal = Grid.focal(64, 0.3)
+        focal = PixelGrid.focal(64, 0.3, TEST_FRAME)
         science = Stage("science", Fraunhofer(grid_in=grid, grid_out=focal))
         path = OpticalPath(stages=(*train.stages, science))
-        spectrum = Spectrum.tophat(500.0, 0.2, 3)
+        spectrum = Spectrum.from_band(
+            Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)), 3
+        )
         field = broadcast_to_spectrum(
             Field(data=jnp.asarray(aperture), grid=grid, plane=PlaneKind.PUPIL),
             spectrum,
         )
-        wavelengths = np.asarray(spectrum.wavelengths_nm)
+        wavelengths = np.asarray(spectrum.nodes_nm)
         lin, slices = linearize_stages(
             path, field, ("a_drift", "b_drift"), wavelengths_nm=wavelengths
         )

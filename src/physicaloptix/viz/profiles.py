@@ -22,6 +22,7 @@ definition vs another".
 
 import matplotlib.pyplot as plt
 import numpy as np
+from hwoutils.grids import Image
 from hwoutils.radial import radial_distance
 
 from physicaloptix.core import Field
@@ -212,7 +213,7 @@ def plot_contrast_profile(
             to intensity; a chromatic Field is weight-summed to intensity,
             exactly as ``contrast_row`` does.
         pixscale_lod: Pixel scale in lambda/D per pixel. None takes the
-            Field's own ``grid.dx``; None with a bare array raises, rather
+            Field's own ``grid.step``; None with a bare array raises, rather
             than silently plotting a profile against pixel indices while
             labeling the axis in lambda/D.
         iwa_lod: Inner working angle in lambda/D, shaded by eyepiece. None
@@ -256,7 +257,12 @@ def plot_contrast_profile(
     data, _, _ = _resolve(field_or_map, None, "intensity")
     values = np.asarray(_intensity_from(data), dtype=float)
 
-    native = float(field_or_map.grid.dx) if isinstance(field_or_map, Field) else None
+    native = (
+        float(field_or_map.grid.step)
+        if isinstance(field_or_map, Field)
+        or (isinstance(field_or_map, Image) and field_or_map.grid.unit == "lod")
+        else None
+    )
     scale = native if pixscale_lod is None else float(pixscale_lod)
     if scale is None:
         msg = (
