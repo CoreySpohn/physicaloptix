@@ -3,8 +3,7 @@
 Lazy by design: every public name imports on first attribute access, so the
 base install never needs the viz extra, and loading one function never loads
 another's module. The eyepiece-consuming names raise an actionable
-ImportError without the viz extra; the deprecated render_path needs only
-matplotlib, and only once it is called; the side-view ray tracers
+ImportError without the viz extra; the side-view ray tracers
 (``physicaloptix.viz.raytrace``) need only NumPy and SciPy.
 """
 
@@ -37,7 +36,6 @@ _LAZY = {
 
 # Names that do not go through eyepiece at all.
 _LAZY_PLAIN = {
-    "render_path": "_legacy",
     "trace_paraxial": "raytrace",
     "beam_polygons": "raytrace",
     "strip_polygons": "raytrace",

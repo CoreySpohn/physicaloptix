@@ -18,6 +18,7 @@ from pathlib import Path
 
 import numpy as np
 import yaml
+from hwoutils.radial import get_center
 from optixstuff import SegmentedPrimary
 
 _EAC1_YAML = Path(__file__).parent / "data" / "eac1_primary.yaml"
@@ -80,7 +81,8 @@ def _segment_setup(primary, npix, extent_m, supersample):
         else float(primary.diameter("circumscribed"))
     )
     delta = extent / npix
-    coords = (np.arange(npix) - npix / 2 + 0.5) * delta
+    _, center_x = get_center((npix, npix))
+    coords = (np.arange(npix) - center_x) * delta
     offsets = ((np.arange(supersample) + 0.5) / supersample - 0.5) * delta
     circum = float(primary.segment_point_to_point_m)
     apothem = np.cos(np.pi / 6) * circum / 2

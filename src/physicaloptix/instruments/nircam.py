@@ -109,6 +109,7 @@ import numpy as np
 from hwoutils.constants import m2nm
 from hwoutils.conversions import arcsec_to_lambda_d, lambda_d_to_arcsec
 from hwoutils.grids import Frame, Image, PixelGrid
+from hwoutils.radial import get_center
 from hwoutils.transforms import downsample_psf
 from jaxtyping import Array
 
@@ -477,13 +478,14 @@ class NIRCamInputs(eqx.Module):
                         hdul[name].header,
                     )
             npix = data.shape[0]
-            center = (npix - 1) / 2 if pupil else npix / 2
+            # STPSF focal masks place the axis on the integer center sample.
+            center_y, center_x = get_center(data.shape) if pupil else (npix / 2,) * 2
             checks = {
                 "CONTENT": (header.get("CONTENT"), content),
                 "BUNIT": (header.get("BUNIT"), bunit),
                 "PIXUNIT": (header.get("PIXUNIT"), "m/pix" if pupil else "arcsec/pix"),
-                "CENTERX": (header.get("CENTERX"), center),
-                "CENTERY": (header.get("CENTERY"), center),
+                "CENTERX": (header.get("CENTERX"), center_x),
+                "CENTERY": (header.get("CENTERY"), center_y),
             }
             if pupil:
                 checks["PHASECNV"] = (header.get("PHASECNV"), STPSF_PHASOR)

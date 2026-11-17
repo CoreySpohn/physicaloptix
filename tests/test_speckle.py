@@ -286,27 +286,13 @@ class TestTemporalKernel:
         return np.exp(-2.0 * np.pi * self.KNEE * np.asarray(lags))
 
     def test_autocorrelation_matches_the_lorentzian(self):
-        """df_weighted=True reproduces exp(-tau / tau_c) to about a percent
+        """Trapezoid weighting reproduces exp(-tau / tau_c) to about a percent
         over the lags the grid is built to span (out to ~1 decorrelation
         time), which is what makes `from_decorrelation(tau)` mean tau."""
         proc = _small_process(knee_hz=self.KNEE)
         lags = jnp.array([0.1, 0.25, 0.5, 1.0]) * self.TAU_C
         rho = np.asarray(proc.autocorrelation(lags))[0]
         assert np.allclose(rho, self._lorentzian(lags), atol=0.015)
-
-    def test_bare_psd_weighting_decorrelates_too_slowly(self):
-        """The pre-fix weighting is not a subtly different kernel but a
-        grossly slower one: at one decorrelation time it still reports most
-        of the correlation the Lorentzian has already lost."""
-        legacy = _small_process(knee_hz=self.KNEE, df_weighted=False, decades_below=0.7)
-        rho = float(legacy.autocorrelation(jnp.array([self.TAU_C]))[0, 0])
-        target = float(self._lorentzian([self.TAU_C])[0])
-        assert rho > 1.5 * target  # measured 0.69 vs 0.37
-        fixed = _small_process(knee_hz=self.KNEE)
-        assert (
-            abs(float(fixed.autocorrelation(jnp.array([self.TAU_C]))[0, 0]) - target)
-            < 0.015
-        )
 
     def test_autocorrelation_predicts_the_drawn_ensemble(self):
         """The closed-form rho is the kernel the DRAWS actually realize, not
@@ -331,12 +317,12 @@ class TestTemporalKernel:
         them retunes the temporal kernel WITHOUT moving any equal-time
         quantity -- the moments self-oracle is untouched by this fix."""
         fixed = _small_process(knee_hz=self.KNEE)
-        legacy = _small_process(knee_hz=self.KNEE, df_weighted=False, decades_below=0.7)
-        for proc in (fixed, legacy):
+        other_grid = _small_process(knee_hz=self.KNEE, decades_below=0.7)
+        for proc in (fixed, other_grid):
             field = proc.draw(jax.random.PRNGKey(0))
             var = 0.5 * jnp.sum(field.amplitudes**2, axis=1)
             assert jnp.allclose(jnp.sqrt(var), proc.per_mode_rms)
-        a, b = fixed.moments(), legacy.moments()
+        a, b = fixed.moments(), other_grid.moments()
         assert jnp.allclose(a.mean_map, b.mean_map)
         assert jnp.allclose(a.var_map, b.var_map)
 
@@ -351,15 +337,12 @@ class TestTemporalKernel:
             assert jnp.allclose(rho, 1.0)
 
     def test_line_weights_carry_the_grid_spacing(self):
-        """df_weighted multiplies the ordinate by trapezoid widths, which on
+        """Trapezoid weighting multiplies the ordinate by trapezoid widths, which on
         a log grid grow with f -- so the two weightings differ by a factor
         proportional to f, not by a constant."""
         proc = _small_process(knee_hz=self.KNEE)
-        legacy = _small_process(knee_hz=self.KNEE, df_weighted=False)
         f = np.asarray(proc.frequencies_hz())
-        ratio = np.asarray(proc.line_weights()[0]) / np.asarray(
-            legacy.line_weights()[0]
-        )
+        ratio = np.asarray(proc.line_weights()[0]) / np.asarray(proc.psd(f))
         assert proc.line_weights().shape == (_M, proc.n_freq)
         # The ratio IS df_j: the independently computed trapezoid widths.
         half = 0.5 * np.diff(f)
@@ -507,10 +490,10 @@ class TestMoments:
         kurtosis -9/(2 (F + 2)) exactly (the quadrature must hit it to well
         under a percent).
 
-        Equal weights need BOTH a flat PSD (slope=0) and the bare-ordinate
-        weighting: with the default ``df_weighted=True`` the trapezoid widths
-        of a log grid grow with f, so a flat PSD still yields unequal line
-        weights and a different (correct) kurtosis.
+        Fails if the renormalized draw loses its uniform-sphere law.
+        Exact-algebra basis: two endpoints have equal trapezoid widths;
+        a flat PSD therefore gives F=2 equal powers. The 1e-3 tolerance
+        bounds the finite log-grid quadrature error.
         """
         from physicaloptix import SpeckleProcess
 
@@ -528,14 +511,13 @@ class TestMoments:
             knee_hz=1e-3,
             input_energy=_e_in(1.0),
             slope=0.0,
-            n_freq=32,
-            df_weighted=False,
+            n_freq=2,
             grid=speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
             reference_wavelength_nm=1000.0,
         )
         kappa = flat.renormalization_kurtosis()
         assert kappa.shape == (3,)
-        assert jnp.allclose(kappa, -9.0 / (2.0 * (32 + 2)), rtol=1e-3)
+        assert jnp.allclose(kappa, -9.0 / (2.0 * (2 + 2)), rtol=1e-3)
 
     def test_renormalization_kurtosis_matches_ensemble(self):
         """The closed-form kappa matches the measured renormalize=True modal
@@ -739,15 +721,22 @@ class TestRealizedSpectrum:
         # coarser than the lowest lines) plus spectral leakage, not an error.
         assert deviation < 0.10
 
-    def test_it_separates_the_density_weighting_from_its_absence(self):
-        """The tolerance above is only meaningful if it FAILS for a wrong
-        synthesis. Weighting lines by the bare PSD ordinate instead of the
-        quadrature element -- the log-grid error that synthesizes S(f)/f --
-        moves this statistic to 0.45, an order of magnitude outside."""
-        correct = _small_process(knee_hz=self.KNEE)
-        ordinate = _small_process(knee_hz=self.KNEE, df_weighted=False)
-        spec = self._intended_csdf(correct)
-        assert np.abs(self._realized_csdf(ordinate) - spec).max() > 0.30
+    def test_it_separates_the_density_weighting_from_its_absence(self, monkeypatch):
+        """Fails if the spectral check accepts a bare-PSD weighting mutant.
+
+        Mutation basis: omitting trapezoid widths integrates S(f)/f on
+        this log grid, well outside the periodogram's 0.10 CDF allowance.
+        """
+        proc = _small_process(knee_hz=self.KNEE)
+        spec = self._intended_csdf(proc)
+        monkeypatch.setattr(
+            type(proc),
+            "line_weights",
+            lambda self: jnp.broadcast_to(
+                self.psd(self.frequencies_hz()), (self.G.shape[-3], self.n_freq)
+            ),
+        )
+        assert np.abs(self._realized_csdf(proc) - spec).max() > 0.30
 
 
 class TestFluxFractionNormalization:

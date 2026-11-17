@@ -133,7 +133,7 @@ def test_plot_path_rejects_bare_axes():
 
 
 def test_plot_path_chromatic_field_works():
-    # The render_path frozen bug, fixed here (regression for the R1 xfail).
+    # Chromatic fields must reduce to one intensity panel per stage.
     # Channel amplitudes 1 and 3 (|E|^2 = 1, 9) with weights 0.25/0.75 give a
     # weighted-sum intensity of exactly 7.0 -- distinct from a naive mean
     # (5.0) or an amplitude-mean-then-square (6.25), so this pins the panel

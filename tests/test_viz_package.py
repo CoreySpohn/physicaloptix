@@ -1,4 +1,4 @@
-"""viz package import mechanics: lazy eyepiece, zero-extra legacy path."""
+"""Viz package import mechanics: lazy eyepiece and standalone ray tracers."""
 
 import subprocess
 import sys
@@ -12,7 +12,6 @@ def test_base_install_survives_without_eyepiece(tmp_path):
     code = (
         "import sys; sys.modules['eyepiece'] = None\n"  # makes 'import eyepiece' raise
         "import physicaloptix\n"
-        "assert callable(physicaloptix.render_path)\n"
         "import physicaloptix.viz\n"  # bare viz import stays cheap too
         "print('survived')\n"
     )
@@ -53,7 +52,6 @@ def test_base_import_is_lazy_and_eyepiece_free_under_a_find_spec_blocker():
         "assert 'eyepiece' not in sys.modules\n"
         "assert 'matplotlib' not in sys.modules\n"
         "assert 'physicaloptix.viz._legacy' not in sys.modules\n"
-        "assert callable(physicaloptix.render_path)\n"  # resolves on first use
         "print('survived')\n"
     )
     assert _run_blocked(["eyepiece"], body) == "survived"
@@ -126,7 +124,6 @@ def test_dir_lists_lazy_names():
         "field_columns",
         "plot_path",
         "minimap",
-        "render_path",
     )
     for name in (*names, "prepare_speckles"):
         assert name in listing
@@ -159,25 +156,3 @@ def test_viz_extra_hwostyle_interface_is_present():
                 assert isinstance(getattr(hwostyle.roles, role), str)
     finally:
         hwostyle.use(prev_mode or "dark")
-
-
-def test_render_path_unchanged():
-    # The pre-existing test_viz.py suite is the real check; this pins the import path.
-    from physicaloptix.viz import render_path
-    from physicaloptix.viz._legacy import render_path as legacy
-
-    assert render_path is legacy
-
-
-def test_render_path_warns_deprecation(small_path, mono_field):
-    import warnings
-
-    from physicaloptix.viz import render_path
-
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        render_path(small_path, mono_field)
-    assert any(
-        issubclass(w.category, DeprecationWarning) and "plot_path" in str(w.message)
-        for w in caught
-    )

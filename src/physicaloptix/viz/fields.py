@@ -165,9 +165,9 @@ def _resolved_phase_cmap(cmap, ax):
 def _plot_phase(ax, data, extent, cmap, colorbar, cbar_label, imshow_kw, cbar_kw):
     """Draw phase, NaN-masked below a fraction of the peak intensity.
 
-    Mirrors the legacy ``render_path`` convention: phase is undefined
-    where there is no light, so pixels below ``_PHASE_ZERO_RATIO`` of the
-    peak intensity are masked rather than rendered as numerical noise.
+    Phase is undefined where there is no light, so pixels below
+    ``_PHASE_ZERO_RATIO`` of the peak intensity are masked rather than
+    rendered as numerical noise.
 
     Returns:
         An ``(ax, artists, update)`` triple. ``artists`` holds ``"image"``
