@@ -63,7 +63,6 @@ from physicaloptix.ifs import (
     LensletChain,
     detector_scene,
     psflet_pack,
-    save_psflet_pack,
 )
 from physicaloptix.interop import PathCoronagraph
 from physicaloptix.linearize import (
@@ -175,7 +174,6 @@ __all__ = [
     "quadrature_partner",
     "rasterize_primary",
     "rasterize_segments",
-    "save_psflet_pack",
     "segment_ptt_basis",
     "sellmeier",
     "stats",

@@ -10,13 +10,11 @@ from jax.scipy.special import erf
 
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.ifs import (
-    PACK_FORMAT_VERSION,
     LensletChain,
     detector_scene,
     pixel_integrate,
     psflet_pack,
     psflet_template,
-    save_psflet_pack,
 )
 from physicaloptix.transforms.cmft import cmft_fwd
 
@@ -283,11 +281,22 @@ class TestPixelIntegrate:
 
 
 class TestPack:
-    def test_schema_and_roundtrip(self, tmp_path):
+    def test_payload_schema(self):
         chain = make_chain()
         lams = [900.0, 1000.0, 1100.0]
         pack = psflet_pack(chain, lams, half_extent=4.0, step=0.25, n_quad=4)
+        assert set(pack) == {
+            "templates",
+            "offsets",
+            "wavelengths_nm",
+            "field_xy",
+            "centroids",
+            "meta_json",
+        }
         assert pack["templates"].shape == (1, 3, 33, 33)
+        assert pack["offsets"].shape == (33,)
+        np.testing.assert_array_equal(pack["wavelengths_nm"], lams)
+        np.testing.assert_array_equal(pack["field_xy"], np.zeros((1, 2)))
         assert pack["centroids"].shape == (1, 3, 2)
         steps = np.diff(pack["offsets"])
         assert np.all(steps > 0) and np.allclose(steps, steps[0])
@@ -295,14 +304,6 @@ class TestPack:
         assert meta["generator"] == "physicaloptix.ifs.LensletChain"
         assert len(meta["capture"]) == 3
         assert all(0.0 < c["stop_capture"] <= 1.001 for c in meta["capture"])
-
-        path = tmp_path / "pack.npz"
-        save_psflet_pack(path, pack)
-        with np.load(path, allow_pickle=False) as data:
-            assert int(data["format_version"]) == PACK_FORMAT_VERSION
-            np.testing.assert_array_equal(data["templates"], pack["templates"])
-            np.testing.assert_array_equal(data["field_xy"], np.zeros((1, 2)))
-            assert json.loads(str(data["meta_json"])) == meta
 
     def test_templates_are_nonnegative_and_centered(self):
         chain = make_chain()

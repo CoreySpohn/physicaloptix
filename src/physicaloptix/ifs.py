@@ -32,11 +32,8 @@ is exactly what tabulated templates exist to capture (an analytic profile
 scaled with wavelength cannot represent it).
 
 The chain is a BUILDER, not a runtime operator: ``psflet_pack`` tabulates
-pixel-integrated templates on a sub-pixel offset grid and ``save_psflet_pack``
-writes the documented npz pack format (``format_version`` 1: ``templates``
-``(n_field, n_lam, n_off, n_off)``, shared ``offsets``, ``wavelengths_nm``,
-``field_xy``, optional ``centroids`` wavecal corrections, ``meta_json``)
-consumed by downstream spectral-extraction codes via their template mode.
+pixel-integrated templates on a sub-pixel offset grid for downstream
+spectral-extraction codes.
 """
 
 import json
@@ -52,8 +49,6 @@ from jaxtyping import Array
 
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.transforms.cmft import cmft_fwd
-
-PACK_FORMAT_VERSION = 1
 
 
 class LensletChain(eqx.Module):
@@ -464,6 +459,9 @@ def psflet_template(chain, wavelength_nm, offsets, pupil=None, n_quad=8):
 def psflet_pack(chain, wavelengths_nm, *, half_extent=6.0, step=0.125, n_quad=8):
     """Tabulate the chain into a PSFlet template pack payload.
 
+    Write the payload with
+    ``coronachrome.save_psflet_pack(path, coronachrome.PsfletPack(**payload))``.
+
     One field anchor at the lenslet-grid origin (field dependence enters by
     emitting packs per field region as upstream fields become available).
 
@@ -543,20 +541,6 @@ def psflet_pack(chain, wavelengths_nm, *, half_extent=6.0, step=0.125, n_quad=8)
         "centroids": np.asarray(cents, dtype=float)[None],
         "meta_json": json.dumps(meta),
     }
-
-
-def save_psflet_pack(path, pack):
-    """Write a pack payload to the documented npz format (version 1)."""
-    np.savez(
-        path,
-        format_version=np.int64(PACK_FORMAT_VERSION),
-        templates=pack["templates"],
-        offsets=pack["offsets"],
-        wavelengths_nm=pack["wavelengths_nm"],
-        field_xy=pack["field_xy"],
-        centroids=pack["centroids"],
-        meta_json=np.asarray(pack["meta_json"]),
-    )
 
 
 def detector_scene(
