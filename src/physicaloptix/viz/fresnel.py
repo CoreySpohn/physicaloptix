@@ -30,7 +30,7 @@ from scipy.special import fresnel
 
 from physicaloptix.viz import _require
 from physicaloptix.viz.fields import _resolved_phase_cmap
-from physicaloptix.viz.propagation import _neutral, plot_propagation
+from physicaloptix.viz.propagation import plot_propagation
 
 _AXES = ("position", "angle")
 _NORMALIZE = (None, "row")
@@ -295,7 +295,7 @@ def plot_near_to_far(
     if edges is None:
         edges = (-0.5, 0.5) if axis == "position" else ()
     kw = {
-        "color": _neutral(ax, _EDGE_LEVEL),
+        "color": _require.eyepiece().neutral(_EDGE_LEVEL),
         "ls": ":",
         "lw": _EDGE_LW * matplotlib.rcParams["lines.linewidth"],
         **(edge_kw or {}),
@@ -428,7 +428,7 @@ def plot_fresnel_zones(
             360.0,
             width=_SCREEN_OUTER - 1.0,
             facecolor="none",
-            edgecolor=_neutral(ax, _SCREEN_LEVEL),
+            edgecolor=_require.eyepiece().neutral(_SCREEN_LEVEL),
             hatch=_HATCH,
             lw=0,
             zorder=0,
@@ -454,7 +454,9 @@ def plot_fresnel_zones(
             (0.0, 0.0),
             float(bounds[i]) if i < len(bounds) else 0.5,
             facecolor="none",
-            edgecolor=_neutral(ax, _RING_LEVEL) if ring_color is None else ring_color,
+            edgecolor=_require.eyepiece().neutral(_RING_LEVEL)
+            if ring_color is None
+            else ring_color,
             lw=_RING_LW * base,
             zorder=3,
             visible=i < len(bounds),
@@ -465,7 +467,9 @@ def plot_fresnel_zones(
         (0.0, 0.0),
         1.0,
         facecolor="none",
-        edgecolor=_neutral(ax, _RIM_LEVEL) if rim_color is None else rim_color,
+        edgecolor=_require.eyepiece().neutral(_RIM_LEVEL)
+        if rim_color is None
+        else rim_color,
         lw=_RIM_LW * base,
         zorder=4,
         gid=f"{gid}/rim",
@@ -576,7 +580,9 @@ def plot_cornu(
     (thin,) = ax.plot(
         spiral.real,
         spiral.imag,
-        color=_neutral(ax, _SPIRAL_LEVEL) if spiral_color is None else spiral_color,
+        color=_require.eyepiece().neutral(_SPIRAL_LEVEL)
+        if spiral_color is None
+        else spiral_color,
         lw=_SPIRAL_LW * base,
         gid=f"{gid}/spiral",
     )
@@ -618,7 +624,7 @@ def plot_cornu(
             [0.5, -0.5],
             [0.5, -0.5],
             "+",
-            color=_neutral(ax, _EYE_LEVEL),
+            color=_require.eyepiece().neutral(_EYE_LEVEL),
             ms=matplotlib.rcParams["lines.markersize"],
             gid=f"{gid}/eyes",
         )

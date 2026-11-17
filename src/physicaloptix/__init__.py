@@ -93,6 +93,7 @@ from physicaloptix.speckle import (
     Photometry,
     SpeckleMoments,
     SpeckleProcess,
+    ou_exposure_neff,
     telescope_peak,
 )
 from physicaloptix.system import BeamSplitter, Branch, OpticalSystem, SplitterPort
@@ -165,6 +166,7 @@ __all__ = [
     "ncpa_differential_opd",
     "noll_to_nm",
     "normalize_unit_energy",
+    "ou_exposure_neff",
     "pastis_matrix",
     "point_source",
     "psflet_pack",

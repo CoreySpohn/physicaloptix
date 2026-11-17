@@ -3,9 +3,11 @@
 import dataclasses
 from importlib import resources
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import yaml
+from hwoutils.random_fields import StationaryGaussianField
 
 from physicaloptix.core import PlaneKind
 from physicaloptix.elements import ModeBasis, PhaseScreen
@@ -19,9 +21,9 @@ REFLECTION_OPD_FACTOR = 2.0
 def synthesize_psd_surface(seed, grid, *, rms_nm, k_min=1.0, k_max=None, slope=-2.5):
     """A band-limited power-law-PSD surface height map (nm) on a pupil grid.
 
-    Fourier amplitudes follow ``k**(slope / 2)`` (PSD ``k**slope``) between
-    ``k_min`` and ``k_max`` cycles/pupil with uniform random phases; the real
-    map is zero-mean and rescaled to exactly ``rms_nm``. Deterministic per
+    A Gaussian field has PSD ``k**slope`` between ``k_min`` and ``k_max``
+    cycles/pupil. This caller subtracts the mean and rescales each draw to
+    exactly ``rms_nm``; the result is no longer Gaussian. Deterministic per
     ``seed``. A generic polished-surface placeholder: swap in measured maps
     when metrology exists.
     """
@@ -29,16 +31,19 @@ def synthesize_psd_surface(seed, grid, *, rms_nm, k_min=1.0, k_max=None, slope=-
         raise ValueError(f"k_min must be positive, got {k_min}")
     if k_max is None:
         k_max = grid.shape[0] / 4
-    rng = np.random.default_rng(seed)
-    k = np.fft.fftfreq(grid.shape[0], d=grid.step)
-    kk = np.hypot(*np.meshgrid(k, k))
-    amplitude = np.zeros_like(kk)
-    band = (kk >= k_min) & (kk <= k_max)
-    if not band.any():
-        raise ValueError(f"no grid frequencies fall in [{k_min}, {k_max}]")
-    amplitude[band] = kk[band] ** (slope / 2.0)
-    phases = rng.uniform(0.0, 2.0 * np.pi, kk.shape)
-    surface = np.real(np.fft.ifft2(amplitude * np.exp(1j * phases)))
+
+    def psd(k):
+        band = (k >= k_min) & (k <= k_max)
+        if not band.any():
+            raise ValueError(f"no grid frequencies fall in [{k_min}, {k_max}]")
+        power = np.zeros_like(k)
+        power[band] = k[band] ** slope
+        return power
+
+    field = StationaryGaussianField.from_radial_psd(
+        psd, np.ones(grid.shape, bool), spacing=grid.step
+    )
+    surface = np.array(field.sample(jax.random.key(seed)), dtype=float)
     surface -= surface.mean()
     return surface * (rms_nm / surface.std())
 

@@ -156,13 +156,6 @@ def _strip_edges(z0, z_edges, z_scale):
     return z0 - half, z0 + half
 
 
-def _neutral(ax, level):
-    """A tone ``level`` of the way from the axes background to the text color."""
-    back = np.asarray(matplotlib.colors.to_rgb(ax.get_facecolor()))
-    front = np.asarray(matplotlib.colors.to_rgb(matplotlib.rcParams["text.color"]))
-    return tuple(back + (front - back) * float(level))
-
-
 def _validate(kind, norm, z_scale, vlim):
     """Argument checks that need no data.
 
@@ -269,7 +262,7 @@ def _draw_elements(ax, elements, x_edges, z_edges, z_scale, rasterized):
                     (za, lo),
                     zb - za,
                     hi - lo,
-                    facecolor=_neutral(ax, _SCREEN_LEVEL),
+                    facecolor=_require.eyepiece().neutral(_SCREEN_LEVEL),
                     edgecolor="none",
                     zorder=4,
                     gid=gid,
@@ -296,7 +289,7 @@ def _draw_elements(ax, elements, x_edges, z_edges, z_scale, rasterized):
             _, z0, label = element
             line = ax.axvline(
                 float(z0),
-                color=_neutral(ax, _PLANE_LEVEL),
+                color=_require.eyepiece().neutral(_PLANE_LEVEL),
                 ls="--",
                 lw=_PLANE_LW * matplotlib.rcParams["lines.linewidth"],
                 zorder=6,
@@ -362,7 +355,7 @@ def plot_propagation(
     - ``"real"``: the instantaneous field ``Re E`` on a symmetric range
       ``[-vlim, vlim]``, through a diverging map centered on the axes
       background color: zero is the background, positive values run to the
-      starlight role color (``hwostyle.roles.star``), negative values to a
+      starlight role color (``eyepiece.role("star")``), negative values to a
       muted complement of it (hue rotated half a turn, saturation reduced)
       at the same CIE lightness distance from the background. Unlit regions
       therefore read as background, and the two signs read equally strong.
@@ -484,7 +477,7 @@ def plot_propagation(
     if cmap is not None:
         resolved = matplotlib.colormaps[cmap] if isinstance(cmap, str) else cmap
     elif kind == "real":
-        resolved = _signed_cmap(ax.get_facecolor(), hwostyle.roles.star)
+        resolved = _signed_cmap(ax.get_facecolor(), _require.eyepiece().role("star"))
     elif kind == "phase":
         resolved = _resolved_phase_cmap(None, ax)
     else:

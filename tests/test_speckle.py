@@ -11,7 +11,7 @@ from hwoutils.constants import s2d
 from physicaloptix import AnalyticSpeckleField
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.linearize import linearize, perturbed_map
-from physicaloptix.speckle import SpeckleProcess
+from physicaloptix.speckle import SpeckleProcess, ou_exposure_neff
 
 jax.config.update("jax_enable_x64", True)
 
@@ -1729,3 +1729,26 @@ def test_broadened_equals_explicit_node_sum():
         np.testing.assert_allclose(
             average.data, midpoint, rtol=32 * np.finfo(float).eps, atol=0
         )
+
+
+def test_ou_exposure_neff_integrates_the_exponential_kernel():
+    """Exact-algebra integral checked with float64 quadrature (2e-12 relative).
+
+    On v=t/T in [0,1], variance reduction is 2*int((1-v)*exp(-T*v/tau)).
+    A 128-node Gauss rule resolves the exponential through T/tau=1000;
+    roundoff and small-u cancellation set the relative tolerance.
+    """
+    tau = np.array([1.0, 2.0])
+    exposures = np.array([0.0, 1e-8, 1e-4, 1.0, 10.0, 1000.0])
+    nodes, weights = np.polynomial.legendre.leggauss(128)
+    v = (nodes + 1.0) / 2.0
+    u = exposures[None, :] / tau[:, None]
+    reduction = np.sum(weights * (1 - v) * np.exp(-u[..., None] * v), axis=-1)
+    np.testing.assert_allclose(
+        ou_exposure_neff(tau, exposures), 1 / reduction, rtol=2e-12, atol=0
+    )
+    np.testing.assert_array_equal(ou_exposure_neff(tau, 0.0), np.ones(2))
+    derivative = jax.grad(lambda t: ou_exposure_neff(2.0, t).sum())(0.0)
+    np.testing.assert_allclose(derivative, 1 / 6, rtol=2e-15)
+    with pytest.raises(ValueError, match="positive"):
+        ou_exposure_neff(0.0, 1.0)

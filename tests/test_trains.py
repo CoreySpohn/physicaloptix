@@ -1,5 +1,6 @@
 """Tests for mirror-train construction (physicaloptix.trains)."""
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -25,9 +26,12 @@ from physicaloptix.trains import (
 
 
 class TestSynthesizePsdSurface:
-    def test_rms_zero_mean_and_shape(self):
+    @pytest.mark.parametrize("x64", [False, True])
+    def test_rms_zero_mean_and_shape(self, x64):
+        """Exact-algebra mean/RMS targets, within 1e-12 float64 rescaling error."""
         grid = PixelGrid.pupil(128)
-        surf = synthesize_psd_surface(3, grid, rms_nm=1.0)
+        with jax.enable_x64(x64):
+            surf = synthesize_psd_surface(3, grid, rms_nm=1.0)
         assert surf.shape == (128, 128)
         assert abs(float(surf.mean())) < 1e-12
         assert float(surf.std()) == pytest.approx(1.0, rel=1e-12)

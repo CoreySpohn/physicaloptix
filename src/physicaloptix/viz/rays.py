@@ -25,7 +25,6 @@ from matplotlib.colors import is_color_like, to_rgba
 from matplotlib.patches import Ellipse
 
 from physicaloptix.viz import _require
-from physicaloptix.viz.propagation import _neutral
 from physicaloptix.viz.raytrace import (
     beam_polygons,
     strip_polygons,
@@ -273,8 +272,10 @@ def ray_train(
                 (z, 0.0),
                 width,
                 2.0 * float(half),
-                facecolor=to_rgba(_neutral(ax, _LENS_FACE_LEVEL), _LENS_FACE_ALPHA),
-                edgecolor=_neutral(ax, _LENS_EDGE_LEVEL),
+                facecolor=to_rgba(
+                    _require.eyepiece().neutral(_LENS_FACE_LEVEL), _LENS_FACE_ALPHA
+                ),
+                edgecolor=_require.eyepiece().neutral(_LENS_EDGE_LEVEL),
                 lw=lw,
                 zorder=_LENS_Z,
                 gid=f"{owner}/lens/{i}",
@@ -351,7 +352,7 @@ def plot_mirror(
     (piece,) = ax.plot(
         uc[:, 0],
         uc[:, 1],
-        color=_neutral(ax, _MIRROR_LEVEL) if color is None else color,
+        color=_require.eyepiece().neutral(_MIRROR_LEVEL) if color is None else color,
         lw=_MIRROR_LW * base if linewidth is None else linewidth,
         zorder=zorder,
         solid_capstyle="butt",
@@ -363,7 +364,9 @@ def plot_mirror(
         (whole,) = ax.plot(
             pc[:, 0],
             pc[:, 1],
-            color=_neutral(ax, _PARENT_LEVEL) if parent_color is None else parent_color,
+            color=_require.eyepiece().neutral(_PARENT_LEVEL)
+            if parent_color is None
+            else parent_color,
             lw=_PARENT_LW * base,
             ls=_PARENT_DASH,
             zorder=zorder - 1,
