@@ -63,7 +63,7 @@ def setup():
 def _focal_contrast(grid, field, e_out, mask):
     focal = PixelGrid.focal(NFOC, PSCALE, TEST_FRAME)
     prop = Fraunhofer(grid_in=grid, grid_out=focal)
-    peak = np.abs(np.asarray(prop(field).data)) ** 2
+    peak = np.abs(np.asarray(prop.forward(field).data)) ** 2
     peak = peak.max(axis=(1, 2))
     delta = Field(
         data=e_out.data - field.data,
@@ -71,7 +71,7 @@ def _focal_contrast(grid, field, e_out, mask):
         plane=PlaneKind.PUPIL,
         spectrum=field.spectrum,
     )
-    df = np.abs(np.asarray(prop(delta).data)) ** 2 / peak[:, None, None]
+    df = np.abs(np.asarray(prop.forward(delta).data)) ** 2 / peak[:, None, None]
     return df[:, mask].mean(axis=1)
 
 

@@ -46,6 +46,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from hwoutils.grids import PixelGrid
+from hwoutils.transforms import downsample_psf
 from jax import lax
 from jaxtyping import Array
 
@@ -53,18 +54,6 @@ from physicaloptix.core.grid import _grid_axis
 from physicaloptix.transforms.cmft import cmft_fwd
 
 PACK_FORMAT_VERSION = 1
-
-
-def _cmft2(f, x, uy, ux):
-    """Two-axis continuous-FT MFT: separate row (uy) and column (ux) outputs.
-
-    The library ``cmft_fwd`` special case has ``uy == ux``; per-lenslet tiles
-    need independent axis offsets (a lenslet center displaces both axes).
-    """
-    ky = jnp.exp(-2j * jnp.pi * jnp.outer(uy, x))
-    kx = jnp.exp(-2j * jnp.pi * jnp.outer(ux, x))
-    dx = x[1] - x[0]
-    return dx**2 * (ky @ f @ kx.T)
 
 
 class LensletChain(eqx.Module):
@@ -344,7 +333,7 @@ class LensletChain(eqx.Module):
         def one(center):
             uy = (tile + center[1]) * p_lod
             ux = (tile + center[0]) * p_lod
-            return _cmft2(pupil, xp, uy, ux) * window
+            return cmft_fwd(pupil, xp, uy, ux) * window
 
         return jax.vmap(one)(jnp.asarray(centers_pitch))
 
@@ -360,7 +349,7 @@ class LensletChain(eqx.Module):
         stop = self._relay_to_stop(tile_field, wavelength_nm, shift_diffraction)
         ppd = self.px_per_diffraction(wavelength_nm)
         x_s = jnp.asarray(_grid_axis(self.stop_grid))
-        return _cmft2(stop, x_s, jnp.asarray(off_y) / ppd, jnp.asarray(off_x) / ppd)
+        return cmft_fwd(stop, x_s, jnp.asarray(off_y) / ppd, jnp.asarray(off_x) / ppd)
 
     def detector_field(
         self, wavelength_nm, px_coords, pupil=None, shift_diffraction=(0.0, 0.0)
@@ -405,11 +394,24 @@ def pixel_integrate(intensity, n_quad, stride):
     fine sample is the ``n_quad x n_quad`` window mean. Returns the
     ``(n_out, n_out)`` array with ``n_out = (n_fine - n_quad) // stride + 1``.
     """
-    window = (n_quad, n_quad)
-    strides = (stride, stride)
-    zero = jnp.zeros((), dtype=intensity.dtype)
-    summed = lax.reduce_window(intensity, zero, lax.add, window, strides, "VALID")
-    return summed / (n_quad * n_quad)
+    ny, nx = (max(0, (n - n_quad) // stride + 1) for n in intensity.shape)
+    if not ny or not nx:
+        return jnp.zeros((ny, nx), dtype=jnp.result_type(intensity, 1.0))
+    if stride == n_quad:
+        summed, _ = downsample_psf(
+            intensity[: ny * n_quad, : nx * n_quad], 1.0, (ny, nx)
+        )
+        return summed / n_quad**2
+
+    # Each offset has its own pixel footprint when windows overlap or have gaps.
+    def integrate_window(y, x):
+        window = lax.dynamic_slice(intensity, (y, x), (n_quad, n_quad))
+        summed, _ = downsample_psf(window, 1.0, (1, 1))
+        return summed[0, 0] / n_quad**2
+
+    return jax.vmap(
+        lambda y: jax.vmap(lambda x: integrate_window(y, x))(jnp.arange(nx) * stride)
+    )(jnp.arange(ny) * stride)
 
 
 def _fine_axis(offsets, n_quad):
@@ -663,6 +665,6 @@ def detector_scene(
             ),
         )
         fine = jnp.abs(canvas) ** 2
-        pixels = fine.reshape(ny, ovs, nx, ovs).mean(axis=(1, 3))
+        pixels = pixel_integrate(fine, ovs, ovs)
         total = total + w[i] * pixels
     return total

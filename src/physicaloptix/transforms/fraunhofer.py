@@ -175,7 +175,3 @@ class Fraunhofer(eqx.Module):
             plane=self.plane_in,
             spectrum=field.spectrum,
         )
-
-    def __call__(self, field):
-        """Alias for :meth:`forward` (the OpticalPath fold convention)."""
-        return self.forward(field)

@@ -135,7 +135,7 @@ class TestEmittedPackage:
             Spectrum.from_band(Band(REF_NM * (1 - 0.1 / 2), REF_NM * (1 + 0.1 / 2)), 3),
         )
         lyot, _ = core.propagate(band)
-        out = science(lyot)
+        out = science.forward(lyot)
         # Emitted maps are per-pixel flux fractions: density times cell area.
         expected = np.asarray(out.intensity().data) * 0.5**2
         np.testing.assert_allclose(

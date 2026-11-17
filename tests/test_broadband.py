@@ -109,8 +109,8 @@ class TestNativeChromaticPropagation:
         prop = Fraunhofer(
             grid_in=pupil_field.grid, grid_out=PixelGrid.focal(64, 0.5, TEST_FRAME)
         )
-        chromatic = prop(broadcast_to_spectrum(pupil_field, band))
-        mono = prop(pupil_field)
+        chromatic = prop.forward(broadcast_to_spectrum(pupil_field, band))
+        mono = prop.forward(pupil_field)
         assert chromatic.data.shape == (5, 64, 64)
         for i in range(5):
             np.testing.assert_allclose(
@@ -130,10 +130,10 @@ class TestFixedAngularPropagation:
     def test_reference_wavelength_slice_matches_native(self, pupil_field, angular_prop):
         """At lambda = lambda_ref the fixed-angular MFT is the native MFT."""
         single = Spectrum([REF_NM], [1.0])
-        out = angular_prop(broadcast_to_spectrum(pupil_field, single))
+        out = angular_prop.forward(broadcast_to_spectrum(pupil_field, single))
         native = Fraunhofer(
             grid_in=pupil_field.grid, grid_out=PixelGrid.focal(96, 0.5, TEST_FRAME)
-        )(pupil_field)
+        ).forward(pupil_field)
         np.testing.assert_allclose(
             np.asarray(out.data[0]), np.asarray(native.data), atol=1e-13
         )
@@ -147,7 +147,7 @@ class TestFixedAngularPropagation:
             separation_lod=7.75,
             reference_wavelength_nm=REF_NM,
         )
-        out = angular_prop(source)
+        out = angular_prop.forward(source)
         intensity = np.asarray(out.data.real**2 + out.data.imag**2)
         peaks = [
             np.unravel_index(np.argmax(intensity[i]), intensity[i].shape)
@@ -166,10 +166,10 @@ class TestFixedAngularPropagation:
             pupil_field, spectrum=band, opd_nm=jnp.asarray(3.0 * ripple)
         )
         nominal = point_source(pupil_field, spectrum=band)
-        out = angular_prop(source)
+        out = angular_prop.forward(source)
         # The stellar Airy rings dwarf a 3 nm ripple's speckles; the field
         # difference isolates |G eps|^2 exactly (the linear speckle identity).
-        delta = out.data - angular_prop(nominal).data
+        delta = out.data - angular_prop.forward(nominal).data
         intensity = np.asarray(delta.real**2 + delta.imag**2)
         coords = np.asarray(_grid_axis(out.grid))
         wavelengths = np.asarray(band.nodes_nm)
@@ -211,7 +211,7 @@ class TestFixedAngularPropagation:
             spectrum=band,
         )
         source = broadcast_to_spectrum(pupil_field, band)
-        forward = angular_prop(source)
+        forward = angular_prop.forward(source)
         back = angular_prop.backward(focal)
         du_angular = focal.grid.step
         dx = source.grid.step
@@ -222,10 +222,10 @@ class TestFixedAngularPropagation:
 
     def test_mono_field_requires_no_reference_scaling(self, pupil_field, angular_prop):
         """A mono field through a referenced propagator uses the native grid."""
-        out = angular_prop(pupil_field)
+        out = angular_prop.forward(pupil_field)
         native = Fraunhofer(
             grid_in=pupil_field.grid, grid_out=PixelGrid.focal(96, 0.5, TEST_FRAME)
-        )(pupil_field)
+        ).forward(pupil_field)
         np.testing.assert_allclose(
             np.asarray(out.data), np.asarray(native.data), atol=1e-15
         )

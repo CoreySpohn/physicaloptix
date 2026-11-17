@@ -56,6 +56,10 @@ the stage is constructed and can be told to warn or raise if the grid
 undersamples the transform, so sampling errors surface as a clear message
 instead of aliasing.
 
+Call `forward(field)` on `Fraunhofer`, `FullBandFraunhofer`, and `Fresnel`
+to propagate, and `backward(field)` for the adjoint. `OpticalPath` calls
+`forward` for these propagators and calls optical elements directly.
+
 ## Elements: masks, optics, and wavefront error
 
 Everything that sits in a path between propagators is an element:

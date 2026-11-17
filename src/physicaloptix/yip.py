@@ -69,7 +69,8 @@ def _band_image(core_path, science, source):
     """
     lyot, _ = core_path.propagate(source)
     return (
-        np.asarray(science(lyot).intensity().data) * float(science.grid_out.step) ** 2
+        np.asarray(science.forward(lyot).intensity().data)
+        * float(science.grid_out.step) ** 2
     )
 
 
@@ -294,7 +295,7 @@ def emit_yip(
             spectrum=single,
         )
         lyot, _ = core_path.propagate(source)
-        out = science(lyot).data[0]
+        out = science.forward(lyot).data[0]
         sky = sky + np.asarray(out.real**2 + out.imag**2)
     sky = sky * (npix**2 / n_sky_screens / 2.0)
 

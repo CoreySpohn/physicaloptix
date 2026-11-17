@@ -160,7 +160,3 @@ class FullBandFraunhofer(eqx.Module):
             plane=self.plane_in,
             spectrum=field.spectrum,
         )
-
-    def __call__(self, field):
-        """Alias for :meth:`forward`."""
-        return self.forward(field)

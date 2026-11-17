@@ -38,7 +38,7 @@ def telescope_peak(field, grid_out):
         The peak intensity density as a float.
     """
     transform = Fraunhofer(field.grid, grid_out)
-    return float(jnp.max(transform(field).intensity().data))
+    return float(jnp.max(transform.forward(field).intensity().data))
 
 
 def _check_chromatic_layout(e_nom, G, input_energy, wavelengths_nm):

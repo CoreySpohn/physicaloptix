@@ -220,6 +220,30 @@ class TestShiftTheoremAndWavecal:
 
 
 class TestPixelIntegrate:
+    @pytest.mark.parametrize(
+        ("shape", "stride"),
+        [((19, 23), 2), ((19, 23), 4), ((19, 23), 6), ((3, 9), 4), ((9, 3), 2)],
+    )
+    def test_window_means(self, shape, stride):
+        """Float rounding allows 1e-12 for sums of 16 bounded samples.
+
+        Fails if windows use the wrong footprint or empty outputs are rejected.
+        """
+        fine = np.random.default_rng(0).random(shape)
+        ny, nx = (max(0, (n - 4) // stride + 1) for n in shape)
+        expected = np.array(
+            [
+                [
+                    fine[y : y + 4, x : x + 4].sum() / 16
+                    for x in range(0, nx * stride, stride)
+                ]
+                for y in range(0, ny * stride, stride)
+            ]
+        ).reshape(ny, nx)
+        np.testing.assert_allclose(
+            pixel_integrate(jnp.asarray(fine), 4, stride), expected, rtol=1e-12
+        )
+
     def test_constant_field_is_preserved(self):
         fine = jnp.full((20, 20), 3.5)
         out = pixel_integrate(fine, n_quad=4, stride=2)

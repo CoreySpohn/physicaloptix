@@ -101,7 +101,8 @@ def test_explicit_spectrum_psf_equals_parent_formula():
             source.grid,
             PixelGrid.focal(m, step, TEST_FRAME),
             reference_wavelength_nm=500.0,
-        )(source)
+        )
+        .forward(source)
         .intensity()
         .data
     )

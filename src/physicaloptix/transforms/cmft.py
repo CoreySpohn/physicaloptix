@@ -18,20 +18,23 @@ Leading batch axes (e.g. wavelength) broadcast through the matrix products.
 import jax.numpy as jnp
 
 
-def cmft_fwd(f, x, u):
+def cmft_fwd(f, x, u, ux=None):
     """Continuous-FT MFT: pupil field f(x) -> focal field F(u).
 
     Args:
         f: Complex pupil field, shape ``(..., n, n)`` over ``x``.
         x: 1D pupil coordinates in pupil diameters.
-        u: 1D focal coordinates in lambda/D.
+        u: 1D row focal coordinates in lambda/D.
+        ux: Optional independent column focal coordinates; defaults to ``u``.
 
     Returns:
-        Complex focal field, shape ``(..., len(u), len(u))``.
+        Complex focal field, shape ``(..., len(u), len(u))``, or
+        ``(..., len(u), len(ux))`` when column coordinates are supplied.
     """
     k = jnp.exp(-2j * jnp.pi * jnp.outer(u, x))  # (nfoc, npup)
+    kx = k if ux is None else jnp.exp(-2j * jnp.pi * jnp.outer(ux, x))
     dx = x[1] - x[0]
-    return dx**2 * (k @ f @ k.T)
+    return dx**2 * (k @ f @ kx.T)
 
 
 def cmft_bwd(field, x, u):

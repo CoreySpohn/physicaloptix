@@ -25,6 +25,18 @@ def shift_center(a):
     return jnp.roll(a, (s[-2] // 2, s[-1] // 2), axis=(-2, -1))
 
 
+def fft_forward(a, n=1):
+    """PROPER corner-layout forward FFT, divided by array size and scaled by n."""
+    size = a.shape[-2] * a.shape[-1]
+    return jnp.fft.fft2(a) / size * n
+
+
+def fft_backward(a, n=1):
+    """Inverse of :func:`fft_forward` with the same scale n."""
+    size = a.shape[-2] * a.shape[-1]
+    return jnp.fft.ifft2(a) * size / n
+
+
 def ffts(a, direction):
     """Centered FFT (``direction=-1``, divided by the size) or its inverse (``+1``).
 
@@ -32,9 +44,8 @@ def ffts(a, direction):
     """
     n = a.shape[-1]
     a = jnp.roll(a, (-n // 2, -n // 2), axis=(-2, -1))
-    size = a.shape[-2] * a.shape[-1]
-    a = jnp.fft.fft2(a) / size if direction == -1 else jnp.fft.ifft2(a) * size
-    return jnp.roll(a, (n // 2, n // 2), axis=(-2, -1))
+    a = fft_forward(a) if direction == -1 else fft_backward(a)
+    return shift_center(a)
 
 
 def mft2(field, dout, d, nout, direction):

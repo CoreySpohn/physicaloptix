@@ -104,7 +104,7 @@ class PathCoronagraph(AbstractCoronagraph):
 
         def psf(field, outside="zero"):
             return Image(
-                science(field).intensity().data * grid.pixel_area / energy,
+                science.forward(field).intensity().data * grid.pixel_area / energy,
                 grid,
                 (),
                 "per_pixel",
@@ -173,7 +173,7 @@ class PathCoronagraph(AbstractCoronagraph):
         render_grid = grid if direct else self.grid
         science = Fraunhofer(self.input_field.grid, render_grid)
         native = Image(
-            science(field).intensity().data
+            science.forward(field).intensity().data
             * render_grid.pixel_area
             / self.input_energy,
             render_grid,

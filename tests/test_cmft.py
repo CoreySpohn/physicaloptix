@@ -21,6 +21,25 @@ def _rng_field(rng, n):
 
 
 class TestCmftPair:
+    def test_independent_focal_axes(self):
+        """Float rounding in 16-term DFT sums allows 1e-12 absolute error.
+
+        Fails if row/column offsets are swapped or the cell weight is missing.
+        """
+        x = np.linspace(-0.375, 0.375, 4)
+        uy, ux = np.array([-0.3, 0.7]), np.array([-0.8, 0.1, 0.6])
+        f = np.random.default_rng(0).normal(size=(2, 4, 4)).astype(complex)
+        expected = np.empty((2, len(uy), len(ux)), dtype=complex)
+        for b in range(2):
+            for i, v in enumerate(uy):
+                for j, u in enumerate(ux):
+                    expected[b, i, j] = (x[1] - x[0]) ** 2 * sum(
+                        f[b, row, col] * np.exp(-2j * np.pi * (v * y + u * z))
+                        for row, y in enumerate(x)
+                        for col, z in enumerate(x)
+                    )
+        np.testing.assert_allclose(cmft_fwd(f, x, uy, ux), expected, atol=1e-12)
+
     @given(
         npup=st.integers(min_value=8, max_value=24),
         nfoc=st.integers(min_value=8, max_value=24),

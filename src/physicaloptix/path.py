@@ -17,6 +17,7 @@ import equinox as eqx
 
 from physicaloptix.core.chromatic import AbstractChromaticOp
 from physicaloptix.linearize import linearize as _linearize
+from physicaloptix.transforms import Fraunhofer, Fresnel, FullBandFraunhofer
 
 
 class Stage(eqx.Module):
@@ -125,7 +126,10 @@ class OpticalPath(eqx.Module):
             )
         tapped = {}
         for stage in self.stages:
-            field = stage.op(field)
+            if isinstance(stage.op, Fraunhofer | Fresnel | FullBandFraunhofer):
+                field = stage.op.forward(field)
+            else:
+                field = stage.op(field)
             if stage.name in taps:
                 tapped[stage.name] = field
         return field, tapped

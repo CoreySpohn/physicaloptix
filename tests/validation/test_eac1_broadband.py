@@ -81,10 +81,10 @@ class TestBroadbandNull:
         )
 
         lyot_mono, _ = core.propagate(field)
-        mono_psf = np.asarray(science(lyot_mono).intensity().data)
+        mono_psf = np.asarray(science.forward(lyot_mono).intensity().data)
 
         lyot_band = broadcast_to_spectrum(lyot_mono, band)
-        out = science(lyot_band)
+        out = science.forward(lyot_band)
         slices = np.asarray(out.data.real**2 + out.data.imag**2)
         broadband = np.asarray(out.intensity().data)
 
@@ -120,7 +120,7 @@ class TestBroadbandPlanet:
             reference_wavelength_nm=REF_NM,
         )
         lyot, _ = core.propagate(source)
-        out = science(lyot)
+        out = science.forward(lyot)
         intensity = np.asarray(out.data.real**2 + out.data.imag**2)
         peaks = [
             np.unravel_index(np.argmax(intensity[i]), intensity[i].shape)

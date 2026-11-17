@@ -28,6 +28,12 @@ from typing import NamedTuple
 import jax.numpy as jnp
 import numpy as np
 
+from physicaloptix.instruments._proper_ops import (
+    fft_backward,
+    fft_forward,
+    shift_center,
+)
+
 RAYLEIGH_FACTOR = 1.0
 
 
@@ -246,32 +252,17 @@ def plan_lens(beam, lens_fl):
     return beam, _op("lens", phase, beam.dx, True)
 
 
-def _to_corner(a):
-    n = a.shape[-1]
-    return jnp.roll(a, (n // 2, n // 2), axis=(-2, -1))
-
-
-def _fft_forward(a, n):
-    size = a.shape[-2] * a.shape[-1]
-    return jnp.fft.fft2(a) / size * n
-
-
-def _fft_backward(a, n):
-    size = a.shape[-2] * a.shape[-1]
-    return jnp.fft.ifft2(a) * size / n
-
-
 def _ptp_array(a, lam, dz, dx, n):
     x = ((jnp.arange(n, dtype=float) - n // 2) / (n * dx)) ** 2
-    rhosqr = _to_corner(x[None, :] + x[:, None])
-    a = _fft_forward(a, n)
+    rhosqr = shift_center(x[None, :] + x[:, None])
+    a = fft_forward(a, n)
     a = a * jnp.exp((-1j * jnp.pi * lam * dz) * rhosqr)
-    return _fft_backward(a, n)
+    return fft_backward(a, n)
 
 
 def _qphase_array(a, lam, c, dx, n):
     xsqr = ((jnp.arange(n, dtype=float) - n / 2.0) * dx) ** 2
-    rsqr = _to_corner(xsqr[None, :] + xsqr[:, None])
+    rsqr = shift_center(xsqr[None, :] + xsqr[:, None])
     return a * jnp.exp(1j * jnp.pi / (lam * c) * rsqr)
 
 
@@ -279,7 +270,7 @@ def _lens_array(a, lam, lens_phase, dx, n):
     x2 = (jnp.arange(n, dtype=float) - n // 2) ** 2
     rho = jnp.sqrt(x2[None, :] + x2[:, None]) * dx
     phase = -(rho**2) * (lens_phase / 2.0)
-    return a * jnp.exp(2 * jnp.pi * 1j / lam * _to_corner(phase))
+    return a * jnp.exp(2 * jnp.pi * 1j / lam * shift_center(phase))
 
 
 def apply_op(a, op, lam_m):
@@ -289,7 +280,7 @@ def apply_op(a, op, lam_m):
         return _ptp_array(a, lam_m, op.value, op.dx, n)
     if op.kind == "lens":
         return _lens_array(a, lam_m, op.value, op.dx, n)
-    fft = _fft_forward if op.forward else _fft_backward
+    fft = fft_forward if op.forward else fft_backward
     if op.kind == "stw":
         return _qphase_array(fft(a, n), lam_m, op.value, op.dx, n)
     if op.kind == "wts":
