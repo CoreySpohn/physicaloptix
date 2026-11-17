@@ -408,18 +408,11 @@ class SpeckleProcess(eqx.Module):
     different timescales); ``per_mode_rms`` is in the same mode units as
     ``G``'s mode coordinate.
 
-    Spectral lines carry the quadrature weight ``S(f_j) df_j`` (trapezoid
-    widths, ``df_weighted=True``), which is what makes the synthesized process
-    approximate the continuous PSD it names: the realized autocorrelation
-    :meth:`autocorrelation` then converges to the PSD's transform, so a
-    ``slope=-2`` (Lorentzian) process decorrelates as
-    ``exp(-2 pi knee tau)`` -- exactly the ``tau`` that
-    :meth:`from_decorrelation` was asked for. Weighting by ``S(f_j)`` alone
-    (``df_weighted=False``, the pre-2026-07-25 behavior, kept so existing
-    ensembles stay reproducible) instead synthesizes ``S(f) / f`` on a log
-    grid, which decorrelates 2-3x too slowly. Equal-time statistics are
-    identical either way: the weights are normalized to the per-mode rms, so
-    only the temporal kernel changes.
+    Spectral lines carry the quadrature weight ``S(f_j) df_j`` with
+    trapezoid widths, so the synthesized autocorrelation approximates the
+    continuous PSD's transform. A ``slope=-2`` (Lorentzian) process
+    decorrelates as ``exp(-2 pi knee tau)``, matching the time requested
+    through :meth:`from_decorrelation`.
     """
 
     e_nom: Array  # complex (y, x) or (w, y, x): nominal focal field
@@ -437,7 +430,6 @@ class SpeckleProcess(eqx.Module):
     decades_below: float = eqx.field(static=True)
     decades_above: float = eqx.field(static=True)
     per_mode_freq: bool = eqx.field(static=True)
-    df_weighted: bool = eqx.field(static=True)
 
     def __init__(
         self,
@@ -455,7 +447,6 @@ class SpeckleProcess(eqx.Module):
         n_freq=64,
         decades_below=1.7,
         decades_above=2.3,
-        df_weighted=True,
         wavelengths_nm=None,
     ):
         """Build the process parameter object.
@@ -490,11 +481,6 @@ class SpeckleProcess(eqx.Module):
                 knee so lags out to several decorrelation times do not ring
                 off the end of the grid.
             decades_above: Frequency-grid extent above the knee (decades).
-            df_weighted: Weight each spectral line by ``S(f_j) df_j``
-                (trapezoid quadrature) rather than ``S(f_j)`` alone, so the
-                synthesized temporal kernel is the PSD's transform. Default
-                ``True``; pass ``False`` (with ``decades_below=0.7``) to
-                reproduce ensembles drawn before 2026-07-25.
             wavelengths_nm: Channel wavelengths, shape ``(w,)``, enabling
                 the chromatic layout above and carried through :meth:`draw`
                 into the returned :class:`AnalyticSpeckleField`. ``None``
@@ -527,7 +513,6 @@ class SpeckleProcess(eqx.Module):
         self.n_freq = n_freq
         self.decades_below = decades_below
         self.decades_above = decades_above
-        self.df_weighted = df_weighted
 
     def __check_init__(self):
         """Validate mode parameters, native geometry and ingredient layout."""
@@ -622,23 +607,20 @@ class SpeckleProcess(eqx.Module):
         The spectral-synthesis coefficient of line ``j`` carries mean power
         proportional to this weight, so it -- not :meth:`psd` -- is the
         quantity the draw and the realized autocorrelation are built from.
-        With ``df_weighted=True`` the weight is the trapezoid quadrature
-        element ``S(f_j) df_j`` of ``int S(f) df``; with ``df_weighted=False``
-        it is the bare ``S(f_j)``, which on a log grid is instead a
-        quadrature of ``int S(f) / f df``.
+        The weight is the trapezoid quadrature element ``S(f_j) df_j``
+        of ``int S(f) df``.
 
         Returned unnormalized (callers divide by the sum), and always
         broadcast to the full ``(m, f)`` mode axis.
         """
         f = self.frequencies_hz()
         weights = self.psd(f)
-        if self.df_weighted:
-            half = 0.5 * jnp.diff(f, axis=-1)
-            zero = jnp.zeros_like(half[..., :1])
-            df = jnp.concatenate([half, zero], axis=-1) + jnp.concatenate(
-                [zero, half], axis=-1
-            )
-            weights = weights * df
+        half = 0.5 * jnp.diff(f, axis=-1)
+        zero = jnp.zeros_like(half[..., :1])
+        df = jnp.concatenate([half, zero], axis=-1) + jnp.concatenate(
+            [zero, half], axis=-1
+        )
+        weights = weights * df
         if weights.ndim == 1:
             weights = jnp.broadcast_to(weights, (self.G.shape[-3], self.n_freq))
         return weights
@@ -656,7 +638,7 @@ class SpeckleProcess(eqx.Module):
 
         For ``slope=-2`` (a Lorentzian PSD) the continuous target is the
         Ornstein-Uhlenbeck kernel ``exp(-2 pi knee tau)``, which the
-        ``df_weighted=True`` synthesis reproduces over the lags its grid
+        synthesis reproduces over the lags its grid
         spans.
 
         Args:

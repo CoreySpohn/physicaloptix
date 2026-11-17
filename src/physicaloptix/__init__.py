@@ -173,7 +173,6 @@ __all__ = [
     "quadrature_partner",
     "rasterize_primary",
     "rasterize_segments",
-    "render_path",
     "save_psflet_pack",
     "segment_ptt_basis",
     "sellmeier",
@@ -187,12 +186,6 @@ __all__ = [
 
 
 def __getattr__(name):
-    # render_path is deprecated and resolved on first use, so importing
-    # physicaloptix never loads the legacy plotting module.
-    if name == "render_path":
-        from physicaloptix.viz import render_path
-
-        return render_path
     # physicaloptix.viz is a lazy namespace that imports no eyepiece itself,
     # so attribute access after a bare `import physicaloptix` loads it here.
     if name == "viz":

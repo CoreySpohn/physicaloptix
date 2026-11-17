@@ -168,8 +168,7 @@ class PathCoronagraph(AbstractCoronagraph):
             grid.unit == "lod"
             and grid.frame == self.grid.frame
             and grid.shape[0] == grid.shape[1]
-            and grid.center_x == (grid.shape[1] - 1) / 2
-            and grid.center_y == (grid.shape[0] - 1) / 2
+            and grid.is_geometric
             and grid.basis[0][1] == grid.basis[1][0] == 0
             and grid.basis[0][0] == grid.basis[1][1] > 0
         )

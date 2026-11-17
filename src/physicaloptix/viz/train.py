@@ -1,11 +1,8 @@
 """plot_path: the typed optical-train rail + per-stage field panels.
 
-The replacement for the frozen ``_legacy.render_path``: the rail is drawn by
-``eyepiece.rail`` (a fixed, reviewed glyph vocabulary) instead of a hand-rolled
-patch set, and every panel is chromatic-safe -- it goes through
-``fields._resolve`` / ``fields._draw_panel``, the same machinery
-``plot_field`` uses, so a chromatic ``Field`` (the bug ``render_path`` is
-frozen with) just works.
+The rail uses ``eyepiece.rail`` for optical glyphs. Every panel goes
+through ``fields._resolve`` / ``fields._draw_panel``, the same machinery
+as ``plot_field``, to reduce chromatic fields consistently.
 
 ``native_dpi`` is the named replacement for a dpi hack (render an image
 panel's pixels 1:1 at a given inch height) that used to be copy-pasted in an
@@ -28,7 +25,7 @@ from physicaloptix.viz.fields import (
     _resolve,
 )
 
-# Legacy kind (physicaloptix's own vocabulary, from _infer_kind) -> eyepiece's
+# Optical kind (physicaloptix's vocabulary, from _infer_kind) -> eyepiece's
 # rail glyph vocabulary (eyepiece.schematic.GLYPHS).
 _GLYPH_FOR_KIND = {
     "source": "source",
@@ -45,19 +42,14 @@ _LOG_FLOOR_RATIO = 1e-8
 # branch does. Kept as an explicit placeholder rather than None so the call
 # signature stays uniform across both kinds.
 _PHASE_FLOOR = 1e-20
-_FIG_WIDTH_PER_PANEL_IN = 2.2  # matches the legacy render_path default (2.2 * n)
+_FIG_WIDTH_PER_PANEL_IN = 2.2
 _RAIL_HEIGHT_RATIO = 0.6
 _MINIMAP_CHIP_ALPHA = 0.55  # translucent watermark chip behind the rail
 _MINIMAP_MUTE_ALPHA = 0.35  # extra fade on every plane but the active one
 
 
 def _infer_kind(op, name):
-    """A display glyph kind for a stage, from its type and name.
-
-    Ported verbatim from ``_legacy.render_path._infer_kind`` (frozen file,
-    not importable without dragging in the deprecated module's matplotlib
-    import guard).
-    """
+    """A display glyph kind for a stage, from its type and name."""
     if isinstance(op, MultiScaleVortex):
         return "fpm"
     if isinstance(op, Fraunhofer):
@@ -158,9 +150,8 @@ def _rail_positions(n, rail_kw):
     The rail axes spans the SAME gridspec width as the ``n`` panel columns
     below it (``gs[0, :]`` over the same ``n``-column row), so its [0, 1]
     axes-fraction coordinate maps linearly onto that combined width. The
-    default is therefore each column's own center, ``(i + 0.5) / n`` -- the
-    legacy ``render_path`` recipe (``_legacy.py``'s ``xs = (np.arange(n) +
-    0.5) / n``) -- so every glyph sits directly above its panel; anything
+    default is therefore each column's own center, ``(i + 0.5) / n``, so
+    every glyph sits directly above its panel; anything
     else (e.g. an even ``linspace`` padded away from the edges) drifts off
     by a growing fraction of a panel width as ``n`` shrinks.
     """
@@ -558,8 +549,7 @@ def plot_path(
     gridspec rows -- taps are namespaced ``"trunk/<stage>"`` /
     ``"<branch>/<stage>"``). Every intensity panel goes through
     ``fields._resolve``, so a chromatic ``Field`` renders its weight-summed
-    intensity instead of crashing (the bug ``_legacy.render_path`` is
-    frozen with).
+    intensity.
 
     The returned axes are flat, in this fixed order: the rail (if
     ``rail=True``), then one intensity panel per stage (input first, then
