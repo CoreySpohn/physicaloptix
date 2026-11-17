@@ -222,7 +222,7 @@ def test_label_plane_delegates_to_eyepiece_label_lod(monkeypatch):
     import eyepiece as ep
 
     calls = []
-    monkeypatch.setattr(ep, "label_lod", lambda ax: calls.append(ax))
+    monkeypatch.setattr(ep.plot, "label_lod", lambda ax: calls.append(ax))
     res = plot_field(_mono())
     assert len(calls) == 1
     assert calls[0] is res.ax
