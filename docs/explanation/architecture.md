@@ -97,6 +97,16 @@ measured from where the coronagraph starts passing off-axis light, not read
 from a configuration file. This is what lets a live-propagation coronagraph and
 a precomputed sampled-table coronagraph fill the same slot interchangeably.
 
+Aperture rules and performance reduction live in `optixstuff.apertures` and
+`optixstuff.performance`. `PathCoronagraph` uses those shared definitions;
+`yippy.Coronagraph` directly implements the sampled `AbstractTableCoronagraph`
+contract. Both expose `source_psfs(wavelength_nm, x_lod, y_lod, grid=...)`,
+`stellar_map(wavelength_nm, stellar_diam_lod, grid=...)`, and `curves(rule)`.
+Omitting an image grid selects the model's native grid. `PathCoronagraph.bandpass`
+is the recorded `Spectrum.band`, or `None` if no integration band was specified.
+It supports only point stars: a concrete nonzero stellar diameter raises
+`ValueError`, and a traced nonzero diameter produces a NaN image.
+
 ## How a Lyot coronagraph is laid out
 
 A coronagraph path reads as a short list of stages, but it hides a plane

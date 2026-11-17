@@ -17,6 +17,7 @@ from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import MultiScaleVortex, SampledOptic
 from physicaloptix.interop import PathCoronagraph
 from physicaloptix.path import OpticalPath, Stage
+from physicaloptix.transforms import Fraunhofer
 
 NPUP = 64
 DIAMETER_M = 6.0
@@ -441,7 +442,8 @@ def test_rule_records_and_absolute_leakage(bare_telescope):
     Same-image records agree at 16 float64 eps. The independent aperture
     sum has no pixel-area division: a factor step**-2 would fail by 4x.
     """
-    from yippy import Circular, HalfMaximum, performance_curves
+    from optixstuff.apertures import Circular, HalfMaximum
+    from optixstuff.performance import performance_curves
 
     c = bare_telescope
     star = c.stellar_map(600.0, 0.0, grid=c.grid)
@@ -484,7 +486,7 @@ def test_detector_aperture_matches_throughput_at_three_pitches(vortex_coronagrap
     image padding, detector box integration and fractional aperture coverage
     versus the record's subpixel quadrature, not a roundoff-only identity.
     """
-    from yippy import Circular
+    from optixstuff.apertures import Circular
 
     c, separation = vortex_coronagraph, 6.0
     rule = Circular(0.7)
@@ -529,3 +531,48 @@ def test_public_coronagraph_reconstruction(vortex_coronagraph):
         assert c.stellar_map(600.0, 0.0, grid=grid).outside == "reflect"
         assert c.background_transmission(600.0, grid=grid).outside == "reflect"
         assert c.off_axis_psf(600.0, 6.0, grid).outside == "zero"
+
+
+def test_stellar_map_rejects_finite_diameters(bare_telescope):
+    """Fails if finite stars silently receive point-star maps or leakage.
+
+    Exact-algebra basis: unsupported eager values raise; traced nonzero
+    values are NaN. At zero, 16 float64 eps covers fused versus eager math.
+    The small grid reuses the existing telescope and keeps compilation bounded.
+    """
+    c = bare_telescope
+    grid = _grid((8, 8), 0.5)
+    with pytest.raises(ValueError, match="finite stellar diameter"):
+        c.stellar_map(600.0, 0.1, grid=grid)
+    with pytest.raises(ValueError, match="finite stellar diameter"):
+        c.leakage_fraction(6.0, 600.0, stellar_diam_lod=0.1)
+
+    @eqx.filter_jit
+    def serve(diameter):
+        return (
+            c.stellar_map(600.0, diameter, grid=grid),
+            c.leakage_fraction(6.0, 600.0, stellar_diam_lod=diameter),
+        )
+
+    point, leakage = serve(jnp.asarray(0.0))
+    np.testing.assert_allclose(
+        point.data,
+        Fraunhofer(c.input_field.grid, grid).forward(c.lyot_field).intensity().data
+        * grid.pixel_area
+        / (jnp.sum(c.input_field.intensity().data) * c.input_field.grid.pixel_area),
+        rtol=16 * np.finfo(float).eps,
+        atol=0,
+    )
+    np.testing.assert_allclose(
+        leakage,
+        np.asarray(c.curves().leakage_fraction)[
+            np.flatnonzero(np.asarray(c.curves().separation_lod) == 6.0)[0]
+        ],
+        rtol=16 * np.finfo(float).eps,
+    )
+    finite, leakage = serve(jnp.asarray(0.1))
+    assert np.all(np.isnan(finite.data))
+    assert np.isnan(leakage)
+    assert finite.grid == point.grid
+    assert finite.quantity == point.quantity
+    assert finite.outside == point.outside

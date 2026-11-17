@@ -12,8 +12,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from hwoutils.grids import Image, PixelGrid, resample
+from hwoutils.spectral import Band
+from optixstuff.apertures import DEFAULT_APERTURE_RULE, HalfMaximum
 from optixstuff.coronagraph import AbstractCoronagraph
-from yippy import DEFAULT_APERTURE_RULE, HalfMaximum, performance_curves
+from optixstuff.performance import performance_curves
 
 from physicaloptix.core import Field, PlaneKind, Spectrum
 from physicaloptix.core.grid import _grid_axis
@@ -57,6 +59,12 @@ class PathCoronagraph(AbstractCoronagraph):
     curve_occulter_transmission: jax.Array
     outer_working_angle_lod: float = eqx.field(static=True)
     wavelength_nm: float | None = eqx.field(static=True)
+
+    @property
+    def bandpass(self) -> Band | None:
+        """Recorded integration band, or None when no finite band was specified."""
+        spectrum = self.input_field.spectrum
+        return None if spectrum is None else spectrum.band
 
     @classmethod
     def from_path(
@@ -185,13 +193,27 @@ class PathCoronagraph(AbstractCoronagraph):
         )
         return _on_grid(native, grid)
 
-    def stellar_map(self, wavelength_nm, stellar_diam_lod, *, grid):
-        """Point-star per-pixel flux fraction; finite diameters remain unsupported."""
+    def stellar_map(self, wavelength_nm, stellar_diam_lod, *, grid=None):
+        """Point-star flux fraction; reject concrete or mark traced finite stars NaN."""
+        if (
+            not isinstance(stellar_diam_lod, jax.core.Tracer)
+            and float(stellar_diam_lod) != 0
+        ):
+            raise ValueError("finite stellar diameter requires a prepared stellar map")
         # The stellar halo continues past the field.
-        return self._psf(self.lyot_field, grid, outside="reflect")
+        image = self._psf(
+            self.lyot_field, self.grid if grid is None else grid, outside="reflect"
+        )
+        if not isinstance(stellar_diam_lod, jax.core.Tracer):
+            return image
+        return replace(
+            image,
+            data=jnp.where(jnp.asarray(stellar_diam_lod) == 0, image.data, jnp.nan),
+        )
 
-    def source_psfs(self, wavelength_nm, x_lod, y_lod, *, grid):
+    def source_psfs(self, wavelength_nm, x_lod, y_lod, *, grid=None):
         """Per-pixel source flux fractions with leading axis 'source'."""
+        grid = self.grid if grid is None else grid
 
         def one(x, y):
             lyot, _ = self.core_path.propagate(_tilted_xy(self.input_field, x, y))

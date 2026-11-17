@@ -78,7 +78,9 @@ flowchart LR
 
 `physicaloptix` and `yippy` are interchangeable coronagraph backends: one
 propagates on demand, the other interpolates a precomputed table. Downstream
-tools consume either as an `AbstractCoronagraph` and never see the difference.
+tools consume either as an `AbstractCoronagraph`. The sampled backend is
+`yippy.Coronagraph`, which directly implements `AbstractTableCoronagraph`.
+Aperture rules and performance records are defined by `optixstuff`.
 
 ## Quickstart
 

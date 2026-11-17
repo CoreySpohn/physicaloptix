@@ -32,6 +32,11 @@ The key piece is `PathCoronagraph`, which implements optixstuff's
 `AbstractCoronagraph`: build an `OpticalPath` (entrance pupil to Lyot plane),
 wrap it, and hand it to any downstream tool. Its IWA and scalar performance
 curves are derived from the propagated PSFs at construction, never declared.
+Aperture rules and performance reduction come from `optixstuff.apertures` and
+`optixstuff.performance`; the sampled counterpart is `yippy.Coronagraph`, which
+implements `AbstractTableCoronagraph` directly. `PathCoronagraph.bandpass` exposes
+the recorded `Spectrum.band`, or `None` when no band was specified. Stellar maps
+support point stars; nonzero diameters raise eagerly and return NaN under tracing.
 
 Requires a configured optical path, pupil field, and output sampling.
 
@@ -93,8 +98,8 @@ Built on [JAX](https://github.com/google/jax) and
 
 ```mermaid
 flowchart TB
-    optix["<b>optixstuff</b><br/>Telescope · Coronagraph · Detector · OpticalPath"]
-    physopt["<b>physicaloptix</b><br/>Owned propagation core / diffraction<br/>OpticalPath · PathCoronagraph"]
+    optix["<b>optixstuff</b><br/>Telescope / Coronagraph / Detector / OpticalPath"]
+    physopt["<b>physicaloptix</b><br/>Owned propagation core / diffraction<br/>OpticalPath / PathCoronagraph"]
     yippy["<b>yippy</b><br/>Sampled-YIP PSF interpolation"]
     corono["<b>coronagraphoto</b><br/>2D image simulation"]
     jaxedith["<b>jaxEDITH</b><br/>Exposure-time / yield"]

@@ -59,7 +59,6 @@ test = [
     "pytest-fail-slow>=0.1.0",
     "scipy>=1.13",
     "yippy>=2.10.6",
-    "lod-unit>=1.8.0",
     "hcipy>=0.7.0",
 ]
 # hwostyle is a DIRECT import of viz/train.py and viz/modes.py (cmaps.opd,

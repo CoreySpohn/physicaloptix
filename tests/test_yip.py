@@ -215,10 +215,10 @@ class TestSkyNormalization:
 
 class TestYippyRoundTrip:
     def test_yippy_reads_the_package(self, emitted):
-        yippy = pytest.importorskip("yippy")
-        lod_unit = pytest.importorskip("lod_unit")
+        from yippy import Coronagraph
+
         out_dir, package = emitted
-        coro = yippy.Coronagraph(str(out_dir))
+        coro = Coronagraph(str(out_dir))
         assert coro.grid.shape == package["offax_psf"].grid.shape
         assert coro.grid.basis == package["offax_psf"].grid.basis
         assert coro.grid.center_x == package["offax_psf"].grid.center_x
@@ -229,7 +229,7 @@ class TestYippyRoundTrip:
             package["offax_psf"].grid.frame.reference_wavelength_nm,
             rtol=2 * np.finfo(float).eps,
         )
-        stellar = np.asarray(coro.stellar_intens(0.0 * lod_unit.lod).data)
+        stellar = np.asarray(coro.stellar_map(REF_NM, 0.0).data)
         # The reader interpolates the diameter axis in log space; node
         # reproduction is at the interpolant's precision, not exact.
         np.testing.assert_allclose(
