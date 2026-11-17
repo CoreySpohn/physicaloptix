@@ -516,7 +516,7 @@ def plot_field(
     intensity for ``kind="intensity"`` and raises for any other kind,
     since there is then no single 2D array to hand eyepiece. Axis labels
     come from eyepiece (``label_lod`` for a focal-plane Field); a
-    physicaloptix-local fallback covers only the plane kinds eyepiece has
+    local physicaloptix fallback covers only the plane kinds eyepiece has
     no helper for (currently pupil).
 
     ``cut`` appends a declared 1D slice through the image center. With no
