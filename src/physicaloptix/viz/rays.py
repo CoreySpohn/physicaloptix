@@ -166,13 +166,13 @@ def ray_train(
         lenses = [(1.5, 1.5), (4.5, 1.5), (7.5, 1.5)]
         res = ray_train(
             lenses,
-            [(0.0, 0.15)],                     # an off-axis chief ray
+            [(0.0, 0.15)],  # an off-axis chief ray
             z_start=-1.0,
             z_end=9.0,
-            beams=[(0.5, -0.5, 0.0)],          # the on-axis star's beam
+            beams=[(0.5, -0.5, 0.0)],  # the on-axis star's beam
             linestyles=[(0, (4, 2))],
         )
-        res.update(rays=[(0.0, 0.10)])         # the source moves
+        res.update(rays=[(0.0, 0.10)])  # the source moves
 
     Args:
         lenses: ``(z, f)`` thin lenses, position and focal length.
@@ -273,9 +273,10 @@ def ray_train(
                 width,
                 2.0 * float(half),
                 facecolor=to_rgba(
-                    _require.eyepiece().neutral(_LENS_FACE_LEVEL), _LENS_FACE_ALPHA
+                    _require.eyepiece().style.neutral(_LENS_FACE_LEVEL),
+                    _LENS_FACE_ALPHA,
                 ),
-                edgecolor=_require.eyepiece().neutral(_LENS_EDGE_LEVEL),
+                edgecolor=_require.eyepiece().style.neutral(_LENS_EDGE_LEVEL),
                 lw=lw,
                 zorder=_LENS_Z,
                 gid=f"{owner}/lens/{i}",
@@ -352,7 +353,9 @@ def plot_mirror(
     (piece,) = ax.plot(
         uc[:, 0],
         uc[:, 1],
-        color=_require.eyepiece().neutral(_MIRROR_LEVEL) if color is None else color,
+        color=_require.eyepiece().style.neutral(_MIRROR_LEVEL)
+        if color is None
+        else color,
         lw=_MIRROR_LW * base if linewidth is None else linewidth,
         zorder=zorder,
         solid_capstyle="butt",
@@ -364,7 +367,7 @@ def plot_mirror(
         (whole,) = ax.plot(
             pc[:, 0],
             pc[:, 1],
-            color=_require.eyepiece().neutral(_PARENT_LEVEL)
+            color=_require.eyepiece().style.neutral(_PARENT_LEVEL)
             if parent_color is None
             else parent_color,
             lw=_PARENT_LW * base,

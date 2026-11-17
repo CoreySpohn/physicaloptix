@@ -389,7 +389,7 @@ def field_columns(
             None uses the bottom of the amplitude norm.
         amp_cmap: Colormap for the amplitude and intensity panels. None
             uses the semantic "intensity" colormap, as
-            ``eyepiece.show_field`` does for its amplitude panel.
+            ``eyepiece.plot.show_field`` does for its amplitude panel.
         phase_cmap: Colormap for the phase panels. None uses the semantic
             "phase" colormap.
         blank_color: Flat fill of the masked phase pixels (under the hatch
@@ -508,7 +508,7 @@ def field_columns(
         top_ax, phase_ax = axes[0, col], axes[1, col]
         if key in intensity:
             lo, hi = intensity_range
-            top = ep.imshow_log(
+            top = ep.plot.imshow_log(
                 np.abs(data) ** 2,
                 ax=top_ax,
                 extent=extent,
@@ -520,7 +520,7 @@ def field_columns(
                 imshow_kw=kw,
             )
         else:
-            top = ep.imshow_log(
+            top = ep.plot.imshow_log(
                 np.abs(data),
                 ax=top_ax,
                 extent=extent,

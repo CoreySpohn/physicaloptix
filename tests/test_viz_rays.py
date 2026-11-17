@@ -11,7 +11,7 @@ from matplotlib.colors import to_hex
 
 pytest.importorskip("eyepiece")
 
-from eyepiece import ARTIST_KEYS
+from eyepiece.plot import ARTIST_KEYS
 
 from physicaloptix.viz import mirror_train, plot_mirror, ray_train
 from physicaloptix.viz.raytrace import (

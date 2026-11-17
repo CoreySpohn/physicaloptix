@@ -16,7 +16,7 @@ from matplotlib.colors import to_rgb
 # collectible when the viz extra is present.
 pytest.importorskip("eyepiece")
 
-from eyepiece import ARTIST_KEYS
+from eyepiece.plot import ARTIST_KEYS
 
 from physicaloptix.viz import plot_propagation
 from physicaloptix.viz.propagation import _edges, _lightness, _signed_cmap

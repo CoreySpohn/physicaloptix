@@ -295,7 +295,7 @@ def plot_near_to_far(
     if edges is None:
         edges = (-0.5, 0.5) if axis == "position" else ()
     kw = {
-        "color": _require.eyepiece().neutral(_EDGE_LEVEL),
+        "color": _require.eyepiece().style.neutral(_EDGE_LEVEL),
         "ls": ":",
         "lw": _EDGE_LW * matplotlib.rcParams["lines.linewidth"],
         **(edge_kw or {}),
@@ -358,7 +358,7 @@ def plot_fresnel_zones(
     Example::
 
         res = plot_fresnel_zones(6.0, max_rings=12)
-        for nf in np.geomspace(6.0, 0.5, 48):   # the point moves away
+        for nf in np.geomspace(6.0, 0.5, 48):  # the point moves away
             res.update(nf)
 
     Args:
@@ -428,7 +428,7 @@ def plot_fresnel_zones(
             360.0,
             width=_SCREEN_OUTER - 1.0,
             facecolor="none",
-            edgecolor=_require.eyepiece().neutral(_SCREEN_LEVEL),
+            edgecolor=_require.eyepiece().style.neutral(_SCREEN_LEVEL),
             hatch=_HATCH,
             lw=0,
             zorder=0,
@@ -454,7 +454,7 @@ def plot_fresnel_zones(
             (0.0, 0.0),
             float(bounds[i]) if i < len(bounds) else 0.5,
             facecolor="none",
-            edgecolor=_require.eyepiece().neutral(_RING_LEVEL)
+            edgecolor=_require.eyepiece().style.neutral(_RING_LEVEL)
             if ring_color is None
             else ring_color,
             lw=_RING_LW * base,
@@ -467,7 +467,7 @@ def plot_fresnel_zones(
         (0.0, 0.0),
         1.0,
         facecolor="none",
-        edgecolor=_require.eyepiece().neutral(_RIM_LEVEL)
+        edgecolor=_require.eyepiece().style.neutral(_RIM_LEVEL)
         if rim_color is None
         else rim_color,
         lw=_RIM_LW * base,
@@ -531,8 +531,8 @@ def plot_cornu(
 
     Example::
 
-        res = plot_cornu((-2.45, 2.45))        # a slit of N_F = 3, on axis
-        res.update((-4.9, 0.0))                # the same slit, seen from its edge
+        res = plot_cornu((-2.45, 2.45))  # a slit of N_F = 3, on axis
+        res.update((-4.9, 0.0))  # the same slit, seen from its edge
 
     Args:
         window: ``(v0, v1)`` of the highlighted stretch; either end may be
@@ -580,7 +580,7 @@ def plot_cornu(
     (thin,) = ax.plot(
         spiral.real,
         spiral.imag,
-        color=_require.eyepiece().neutral(_SPIRAL_LEVEL)
+        color=_require.eyepiece().style.neutral(_SPIRAL_LEVEL)
         if spiral_color is None
         else spiral_color,
         lw=_SPIRAL_LW * base,
@@ -600,7 +600,7 @@ def plot_cornu(
             gid=f"{gid}/window",
         )
         lines.append(thick)
-        chord = ep.phasor(
+        chord = ep.plot.phasor(
             [end - start],
             ax=ax,
             starts=[start],
@@ -624,7 +624,7 @@ def plot_cornu(
             [0.5, -0.5],
             [0.5, -0.5],
             "+",
-            color=_require.eyepiece().neutral(_EYE_LEVEL),
+            color=_require.eyepiece().style.neutral(_EYE_LEVEL),
             ms=matplotlib.rcParams["lines.markersize"],
             gid=f"{gid}/eyes",
         )

@@ -182,7 +182,7 @@ def plot_contrast_profile(
     """Draw the radial contrast profile of a focal-plane map.
 
     The radial statistic is computed here; the drawing is delegated whole to
-    ``eyepiece.plot_contrast_curve``, which owns the curve, the shaded
+    ``eyepiece.plot.plot_contrast_curve``, which owns the curve, the shaded
     IWA/OWA exclusion regions, and the labeled floor curves. That delegation
     is what makes annotations behave on a reused axes: eyepiece tracks, per
     axes and per marker kind, what it has already drawn, so calling this
@@ -236,7 +236,7 @@ def plot_contrast_profile(
             ``color``.
 
     Returns:
-        The ``PlotResult`` from ``eyepiece.plot_contrast_curve``.
+        The ``PlotResult`` from ``eyepiece.plot.plot_contrast_curve``.
         ``artists["line"]`` is the profile curve, whose x data is the ring
         centers in lambda/D. ``artists["fill"]``/``artists["text"]`` carry
         the IWA/OWA shading and labels, present only on the call that
@@ -276,7 +276,7 @@ def plot_contrast_profile(
     profile = _reduce_bins(values.ravel(), inds, resolved_nbins, stat)
     separations = bin_centers * scale
 
-    return ep.plot_contrast_curve(
+    return ep.plot.plot_contrast_curve(
         separations,
         profile,
         ax=ax,

@@ -47,7 +47,7 @@ def trace_paraxial(height, slope, lenses, z_start, z_end, *, z_ref=0.0):
 
     Example::
 
-        lenses = [(1.5, 1.5), (4.5, 1.5)]          # a 4f relay
+        lenses = [(1.5, 1.5), (4.5, 1.5)]  # a 4f relay
         z, y = trace_paraxial(0.5, 0.0, lenses, -1.0, 6.0)
 
     Args:

@@ -1,6 +1,6 @@
 """plot_path: the typed optical-train rail + per-stage field panels.
 
-The rail uses ``eyepiece.rail`` for optical glyphs. Every panel goes
+The rail uses ``eyepiece.plot.rail`` for optical glyphs. Every panel goes
 through ``fields._resolve`` / ``fields._draw_panel``, the same machinery
 as ``plot_field``, to reduce chromatic fields consistently.
 
@@ -26,7 +26,7 @@ from physicaloptix.viz.fields import (
 )
 
 # Optical kind (physicaloptix's vocabulary, from _infer_kind) -> eyepiece's
-# rail glyph vocabulary (eyepiece.schematic.GLYPHS).
+# rail glyph vocabulary (eyepiece.plot.schematic.GLYPHS).
 _GLYPH_FOR_KIND = {
     "source": "source",
     "pupil_mask": "mask",
@@ -74,7 +74,7 @@ def _planes_for_stages(name_kind_pairs):
     ``_GLYPH_FOR_KIND`` (e.g. a ``kinds=`` override already spelled in
     eyepiece's own glyph vocabulary, such as ``"focal"`` or ``"pupil"``)
     passes through unchanged rather than raising a bare ``KeyError`` here;
-    ``eyepiece.rail`` itself validates the final glyph name and raises a
+    ``eyepiece.plot.rail`` itself validates the final glyph name and raises a
     ``ValueError`` naming the accepted set for anything still unknown.
     """
     return [(name, _GLYPH_FOR_KIND.get(kind, kind)) for name, kind in name_kind_pairs]
@@ -163,7 +163,7 @@ def _rail_positions(n, rail_kw):
 def _draw_rail(ep, target, gs, stages, rail_kw, highlight):
     """Draw the rail spanning the top gridspec row, with plane sublabels.
 
-    ``eyepiece.rail`` owns the glyph + label; the ``PlaneKind.value`` text
+    ``eyepiece.plot.rail`` owns the glyph + label; the ``PlaneKind.value`` text
     under each plane is physicaloptix's own decoration, added post-hoc so it
     lines up with the exact x position each plane was drawn at.
     """
@@ -174,7 +174,7 @@ def _draw_rail(ep, target, gs, stages, rail_kw, highlight):
     if highlight is not None:
         rail_kwargs.setdefault("highlight", highlight)
     planes = _planes_for_stages([(name, kind) for name, kind, _ in stages])
-    rail_result = ep.rail(planes, ax=rail_ax, **rail_kwargs)
+    rail_result = ep.plot.rail(planes, ax=rail_ax, **rail_kwargs)
     for x, (_, _, item) in zip(positions, stages, strict=True):
         rail_ax.text(
             x, -0.06, item.plane.value, ha="center", va="top", fontsize=7, color="0.5"
@@ -301,11 +301,11 @@ def _draw_block(
         show_phase: Whether to append a row of phase panels.
         panel_norms: Optional sequence of ``(vmin, vmax)`` overrides, one
             per intensity panel; see ``plot_path``.
-        rail_kw: Extra kwargs forwarded to ``eyepiece.rail``.
+        rail_kw: Extra kwargs forwarded to ``eyepiece.plot.rail``.
         imshow_kw: Extra kwargs forwarded to every panel's ``imshow``.
         panel_height_in: Height, in inches, of one panel row.
         highlight: Plane label to draw in the accent color on the rail, or
-            None. Must be one of ``stages``' own names -- ``eyepiece.rail``
+            None. Must be one of ``stages``' own names -- ``eyepiece.plot.rail``
             raises if it is not.
         channel: Wavelength index for a chromatic Field's phase row; see
             ``plot_path``.
@@ -494,7 +494,7 @@ def _plot_system(
         # split_name is a candidate (the last REQUESTED trunk stage overall)
         # that this particular branch's own stage list may not contain --
         # e.g. taps= omits it, or omits this branch's downstream taps
-        # entirely. eyepiece.rail validates highlight against the planes it
+        # entirely. eyepiece.plot.rail validates highlight against the planes it
         # is actually given, so passing a name this block never drew raises.
         present = {stage_name for stage_name, _, _ in stages}
         highlight = split_name if split_name in present else None
@@ -600,7 +600,7 @@ def plot_path(
             weight-summed answer). ``None`` (the default) auto-selects the
             middle band, so ``show_phase=True`` never raises on a chromatic
             Field.
-        rail_kw: Extra kwargs forwarded to ``eyepiece.rail`` (e.g.
+        rail_kw: Extra kwargs forwarded to ``eyepiece.plot.rail`` (e.g.
             ``positions``, ``accent``, ``cap``).
         imshow_kw: Extra kwargs forwarded to every panel's underlying
             ``imshow`` call.
@@ -680,7 +680,7 @@ def minimap(path, *, ax=None, active=None):
 
     Draws the same ``(name, glyph)`` planes ``plot_path``'s rail draws --
     the input first, then every stage of ``path`` in order -- with
-    ``active`` picked out in the accent color by ``eyepiece.rail`` and
+    ``active`` picked out in the accent color by ``eyepiece.plot.rail`` and
     every other plane's marker and label further muted, plus a translucent
     chip behind the whole rail. The result reads as a small "you are here"
     orientation strip, not a standalone figure.
@@ -701,7 +701,7 @@ def minimap(path, *, ax=None, active=None):
 
     Returns:
         A ``PlotResult`` with the same ``artists`` keys as
-        ``eyepiece.rail`` ("fill", "lines", "text").
+        ``eyepiece.plot.rail`` ("fill", "lines", "text").
 
     Raises:
         ValueError: ``active`` is not one of the plane names.
@@ -709,7 +709,7 @@ def minimap(path, *, ax=None, active=None):
     ep = _require.eyepiece()
     planes = _planes_for_stages(_stage_kinds(path))
 
-    result = ep.rail(planes, ax=ax, highlight=active, accent=_minimap_accent())
+    result = ep.plot.rail(planes, ax=ax, highlight=active, accent=_minimap_accent())
 
     active_key = active.lower() if active is not None else None
     for (name, _), line, text in zip(

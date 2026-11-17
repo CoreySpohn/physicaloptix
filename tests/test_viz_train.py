@@ -243,7 +243,7 @@ def test_plot_path_kinds_override_passes_through_known_eyepiece_glyph():
     # (not physicaloptix's legacy vocabulary) must not raise a bare KeyError.
     # B4: assert the drawn glyph itself, not just that nothing raised --
     # len(res.axes) == 3 holds whether or not the override actually reached
-    # eyepiece.rail.
+    # eyepiece.plot.rail.
     from matplotlib.patches import Polygon
 
     path, field = _setup()
@@ -364,11 +364,11 @@ def test_plot_path_system_full_taps_renders_all_branches():
     # per branch: rail + [input, stop, <branch stage>] = 1 + 3 = 4; x2 branches
     assert len(res.axes) == 8
     # B2: a test asserting only shape (axis counts) cannot see whether
-    # highlight= ever reached eyepiece.rail -- mutating the C1 fix's
+    # highlight= ever reached eyepiece.plot.rail -- mutating the C1 fix's
     # `highlight = split_name if split_name in present else None` to a flat
     # `highlight = None` still passes every len()-only assertion. "stop" is
     # the split stage, present in both branches' own stage lists for full
-    # taps, so it must actually be drawn in the accent color eyepiece.rail
+    # taps, so it must actually be drawn in the accent color eyepiece.plot.rail
     # uses when no accent= override is given.
     accent = ep._style.color(1, None)
     for branch_name in ("sci", "wfs"):
@@ -481,7 +481,7 @@ def test_minimap_mutes_non_active_planes():
 
 def test_minimap_accents_the_active_plane():
     # The mute loop above only proves alpha behavior, which is minimap's OWN
-    # logic and would pass even if `active=` never reached eyepiece.rail's
+    # logic and would pass even if `active=` never reached eyepiece.plot.rail's
     # highlight= at all. This pins the actual accent color -- the active
     # plane's marker and label must be drawn in it, and a non-active plane's
     # must not.

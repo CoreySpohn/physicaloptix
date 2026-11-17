@@ -9,7 +9,7 @@ import pytest
 
 pytest.importorskip("eyepiece")
 
-from eyepiece import ARTIST_KEYS
+from eyepiece.plot import ARTIST_KEYS
 
 from physicaloptix.viz import (
     plot_cornu,

@@ -262,7 +262,7 @@ def _draw_elements(ax, elements, x_edges, z_edges, z_scale, rasterized):
                     (za, lo),
                     zb - za,
                     hi - lo,
-                    facecolor=_require.eyepiece().neutral(_SCREEN_LEVEL),
+                    facecolor=_require.eyepiece().style.neutral(_SCREEN_LEVEL),
                     edgecolor="none",
                     zorder=4,
                     gid=gid,
@@ -289,7 +289,7 @@ def _draw_elements(ax, elements, x_edges, z_edges, z_scale, rasterized):
             _, z0, label = element
             line = ax.axvline(
                 float(z0),
-                color=_require.eyepiece().neutral(_PLANE_LEVEL),
+                color=_require.eyepiece().style.neutral(_PLANE_LEVEL),
                 ls="--",
                 lw=_PLANE_LW * matplotlib.rcParams["lines.linewidth"],
                 zorder=6,
@@ -355,7 +355,7 @@ def plot_propagation(
     - ``"real"``: the instantaneous field ``Re E`` on a symmetric range
       ``[-vlim, vlim]``, through a diverging map centered on the axes
       background color: zero is the background, positive values run to the
-      starlight role color (``eyepiece.role("star")``), negative values to a
+      starlight role color (``eyepiece.style.role("star")``), negative values to a
       muted complement of it (hue rotated half a turn, saturation reduced)
       at the same CIE lightness distance from the background. Unlit regions
       therefore read as background, and the two signs read equally strong.
@@ -387,10 +387,12 @@ def plot_propagation(
     Example::
 
         res = plot_propagation(
-            field, x, z,
+            field,
+            x,
+            z,
             elements=[("screen", 0.0, [(-8, 8)]), ("plane", 40.0, "focal plane")],
         )
-        for frame in frames:          # same grid, a new instant
+        for frame in frames:  # same grid, a new instant
             res.update(frame)
 
     Args:
@@ -477,7 +479,9 @@ def plot_propagation(
     if cmap is not None:
         resolved = matplotlib.colormaps[cmap] if isinstance(cmap, str) else cmap
     elif kind == "real":
-        resolved = _signed_cmap(ax.get_facecolor(), _require.eyepiece().role("star"))
+        resolved = _signed_cmap(
+            ax.get_facecolor(), _require.eyepiece().style.role("star")
+        )
     elif kind == "phase":
         resolved = _resolved_phase_cmap(None, ax)
     else:

@@ -243,7 +243,7 @@ def animate_speckles(
 ):
     """Animate a dark hole boiling, optionally over a contrast trace.
 
-    Returns an ``eyepiece.Animation``, which is LAZY: the frames are
+    Returns an ``eyepiece.render.Animation``, which is LAZY: the frames are
     prepared and the figure is built here, but nothing is encoded until the
     caller asks for a sink (``.save("run.mp4", "run.gif")``, ``.jshtml()``,
     ``.video()``). Every frame shares one scale, built once from the whole
@@ -286,7 +286,7 @@ def animate_speckles(
         profile: ``eyepiece.style.RenderProfile`` passed to the renderer.
 
     Returns:
-        An ``eyepiece.Animation``. Its ``.fig`` is the figure drawn into and
+        An ``eyepiece.render.Animation``. Its ``.fig`` is the figure drawn into and
         ``.n_frames`` the output frame count.
 
     Raises:

@@ -23,7 +23,7 @@ from physicaloptix.viz import _require
 
 # eyepiece owns the unit vocabulary (label_lod, label_arcsec, label_au) for
 # every plane it has a helper for; see _label_plane, which calls
-# eyepiece.label_lod for a focal-plane Field rather than restating that
+# eyepiece.plot.label_lod for a focal-plane Field rather than restating that
 # vocabulary here. This dict stays populated ONLY for plane kinds eyepiece
 # has no helper for.
 _LABELS = {
@@ -104,9 +104,9 @@ def _resolve(field_or_map, channel, kind):
 def _label_plane(ep, ax, plane):
     """Apply eyepiece's axis labels for a plane, falling back to _LABELS."""
     if plane == "focal":
-        ep.label_lod(ax)
+        ep.plot.label_lod(ax)
     elif plane == "arcsec":
-        ep.label_arcsec(ax)
+        ep.plot.label_arcsec(ax)
     elif plane in _LABELS:
         xlabel, ylabel = _LABELS[plane]
         ax.set_xlabel(xlabel)
@@ -137,7 +137,7 @@ def _panel_update_input(new_data, kind):
 
     The two panel primitives disagree about this, and that disagreement
     is exactly the bug this function exists to make impossible to
-    reintroduce: ``eyepiece.imshow_log``'s own ``update`` (kind=
+    reintroduce: ``eyepiece.plot.imshow_log``'s own ``update`` (kind=
     "intensity") wants the ALREADY-COMPUTED intensity array -- the same
     thing ``_panel_array`` returns. Our own ``_plot_phase``'s ``update``
     (kind="phase") wants RAW data -- it reapplies ``_masked_phase``
@@ -155,7 +155,7 @@ def _panel_update_input(new_data, kind):
 def _resolved_phase_cmap(cmap, ax):
     """A phase Colormap for `ax`, masked (NaN) pixels painted its facecolor.
 
-    Matches ``eyepiece.show_field``'s own phase panel.
+    Matches ``eyepiece.plot.show_field``'s own phase panel.
     """
     value = cmap if cmap is not None else hwostyle.cmaps.phase
     resolved = matplotlib.colormaps[value] if isinstance(value, str) else value
@@ -235,7 +235,7 @@ def _draw_panel(
         return result, image_data, False
 
     image_data = _intensity_from(data)
-    result = ep.imshow_log(
+    result = ep.plot.imshow_log(
         image_data,
         ax=ax,
         extent=extent,
@@ -551,10 +551,10 @@ def plot_field(
             creates a new figure. Mutually exclusive with ``axes``, and
             with ``kind="complex"`` or ``cut=`` (use ``axes=`` for those).
         axes: For ``kind="complex"``, a ``(2, 2)`` array of Axes (forwarded
-            to ``eyepiece.show_field``). For ``cut=``, a length-2
+            to ``eyepiece.plot.show_field``). For ``cut=``, a length-2
             ``(image_ax, cut_ax)`` pair. None lets ``plot_field`` own the
             figure. Mutually exclusive with ``ax``.
-        fig: A Figure or SubFigure ``eyepiece.show_field`` builds its 2x2
+        fig: A Figure or SubFigure ``eyepiece.plot.show_field`` builds its 2x2
             grid inside. Only used with ``kind="complex"``; ignored when
             ``axes`` is also given.
         kind: "intensity" (default), "phase", or "complex".
@@ -568,21 +568,21 @@ def plot_field(
             image center along that axis. Not supported with
             ``kind="complex"``.
         cmap: Colormap override. Ignored for ``kind="complex"`` (delegates
-            to ``eyepiece.show_field``, which has no ``cmap`` parameter).
+            to ``eyepiece.plot.show_field``, which has no ``cmap`` parameter).
         vmin: Norm lower bound (``kind="intensity"`` only).
         vmax: Norm upper bound (``kind="intensity"`` only).
         floor: Log-floor clip, used for ``kind="intensity"`` and for the
             cut curve when ``kind="intensity"``.
         colorbar: Whether to attach a colorbar. Ignored for
-            ``kind="complex"`` (``eyepiece.show_field`` always draws its
+            ``kind="complex"`` (``eyepiece.plot.show_field`` always draws its
             own colorbars).
         cbar_label: Colorbar label. Ignored for ``kind="complex"``
-            (``eyepiece.show_field`` has no ``cbar_label`` parameter).
+            (``eyepiece.plot.show_field`` has no ``cbar_label`` parameter).
         imshow_kw: Extra kwargs passed to the underlying ``imshow`` call.
-            Ignored for ``kind="complex"`` (``eyepiece.show_field`` has no
+            Ignored for ``kind="complex"`` (``eyepiece.plot.show_field`` has no
             ``imshow_kw`` parameter).
         cbar_kw: Extra kwargs passed to the colorbar. Ignored for
-            ``kind="complex"`` (``eyepiece.show_field`` has no ``cbar_kw``
+            ``kind="complex"`` (``eyepiece.plot.show_field`` has no ``cbar_kw``
             parameter).
 
     Returns:
@@ -612,7 +612,7 @@ def plot_field(
     plane = resolved_plane if plane is None else plane
 
     if kind == "complex":
-        result = ep.show_field(data, fig=fig, axes=axes, extent=extent)
+        result = ep.plot.show_field(data, fig=fig, axes=axes, extent=extent)
         for panel_ax in result.axes.ravel():
             _label_plane(ep, panel_ax, plane)
         return result
@@ -788,12 +788,12 @@ def contrast_row(
     norm from the same pinned bounds too, so the two policies draw
     identically once both `vmin` and `vmax` are fixed.
 
-    ``norm_policy="shared"`` delegates to ``eyepiece.compare_row``, which
+    ``norm_policy="shared"`` delegates to ``eyepiece.plot.compare_row``, which
     builds one norm object from the min/max across all maps (or the
     pinned ``vmin``/``vmax``) and hands it to every panel by identity --
     panels are then directly, pixel-for-pixel comparable, not merely
     rescaled to look alike. ``norm_policy="independent"`` instead calls
-    ``eyepiece.imshow_log`` once per panel, so each map gets its own norm
+    ``eyepiece.plot.imshow_log`` once per panel, so each map gets its own norm
     derived from its own data (or the same pinned bounds, if given).
 
     Args:
@@ -866,7 +866,7 @@ def contrast_row(
             raise ValueError(msg)
 
     if norm_policy == "shared":
-        result = ep.compare_row(
+        result = ep.plot.compare_row(
             maps,
             titles,
             axes=axes,
@@ -885,7 +885,7 @@ def contrast_row(
         ims = []
         cbars = []
         for i, m in enumerate(maps):
-            panel = ep.imshow_log(
+            panel = ep.plot.imshow_log(
                 m,
                 ax=axes[i],
                 extent=extent,

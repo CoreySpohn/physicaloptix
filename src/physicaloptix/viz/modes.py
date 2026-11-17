@@ -246,7 +246,7 @@ def plot_mode_gallery(
 
         if response_stack is None:
             continue
-        panel = ep.imshow_log(
+        panel = ep.plot.imshow_log(
             selected_responses[row],
             ax=axes[row, 1],
             vmin=vmin,
@@ -330,7 +330,7 @@ def plot_zernike_pyramid(
 
     value = hwostyle.cmaps.opd
     cmap = matplotlib.colormaps[value] if isinstance(value, str) else value
-    return ep.compare_grid(
+    return ep.plot.compare_grid(
         cells,
         titles=None if labels is None else titles,
         axes=axes,
