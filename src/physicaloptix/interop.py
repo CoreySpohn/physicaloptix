@@ -13,13 +13,11 @@ import jax.numpy as jnp
 import numpy as np
 from hwoutils.grids import Image, PixelGrid, resample
 from optixstuff.coronagraph import AbstractCoronagraph
-from yippy import Circular, HalfMaximum, performance_curves
+from yippy import DEFAULT_APERTURE_RULE, HalfMaximum, performance_curves
 
 from physicaloptix.core import Field, PlaneKind, Spectrum
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.transforms import Fraunhofer
-
-_DEFAULT_RULE = Circular(0.7)
 
 
 def _tilted_xy(field, x_lod, y_lod):
@@ -80,7 +78,7 @@ class PathCoronagraph(AbstractCoronagraph):
 
         primary.frame(reference_wavelength_nm) defines the native angular
         grid. wavelength_nm binds monochromatic OPD screens when supplied.
-        Circular(0.7) and HalfMaximum(0.5) are always prepared; rules adds
+        DEFAULT_APERTURE_RULE and HalfMaximum(0.5) are always prepared; rules adds
         further immutable records. Finite stellar diameters are not modeled.
         """
         if wavelength_nm is not None and input_field.spectrum is None:
@@ -131,7 +129,7 @@ class PathCoronagraph(AbstractCoronagraph):
                 leakage_rule=leakage_rule,
                 stellar_diameter=0.0,
             )
-            for rule in dict.fromkeys((Circular(0.7), HalfMaximum(0.5), *rules))
+            for rule in dict.fromkeys((DEFAULT_APERTURE_RULE, HalfMaximum(0.5), *rules))
         )
         # Store coefficients as JAX leaves for immutable jit/vmap evaluation.
         records = jax.tree.map(jnp.asarray, records)
@@ -148,7 +146,7 @@ class PathCoronagraph(AbstractCoronagraph):
             None if wavelength_nm is None else float(wavelength_nm),
         )
 
-    def curves(self, rule=_DEFAULT_RULE, *, leakage_rule="aperture_mean"):
+    def curves(self, rule=DEFAULT_APERTURE_RULE, *, leakage_rule="aperture_mean"):
         """Select an eagerly built record; unprepared rules raise."""
         for record in self._records:
             if record.rule == rule and record.leakage_rule == leakage_rule:
