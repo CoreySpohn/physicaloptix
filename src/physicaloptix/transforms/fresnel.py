@@ -22,6 +22,8 @@ import warnings
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
+from hwoutils.constants import m2nm, nm2m
 from hwoutils.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind, validate_field
@@ -117,9 +119,16 @@ class Fresnel(eqx.Module):
             if on_undersampled == "warn":
                 warnings.warn(message, stacklevel=2)
 
+    def spectral_breaks_nm(self) -> np.ndarray:
+        """Evanescent cutoffs [nm] of the exact propagator; Fresnel is smooth."""
+        if self.method == "fresnel" or self.distance_m == 0:
+            return np.empty(0)
+        nu2 = np.unique(np.asarray(self._nu2(self.grid.shape[0] * self.npad)))
+        return (self.beam_diameter_m * m2nm / np.sqrt(nu2[nu2 > 0]))[::-1]
+
     def _alpha(self, wavelength_nm):
         """The dimensionless Fresnel parameter ``lambda * z / D^2``."""
-        return (wavelength_nm * 1e-9) * self.distance_m / self.beam_diameter_m**2
+        return (wavelength_nm * nm2m) * self.distance_m / self.beam_diameter_m**2
 
     def _nu2(self, npix):
         """Squared dimensionless frequency on an ``npix`` grid (cycles/diameter).
@@ -142,7 +151,7 @@ class Fresnel(eqx.Module):
         nu2 = self._nu2(npix)
         if self.method == "fresnel":
             return jnp.exp(-1j * jnp.pi * self._alpha(wavelength_nm) * nu2)
-        lam_m = wavelength_nm * 1e-9
+        lam_m = wavelength_nm * nm2m
         beta = lam_m / self.beam_diameter_m
         gamma = self.distance_m / self.beam_diameter_m
         radicand = 1.0 - beta**2 * nu2
@@ -178,7 +187,9 @@ class Fresnel(eqx.Module):
             if conjugate:
                 transfer = jnp.conj(transfer)
             return self._apply_data(field.data, transfer)
-        transfers = jax.vmap(lambda wl: self._transfer(wl, n))(field.spectrum.nodes_nm)
+        transfers = jax.vmap(lambda wl: self._transfer(wl, n))(
+            field.spectrum.nodes_nm[0]
+        )
         if conjugate:
             transfers = jnp.conj(transfers)
         return jax.vmap(self._apply_data)(field.data, transfers)

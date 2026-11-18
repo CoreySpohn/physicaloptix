@@ -16,7 +16,7 @@ its coordinates in that unit -- never in meters or pixels.
   {term}`lambda/D`: its `pixel_scale` is the {term}`lambda/D` per pixel, and its
   coordinates are angular separations in {term}`lambda/D`.
 - **Wavelengths** are in nanometers everywhere they appear
-  (`wavelength_nm`, `Spectrum`).
+  (`wavelength_nm`, `Quadrature.nodes_nm`).
 
 Because focal coordinates are in {term}`lambda/D`, a monochromatic result is
 achromatic by construction: the same map applies at any wavelength once the
@@ -151,18 +151,22 @@ $\exp(\sum_k c_k D_k(\lambda) B_k)$) that a
 {class}`~physicaloptix.DispersiveScreen` supplies for non-OPD chromatic
 responses such as coatings. A chromatic
 {class}`~physicaloptix.Field` carries `data` of shape `(nlam, y, x)` with a
-{class}`~physicaloptix.Spectrum`; elements and propagators act on the
+one-row `hwoutils.spectral.Quadrature`; elements and propagators act on the
 wavelength axis slice by slice (nothing couples wavelength channels), and the
-`Spectrum.weights` enter only at incoherent summation (`Field.intensity`).
+quadrature weights enter only at incoherent summation (`Field.intensity`).
 Speckle sensitivity stacks keep the mode axis third from the end -- `G` is
 `(m, y, x)` monochromatic or `(w, m, y, x)` chromatic -- so a mode count is
 always `G.shape[-3]`, never `G.shape[0]`.
 
-`Spectrum.from_band(Band(lo_nm, hi_nm), order, knots_nm=...)` builds
-one-band Gauss-Legendre nodes, split at declared knots. `nodes_nm` stores the
-wavelengths; `weights` are normalized to unit sum, so intensity is a band
-average. `Spectrum(nodes_nm, weights)` accepts explicit nodes and normalizes
-weights, including independently specified survey sampling. When a
+`Quadrature.build((Band(lo_nm, hi_nm),), path, order=4)` splits the
+Gauss-Legendre rule at the breaks declared by the optical path. Wavelengths
+are in `nodes_nm[0]`. Dimensional weights in `weights_nm[0]` sum to the band
+width. Dividing the integrated intensity by the width gives the same
+weighted average as normalizing the weights to one. `Field.intensity`
+uses `Quadrature.mean` for this average.
+For a custom sampling rule, supply the band, a row of nodes, and a row of
+weights in nm summing to the width. A single wavelength uses
+`Quadrature.monochromatic(wavelength_nm)` and the unit-weight integral. When a
 `Fraunhofer` projects a chromatic field onto a fixed reference-wavelength
 grid, each slice's amplitude carries the factor
 $\lambda_{\mathrm{ref}}/\lambda$: fixed-grid intensity is a surface
@@ -243,7 +247,7 @@ coexist in the stack and must not be mixed:
 
 Detectors consume named rates. Construct `optixstuff.Detector` or
 `IdealDetector`, form `PhotonRates` on a dimensional `Quadrature`, call
-`detector.electrons(rates, quadrature)` once, and then `detector.draw(key,
+`detector.electrons(rates)` once, and then `detector.draw(key,
 electron_rates, FramePlan(frame_time_s, n_frames))`. For a differentiable
 Gaussian approximation use `physicaloptix.ReparameterizedDetector`, whose
 moments equal the shared detector moments. It is approximate at low counts.

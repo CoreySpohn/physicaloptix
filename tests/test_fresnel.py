@@ -5,10 +5,11 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TEST_FRAME
+from hwoutils.constants import m2nm
 from hwoutils.grids import PixelGrid
-from hwoutils.spectral import Band
+from hwoutils.spectral import Band, Quadrature
 
-from physicaloptix.core import Field, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind
 from physicaloptix.diagnostics import fresnel_pad_factor, fresnel_sampling_parameter
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.sources import broadcast_to_spectrum
@@ -353,8 +354,8 @@ class TestFresnelChromatic:
     def test_matches_per_slice_mono(self):
         """Each chromatic slice propagates with its own lambda-scaled alpha."""
         npix = 128
-        spectrum = Spectrum.from_band(
-            Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)), 3
+        spectrum = Quadrature.build(
+            (Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)),), order=3
         )  # 450, 500, 550 nm
         base = _pupil(_gaussian(npix, 0.15, carrier_nu0=2.0), npix)
         chrom = broadcast_to_spectrum(base, spectrum)
@@ -370,7 +371,7 @@ class TestFresnelChromatic:
         )
         out = prop.forward(chrom)
         assert out.data.shape == (3, npix, npix)
-        for k, wl in enumerate(np.asarray(spectrum.nodes_nm)):
+        for k, wl in enumerate(np.asarray(spectrum.nodes_nm[0])):
             mono = Fresnel(
                 grid=PixelGrid.pupil(npix),
                 distance_m=distance_m,
@@ -386,8 +387,8 @@ class TestFresnelChromatic:
 
     def test_chromatic_round_trip(self):
         npix = 128
-        spectrum = Spectrum.from_band(
-            Band(600.0 * (1 - 0.15 / 2), 600.0 * (1 + 0.15 / 2)), 4
+        spectrum = Quadrature.build(
+            (Band(600.0 * (1 - 0.15 / 2), 600.0 * (1 + 0.15 / 2)),), order=4
         )
         chrom = broadcast_to_spectrum(_pupil(_gaussian(npix, 0.15), npix), spectrum)
         prop = Fresnel(
@@ -473,6 +474,11 @@ class TestFresnelExact:
             on_undersampled="record",
             method="exact",
         )
+        # At axial spatial mode 1 the exact propagating/evanescent switch
+        # occurs at lambda = beam diameter (the longest cutoff on this grid).
+        breaks = prop.spectral_breaks_nm()
+        assert breaks[-1] == prop.beam_diameter_m * m2nm
+        assert breaks[0] < WL < breaks[-1]
         transfer = np.asarray(prop._transfer(WL, npix))
         mag = np.abs(transfer)
         assert mag.max() <= 1.0 + 1e-9  # never amplifies

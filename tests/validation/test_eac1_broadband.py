@@ -12,9 +12,9 @@ import numpy as np
 import pytest
 from conftest import TEST_FRAME
 from hwoutils.grids import PixelGrid
-from hwoutils.spectral import Band
+from hwoutils.spectral import Band, Quadrature
 
-from physicaloptix.core import Field, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import MultiScaleVortex, SampledOptic
 from physicaloptix.path import OpticalPath, Stage
@@ -76,8 +76,8 @@ class TestBroadbandNull:
         (measured: 7.8e-12 vs 3.05e-11, a 4x dilution of the max statistic).
         """
         core, field, science = aavc_core
-        band = Spectrum.from_band(
-            Band(REF_NM * (1 - 0.1 / 2), REF_NM * (1 + 0.1 / 2)), 5
+        band = Quadrature.build(
+            (Band(REF_NM * (1 - 0.1 / 2), REF_NM * (1 + 0.1 / 2)),), order=5
         )
 
         lyot_mono, _ = core.propagate(field)
@@ -110,8 +110,8 @@ class TestBroadbandNull:
 class TestBroadbandPlanet:
     def test_chromatic_planet_sits_at_fixed_angle(self, aavc_core):
         core, field, science = aavc_core
-        band = Spectrum.from_band(
-            Band(REF_NM * (1 - 0.1 / 2), REF_NM * (1 + 0.1 / 2)), 3
+        band = Quadrature.build(
+            (Band(REF_NM * (1 - 0.1 / 2), REF_NM * (1 + 0.1 / 2)),), order=3
         )
         source = point_source(
             field,
@@ -124,7 +124,7 @@ class TestBroadbandPlanet:
         intensity = np.asarray(out.data.real**2 + out.data.imag**2)
         peaks = [
             np.unravel_index(np.argmax(intensity[i]), intensity[i].shape)
-            for i in range(len(band))
+            for i in range(band.nodes_nm.shape[1])
         ]
         assert len({tuple(p) for p in peaks}) == 1
         coords = np.asarray(_grid_axis(out.grid))

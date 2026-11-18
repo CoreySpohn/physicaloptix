@@ -14,8 +14,9 @@ pytest.importorskip("eyepiece")
 
 from conftest import TEST_FRAME
 from hwoutils.grids import PixelGrid
+from hwoutils.spectral import Band, Quadrature
 
-from physicaloptix import Field, PlaneKind, Spectrum
+from physicaloptix import Field, PlaneKind
 from physicaloptix.viz import plot_field
 
 
@@ -35,7 +36,9 @@ def _chromatic(npix=16, nlam=3, weights=None):
         rng.normal(size=(nlam, npix, npix)) + 1j * rng.normal(size=(nlam, npix, npix))
     )
     w = jnp.full((nlam,), 1.0 / nlam) if weights is None else jnp.asarray(weights)
-    spec = Spectrum(nodes_nm=jnp.linspace(500.0, 600.0, nlam), weights=w)
+    spec = Quadrature(
+        (Band(500.0, 600.0),), jnp.linspace(500.0, 600.0, nlam)[None], (100.0 * w)[None]
+    )
     return Field(data=data, grid=grid, plane=PlaneKind.FOCAL, spectrum=spec)
 
 

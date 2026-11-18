@@ -5,6 +5,7 @@ from typing import Self
 
 import equinox as eqx
 import jax.numpy as jnp
+import numpy as np
 from hwoutils.grids import PixelGrid
 from hwoutils.transforms import shift_image
 from jaxtyping import Array
@@ -75,6 +76,10 @@ class SampledOptic(Element):
     plane: PlaneKind = eqx.field(static=True)
     shift_px: Array | None = None
     shift_order: int = eqx.field(static=True, default=1)
+
+    def spectral_breaks_nm(self) -> np.ndarray:
+        """The fixed spatial transmission has no wavelength breaks."""
+        return np.empty(0)
 
     def __check_init__(self):
         """Validate that the transmission matches its stamped grid."""

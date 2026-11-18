@@ -202,6 +202,10 @@ class MultiScaleVortex(eqx.Module):
     plane_in: PlaneKind = eqx.field(static=True)
     plane_out: PlaneKind = eqx.field(static=True)
 
+    def spectral_breaks_nm(self) -> np.ndarray:
+        """The fixed vortex mask has no wavelength breaks."""
+        return np.empty(0)
+
     @classmethod
     def build(cls, charge, npup, **kwargs):
         """Construct the ladder for a pupil of ``npup`` samples.

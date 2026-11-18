@@ -4,8 +4,9 @@ import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
 from hwoutils.grids import Image
+from hwoutils.spectral import Band, Quadrature
 
-from physicaloptix.core import Field, Spectrum
+from physicaloptix.core import Field
 
 
 def unit_energy(field):
@@ -33,16 +34,17 @@ def uniform_sky_image(core_path, science, base, *, n_screens, seed, sky_band_nm=
     rng = np.random.default_rng(seed)
     shape = base.grid.shape
     sky = jnp.zeros(science.grid_out.shape, dtype=base.data.real.dtype)
+    band = None if sky_band_nm is None else Band(*sky_band_nm)
     for _ in range(n_screens):
         screen = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
         # Consume the same draw even for a monochromatic or discrete spectrum.
         fraction = rng.uniform()
         data = base.data * jnp.asarray(screen)
         spectrum = base.spectrum
-        if sky_band_nm is not None:
-            lo, hi = sky_band_nm
-            wavelength = lo + (hi - lo) * fraction
-            spectrum = Spectrum([wavelength], [1.0])
+        if band is not None:
+            wavelength = band.lo_nm + band.width_nm * fraction
+            # Each Monte Carlo draw estimates the mean over the same static band.
+            spectrum = Quadrature((band,), [[wavelength]], [[band.width_nm or 1.0]])
             data = data[None] * (wavelength / science.reference_wavelength_nm)
         source = Field(data, base.grid, base.plane, spectrum)
         sky = sky + _screen_intensity(core_path, science, source)

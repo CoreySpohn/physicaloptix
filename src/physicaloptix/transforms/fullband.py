@@ -127,6 +127,10 @@ class FullBandFraunhofer(eqx.Module):
             self.frame,
         )
 
+    def spectral_breaks_nm(self) -> np.ndarray:
+        """The fixed conjugate-grid transform has no wavelength breaks."""
+        return np.empty(0)
+
     def _check_mono(self, field):
         if field.spectrum is not None:
             raise ValueError(

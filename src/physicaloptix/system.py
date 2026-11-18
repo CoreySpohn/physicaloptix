@@ -24,6 +24,7 @@ import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
 from hwoutils.grids import PixelGrid
+from hwoutils.spectral import spectral_breaks
 from jaxtyping import Array
 
 from physicaloptix.core import Field, PlaneKind, validate_field
@@ -246,11 +247,20 @@ class BeamSplitter(eqx.Module):
             plane=plane,
         )
 
+    def spectral_breaks_nm(self) -> np.ndarray:
+        """Interpolation knots of a dichroic [nm], empty for fixed amplitudes."""
+        return (
+            np.empty(0)
+            if self.wavelengths_nm is None
+            else np.asarray(self.wavelengths_nm)
+        )
+
     def _amplitudes(self, field):
         """The (t, r) amplitudes to apply to this particular field."""
         if self.t is not None:
             if self.t.ndim == 3 and (
-                field.spectrum is None or self.t.shape[0] != len(field.spectrum)
+                field.spectrum is None
+                or self.t.shape[0] != field.spectrum.nodes_nm.shape[1]
             ):
                 raise ValueError(
                     "a spectral-spatial (nlam, y, x) splitter needs a "
@@ -263,7 +273,7 @@ class BeamSplitter(eqx.Module):
                 "defines the colors to route)"
             )
         transmit = jnp.interp(
-            field.spectrum.nodes_nm,
+            field.spectrum.nodes_nm[0],
             self.wavelengths_nm,
             self.transmit_table,
         )[:, jnp.newaxis, jnp.newaxis]
@@ -323,6 +333,10 @@ class SplitterPort(eqx.Module):
 
     split: BeamSplitter
     port: str = eqx.field(static=True)
+
+    def spectral_breaks_nm(self) -> np.ndarray:
+        """Use the same wavelength breaks as the two-port splitter."""
+        return self.split.spectral_breaks_nm()
 
     @property
     def plane_in(self):
@@ -390,6 +404,10 @@ class OpticalSystem(eqx.Module):
                         f"{first_in.value} plane but the splitter feeds the "
                         f"{self.split.plane.value} plane"
                     )
+
+    def spectral_breaks_nm(self) -> np.ndarray:
+        """Union of breaks in the trunk, splitter, and downstream paths."""
+        return spectral_breaks(self.trunk, self.split, *(b.path for b in self.branches))
 
     def _parse_taps(self, taps):
         """Split namespaced tap names into per-scope tuples."""

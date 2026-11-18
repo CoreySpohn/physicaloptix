@@ -179,6 +179,10 @@ class ChromaticAnalyticSpeckleField(AnalyticSpeckleField):
                     "wavelength nodes must be positive and strictly increasing"
                 )
 
+    def spectral_breaks_nm(self) -> np.ndarray:
+        """Nodes of the interpolated complex-amplitude and energy tables [nm]."""
+        return np.asarray(self.wavelengths_nm)
+
     def at_wavelength(self, wavelength_nm):
         """A mono field whose shared law equals the interpolated node law.
 

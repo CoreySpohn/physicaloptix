@@ -35,7 +35,6 @@ from physicaloptix.core import (
     ChromaticTable,
     Field,
     PlaneKind,
-    Spectrum,
 )
 from physicaloptix.detector import ReparameterizedDetector
 from physicaloptix.diagnostics import (
@@ -145,7 +144,6 @@ __all__ = [
     "SensitivityOperators",
     "SpeckleMoments",
     "SpeckleProcess",
-    "Spectrum",
     "SplitterPort",
     "Stage",
     "ZernikeWavefrontSensor",

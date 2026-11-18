@@ -978,7 +978,7 @@ class TestChromaticProcess:
     ):
         """to_speckle_process inherits BOTH recorded primitives: the channel
         wavelengths and the per-channel input energies."""
-        wavelengths = chromatic_field.spectrum.nodes_nm
+        wavelengths = chromatic_field.spectrum.nodes_nm[0]
         lin = linearize(
             small_path, chromatic_field, opd_basis, wavelengths_nm=wavelengths
         )
@@ -1011,7 +1011,7 @@ class TestSeamIdentity:
         of ``5e-3 * max|direct|`` (the conftest ``opd_basis`` pins the unit
         normalization this relies on).
         """
-        wavelengths = chromatic_field.spectrum.nodes_nm
+        wavelengths = chromatic_field.spectrum.nodes_nm[0]
         lin = linearize(
             small_path, chromatic_field, opd_basis, wavelengths_nm=wavelengths
         )
@@ -1706,15 +1706,15 @@ def test_broadened_equals_explicit_node_sum():
     """
     from hwoutils.spectral import Band, Quadrature
 
-    quadrature = Quadrature.build(
-        (Band(500.0, 550.0), Band(550.0, 600.0)), knots_nm=(), order=3
-    )
     fields = (
         _field(coherent=True),
         _chromatic_process(True).draw(jax.random.PRNGKey(0)),
     )
     times = jnp.array([0.0, 13 * s2d])
     for field in fields:
+        expected_breaks = getattr(field, "wavelengths_nm", ())
+        np.testing.assert_array_equal(field.spectral_breaks_nm(), expected_breaks)
+        quadrature = Quadrature.build((Band(500, 550), Band(550, 600)), field, order=3)
         expected = []
         for nodes, weights in zip(
             quadrature.nodes_nm, quadrature.weights_nm, strict=True

@@ -42,8 +42,9 @@ import numpy as np
 import pytest
 from conftest import TEST_FRAME
 from hwoutils.grids import PixelGrid
+from hwoutils.spectral import Band, Quadrature
 
-from physicaloptix.core import Field, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind
 from physicaloptix.elements import MultiScaleVortex, SampledOptic
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.yip import emit_yip
@@ -109,14 +110,15 @@ def emitted(reference, eac1_cache, tmp_path_factory):
 
     reference_nm = center_um * 1e3
     half = bandpass / 2.0
+    band = Band(reference_nm * (1 - half), reference_nm * (1 + half))
+    nodes_nm = reference_nm * (1 + ((jnp.arange(n_lam) + 0.5) / n_lam - 0.5) * bandpass)
     return emit_yip(
         tmp_path_factory.mktemp("crosscheck"),
         core,
         field,
         science_grid=PixelGrid.focal(dims, pixel_size, TEST_FRAME),
-        spectrum=Spectrum(
-            reference_nm * (1 + ((jnp.arange(n_lam) + 0.5) / n_lam - 0.5) * bandpass),
-            jnp.ones(n_lam),
+        spectrum=Quadrature(
+            (band,), nodes_nm[None], jnp.full((1, n_lam), band.width_nm / n_lam)
         ),
         reference_wavelength_nm=reference_nm,
         offsets_lod=np.asarray(reference["offax_psf_offset_list"]),

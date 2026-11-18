@@ -7,10 +7,10 @@ import numpy as np
 import pytest
 from conftest import TEST_FRAME
 from hwoutils.grids import PixelGrid
-from hwoutils.spectral import Band
+from hwoutils.spectral import Band, Quadrature
 from jax.test_util import check_grads
 
-from physicaloptix.core import Field, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind
 from physicaloptix.elements import ModeBasis, PhaseScreen, SampledPhaseScreen
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.sources import broadcast_to_spectrum
@@ -45,15 +45,15 @@ class TestPhaseScreen:
         npix = 8
         grid = PixelGrid.pupil(npix)
         basis = eqx.tree_at(lambda b: b.coeffs, _basis(npix), jnp.array([1.0, -0.5]))
-        spectrum = Spectrum.from_band(
-            Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)), 3
+        spectrum = Quadrature.build(
+            (Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)),), order=3
         )  # 450, 500, 550 nm
         ones = jnp.ones((npix, npix), complex)
         mono = Field(data=ones, grid=grid, plane=PlaneKind.PUPIL)
         chrom = broadcast_to_spectrum(mono, spectrum)
         out = PhaseScreen(basis, grid, wavelength_nm=WL)(chrom)
         opd = np.asarray(basis.opd())
-        for k, wl in enumerate(np.asarray(spectrum.nodes_nm)):
+        for k, wl in enumerate(np.asarray(spectrum.nodes_nm[0])):
             expected = np.exp(1j * 2 * np.pi * opd / wl)
             np.testing.assert_allclose(np.asarray(out.data[k]), expected, rtol=1e-12)
 
@@ -150,12 +150,12 @@ class TestSampledPhaseScreen:
     def test_chromatic_field_converts_per_wavelength_without_binding(self):
         grid = PixelGrid.pupil(self.NPIX)
         opd = self._opd()
-        spectrum = Spectrum.from_band(
-            Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)), 3
+        spectrum = Quadrature.build(
+            (Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)),), order=3
         )
         chrom = broadcast_to_spectrum(_pupil_field(self.NPIX), spectrum)
         out = SampledPhaseScreen(opd, grid)(chrom)
-        for k, wl in enumerate(np.asarray(spectrum.nodes_nm)):
+        for k, wl in enumerate(np.asarray(spectrum.nodes_nm[0])):
             np.testing.assert_allclose(
                 np.asarray(out.data[k]),
                 np.exp(2j * np.pi * np.asarray(opd) / wl),

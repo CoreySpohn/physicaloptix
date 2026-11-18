@@ -18,7 +18,7 @@ mode chunks through a vmapped propagation when the full stack would exceed
 construction.
 
 Chromatic linearization: passing ``wavelengths_nm`` (matching
-``field.spectrum.nodes_nm``) builds a per-band stack, ``e_nom``
+``field.spectrum.nodes_nm[0]``) builds a per-band stack, ``e_nom``
 ``(w, y, x)`` and ``G`` ``(w, m, y, x)``, one column set per wavelength. The
 hardcoded OPD phase law is replaced by a per-mode, per-wavelength complex
 factor table (``dispersion``, shape ``(m, w)``): the default derives from
@@ -279,7 +279,7 @@ def linearize(
             above which the analytic method streams chunks instead of
             batching everything.
         wavelengths_nm: Channel wavelengths, shape ``(w,)``, matching
-            ``field.spectrum.nodes_nm``; set this to build a chromatic
+            ``field.spectrum.nodes_nm[0]``; set this to build a chromatic
             linearization.
         dispersion: Optional complex ``(m, w)`` table of per-mode factors
             evaluated at ``wavelengths_nm``; default derives from
@@ -318,12 +318,12 @@ def linearize(
             raise ValueError(
                 "wavelengths_nm requires a chromatic field (with a spectrum)"
             )
-        field_wavelengths = np.asarray(field.spectrum.nodes_nm)
+        field_wavelengths = np.asarray(field.spectrum.nodes_nm[0])
         query_wavelengths = np.asarray(wavelengths_nm)
         if field_wavelengths.shape != query_wavelengths.shape or not np.allclose(
             field_wavelengths, query_wavelengths
         ):
-            raise ValueError("wavelengths_nm must match field.spectrum.nodes_nm")
+            raise ValueError("wavelengths_nm must match field.spectrum.nodes_nm[0]")
         if wavelength_nm is None:
             wavelength_nm = float(wavelengths_nm[0])
     else:

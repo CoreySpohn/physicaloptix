@@ -7,10 +7,11 @@ import numpy as np
 import pytest
 from conftest import TEST_FRAME
 from hwoutils.grids import PixelGrid
+from hwoutils.spectral import Band, Quadrature
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from physicaloptix.core import Field, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.diagnostics import mft_sampling_parameter
 from physicaloptix.transforms import Fraunhofer, cmft_bwd, cmft_fwd
@@ -224,7 +225,7 @@ OFF_REFERENCE_NM = (500.0, 750.0, 1000.0)
 
 
 def _mono_spectrum(wavelength_nm):
-    return Spectrum(nodes_nm=jnp.array([wavelength_nm]), weights=jnp.ones(1))
+    return Quadrature.monochromatic(wavelength_nm)
 
 
 def _disk(grid):
@@ -279,7 +280,9 @@ class TestChromaticFixedGridAdjoint:
         pupil = PixelGrid.pupil(npup)
         focal = PixelGrid.focal(nfoc, 0.4, TEST_FRAME)
         wavelengths = jnp.array([450.0, 500.0, 620.0, 800.0, 1000.0])
-        spectrum = Spectrum(nodes_nm=wavelengths, weights=jnp.ones(5) / 5)
+        spectrum = Quadrature(
+            (Band(450.0, 1000.0),), wavelengths[None], jnp.full((1, 5), 550.0 / 5)
+        )
         rng = np.random.default_rng(7)
         a = jnp.asarray(np.stack([_rng_field(rng, npup) for _ in range(5)]))
         b = jnp.asarray(np.stack([_rng_field(rng, nfoc) for _ in range(5)]))

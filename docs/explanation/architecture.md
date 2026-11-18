@@ -36,7 +36,7 @@ lives on and a `PlaneKind` tag -- `PUPIL`, `INTERMEDIATE`, or `FOCAL`. The tag
 is not decoration: propagators declare which plane they consume and which they
 produce, so a mis-wired train (a focal-plane mask handed a pupil field, say)
 fails when the path is built rather than producing a quietly wrong number at
-runtime. For chromatic work, a `Spectrum` carries a field across a set of
+runtime. For chromatic work, a one-row `hwoutils.spectral.Quadrature` carries the
 wavelengths so one path can be propagated polychromatically.
 
 ## Propagation: the continuous-Fourier MFT pair
@@ -106,7 +106,7 @@ contract. Both expose `source_psfs(wavelength_nm, x_lod, y_lod, grid=...)`,
 `source_psfs` returns an image stack and a validity flag for each source.
 The live model estimates `uniform_sky_map` from independent complex pupil
 screens and `uniform_sky_response` from annular means of that map. `PathCoronagraph.bandpass`
-is the recorded `Spectrum.band`, or `None` if no integration band was specified.
+is the entrance quadrature's `Band`, or `None` for an untagged field.
 It supports only point stars: a concrete nonzero stellar diameter raises
 `ValueError`, and a traced nonzero diameter produces a NaN image.
 

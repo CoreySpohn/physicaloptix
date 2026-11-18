@@ -12,7 +12,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from hwoutils.grids import Image, PixelGrid
-from hwoutils.spectral import Band
+from hwoutils.spectral import Band, Quadrature
 from optixstuff.apertures import DEFAULT_APERTURE_RULE, HalfMaximum
 from optixstuff.coronagraph import (
     AbstractImagingCoronagraph,
@@ -23,7 +23,7 @@ from optixstuff.coronagraph import (
 from optixstuff.performance import SampledProfile, performance_curves
 
 from physicaloptix._sky import uniform_sky_image, unit_energy
-from physicaloptix.core import Field, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.transforms import Fraunhofer
 
@@ -53,9 +53,9 @@ class PathCoronagraph(AbstractImagingCoronagraph):
 
     @property
     def bandpass(self) -> Band | None:
-        """Recorded integration band, or None when no finite band was specified."""
+        """Entrance wavelength band, or None for an untagged field."""
         spectrum = self.input_field.spectrum
-        return None if spectrum is None else spectrum.band
+        return None if spectrum is None else spectrum.bands[0]
 
     @classmethod
     def from_path(
@@ -89,7 +89,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
                 input_field.data[None],
                 input_field.grid,
                 input_field.plane,
-                Spectrum([float(wavelength_nm)], [1.0]),
+                Quadrature.monochromatic(wavelength_nm),
             )
         last = core_path.stages[-1].op
         plane = getattr(last, "plane_out", None) or getattr(last, "plane", None)

@@ -5,9 +5,9 @@ import numpy as np
 import pytest
 from conftest import TEST_FRAME
 from hwoutils.grids import PixelGrid
-from hwoutils.spectral import Band
+from hwoutils.spectral import Band, Quadrature
 
-from physicaloptix.core import Field, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import ModeBasis, PhaseScreen, SampledOptic
 from physicaloptix.multichannel import linearize_shared, ncpa_differential_opd
@@ -183,7 +183,8 @@ class TestLinearizeShared:
     def test_refuses_chromatic_field(self):
         system, mono, _basis = _entrance_system()
         field = broadcast_to_spectrum(
-            mono, Spectrum.from_band(Band(WL * (1 - 0.1 / 2), WL * (1 + 0.1 / 2)), 3)
+            mono,
+            Quadrature.build((Band(WL * (1 - 0.1 / 2), WL * (1 + 0.1 / 2)),), order=3),
         )
         with pytest.raises(ValueError, match="monochromatic"):
             linearize_shared(system, field, wavelength_nm=WL, shared_stage="screen")

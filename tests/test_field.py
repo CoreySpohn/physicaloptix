@@ -1,4 +1,4 @@
-"""Tests for Field, PlaneKind, and Spectrum (physicaloptix.core.field)."""
+"""Tests for Field and PlaneKind (physicaloptix.core.field)."""
 
 import equinox as eqx
 import jax
@@ -6,8 +6,9 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from hwoutils.grids import GridArray, Image, PixelGrid
+from hwoutils.spectral import Band, Quadrature
 
-from physicaloptix.core import Field, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis
 
 
@@ -37,10 +38,7 @@ class TestFieldConstruction:
 
     def test_chromatic_field_requires_matching_leading_axis(self):
         grid = PixelGrid.pupil(8)
-        spectrum = Spectrum(
-            nodes_nm=jnp.array([500.0, 600.0]),
-            weights=jnp.array([0.5, 0.5]),
-        )
+        spectrum = Quadrature((Band(500.0, 600.0),), [[500.0, 600.0]], [[50.0, 50.0]])
         field = Field(
             data=jnp.zeros((2, 8, 8), dtype=complex),
             grid=grid,
@@ -48,6 +46,13 @@ class TestFieldConstruction:
             spectrum=spectrum,
         )
         assert field.data.shape == (2, 8, 8)
+        with pytest.raises(ValueError, match="one-band"):
+            Field(
+                field.data,
+                grid,
+                PlaneKind.PUPIL,
+                Quadrature.build((Band(500, 550), Band(550, 600)), order=2),
+            )
         with pytest.raises(ValueError, match="wavelength"):
             Field(
                 data=jnp.zeros((3, 8, 8), dtype=complex),
@@ -115,10 +120,7 @@ class TestFieldPhysics:
 
     def test_intensity_chromatic_is_weighted_sum(self):
         grid = PixelGrid.pupil(8)
-        spectrum = Spectrum(
-            nodes_nm=jnp.array([500.0, 600.0]),
-            weights=jnp.array([0.25, 0.75]),
-        )
+        spectrum = Quadrature((Band(500.0, 600.0),), [[500.0, 600.0]], [[25.0, 75.0]])
         data = jnp.stack(
             [jnp.ones((8, 8), dtype=complex), 2.0 * jnp.ones((8, 8), dtype=complex)]
         )

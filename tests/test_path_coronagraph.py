@@ -10,10 +10,11 @@ from conftest import TEST_FRAME
 from hwoutils.constants import s2d
 from hwoutils.grids import PixelGrid, resample
 from hwoutils.radial import radial_profile
+from hwoutils.spectral import Band, Quadrature
 from optixstuff import SimplePrimary
 from optixstuff.coronagraph import AbstractImagingCoronagraph, AbstractSceneCoronagraph
 
-from physicaloptix.core import Field, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import MultiScaleVortex, SampledOptic
 from physicaloptix.interop import PathCoronagraph
@@ -345,7 +346,7 @@ class TestSamplingExplicitContract:
             c.input_field,
             science_grid=c.grid,
             reference_wavelength_nm=wl,
-            spectrum=Spectrum([wl], [1.0]),
+            spectrum=Quadrature.monochromatic(wl),
             offsets_lod=[4.0],
             stellar_diams_lod=[0.0],
             n_sky_screens=32,
@@ -456,8 +457,14 @@ class TestChromaticBuild:
         np.testing.assert_allclose(ratio, (900.0 / 450.0) ** 2, rtol=0.05)
 
     def test_wavelength_metadata_recorded(self):
-        assert self._aberrated(700.0).wavelength_nm == 700.0
-        assert self._aberrated(None).wavelength_nm is None
+        fixed = self._aberrated(700.0)
+        assert fixed.wavelength_nm == 700.0
+        assert fixed.bandpass == Band(700.0, 700.0)
+        np.testing.assert_array_equal(np.unique(fixed.spectral_breaks_nm()), [700.0])
+        untagged = self._aberrated(None)
+        assert untagged.wavelength_nm is None
+        assert untagged.bandpass is None
+        assert untagged.spectral_breaks_nm().size == 0
 
 
 def _reference_leakage(star, planet, separation_lod, rule):

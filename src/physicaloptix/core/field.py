@@ -1,14 +1,12 @@
-"""Complex fields and normalized one-band spectral quadrature views."""
+"""Complex fields and one-band spectral quadrature."""
 
 from dataclasses import dataclass
 from enum import Enum
 
-import equinox as eqx
 import jax
 import jax.numpy as jnp
 from hwoutils.grids import GridArray, Image
-from hwoutils.spectral import Band, Quadrature
-from jaxtyping import Array
+from hwoutils.spectral import Quadrature
 
 
 class PlaneKind(Enum):
@@ -18,44 +16,6 @@ class PlaneKind(Enum):
     FOCAL = "focal"
     INTERMEDIATE = "intermediate"
     DETECTOR = "detector"
-
-
-class Spectrum(eqx.Module):
-    """One-band quadrature nodes [nm] and dimensionless unit-sum weights."""
-
-    nodes_nm: Array
-    weights: Array
-    band: Band | None = eqx.field(static=True)
-
-    def __init__(self, nodes_nm, weights, *, band=None):
-        """Normalize explicit nonnegative weights on positive wavelength nodes."""
-        self.band = band
-        self.nodes_nm = jnp.asarray(nodes_nm)
-        weights = jnp.asarray(weights)
-        if self.nodes_nm.ndim != 1 or weights.shape != self.nodes_nm.shape:
-            raise ValueError("nodes_nm and weights must be matching 1D vectors")
-        if not isinstance(weights, jax.core.Tracer):
-            if not bool(jnp.all(jnp.isfinite(weights) & (weights >= 0))) or not bool(
-                jnp.sum(weights) > 0
-            ):
-                raise ValueError(
-                    "weights must be finite, nonnegative and have positive sum"
-                )
-        if not isinstance(self.nodes_nm, jax.core.Tracer) and not bool(
-            jnp.all(jnp.isfinite(self.nodes_nm) & (self.nodes_nm > 0))
-        ):
-            raise ValueError("nodes_nm must be finite and positive")
-        self.weights = weights / jnp.sum(weights)
-
-    @classmethod
-    def from_band(cls, band, order, *, knots_nm=()):
-        """Gauss-Legendre quadrature, split at declared interior wavelength knots."""
-        quadrature = Quadrature.build((band,), knots_nm, order)
-        return cls(quadrature.nodes_nm[0], quadrature.weights_nm[0], band=band)
-
-    def __len__(self):
-        """Number of wavelength nodes."""
-        return self.nodes_nm.shape[0]
 
 
 @jax.tree_util.register_pytree_node_class
@@ -68,7 +28,7 @@ class Field(GridArray):
     """
 
     plane: PlaneKind
-    spectrum: Spectrum | None
+    spectrum: Quadrature | None
 
     def __init__(self, data, grid, plane, spectrum=None):
         """Construct the locked mono or chromatic layout on the shared grid."""
@@ -85,7 +45,11 @@ class Field(GridArray):
                 "mono field data must be 2D (y, x); "
                 "supply a spectrum for wavelength axes"
             )
-        if spectrum is not None and (data.ndim != 3 or data.shape[0] != len(spectrum)):
+        if spectrum is not None and len(spectrum.bands) != 1:
+            raise ValueError("a chromatic field requires a one-band quadrature")
+        if spectrum is not None and (
+            data.ndim != 3 or data.shape[0] != spectrum.nodes_nm.shape[1]
+        ):
             raise ValueError(
                 "chromatic field data must be (nlam, y, x) "
                 "matching spectrum wavelength nodes"
@@ -116,7 +80,11 @@ class Field(GridArray):
         """
         abs2 = self.data.real**2 + self.data.imag**2
         if self.spectrum is not None:
-            abs2 = jnp.tensordot(self.spectrum.weights, abs2, axes=1)
+            rule = self.spectrum
+            if rule.bands[0].width_nm == 0:
+                abs2 = rule.integrate(abs2[None])[0]
+            else:
+                abs2 = rule.mean(abs2[None])[0]
         return Image(
             abs2,
             self.grid,

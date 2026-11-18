@@ -35,7 +35,7 @@ curves are derived from the propagated PSFs at construction, never declared.
 Aperture rules and performance reduction come from `optixstuff.apertures` and
 `optixstuff.performance`; the sampled counterpart is `yippy.Coronagraph`, which
 implements `AbstractTableCoronagraph` directly. `PathCoronagraph.bandpass` exposes
-the recorded `Spectrum.band`, or `None` when no band was specified. Stellar maps
+the entrance quadrature's `Band`, or `None` for an untagged field. Stellar maps
 support point stars; nonzero diameters raise eagerly and return NaN under tracing.
 
 Requires a configured optical path, pupil field, and output sampling.
@@ -77,7 +77,7 @@ Built on [JAX](https://github.com/google/jax) and
 
 - **The field core** (`physicaloptix.core`) -- shared `hwoutils.grids.PixelGrid` (all-static, half-pixel
   offset, continuous-FT weights), `PlaneKind`-tagged `Field` pytrees, and
-  `Spectrum` for chromatic fields.
+  one-row `hwoutils.spectral.Quadrature` rules for chromatic fields.
 - **Propagators** (`physicaloptix.transforms`) -- the validated `cmft_fwd` /
   `cmft_bwd` continuous-FT MFT pair and the plane-aware `Fraunhofer` wrapper
   (plus `FullBandFraunhofer`, its zero-padded FFT form on the full band),

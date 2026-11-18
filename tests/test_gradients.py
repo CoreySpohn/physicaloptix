@@ -25,9 +25,10 @@ import numpy as np
 import pytest
 from conftest import TEST_FRAME
 from hwoutils.grids import PixelGrid
+from hwoutils.spectral import Band, Quadrature
 from jax.test_util import check_grads
 
-from physicaloptix.core import Field, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind
 from physicaloptix.elements import (
     ModeBasis,
     MultiScaleVortex,
@@ -323,7 +324,9 @@ class TestChromaticAdjointGradient:
         pupil = PixelGrid.pupil(npup)
         focal = PixelGrid.focal(nfoc, 0.3, TEST_FRAME)
         wavelengths = jnp.array([500.0, 750.0, 1000.0])
-        spectrum = Spectrum(nodes_nm=wavelengths, weights=jnp.ones(3) / 3)
+        spectrum = Quadrature(
+            (Band(500.0, 1000.0),), wavelengths[None], jnp.full((1, 3), 500.0 / 3)
+        )
         prop = Fraunhofer(
             pupil,
             focal,

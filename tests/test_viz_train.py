@@ -17,8 +17,9 @@ from matplotlib.colors import LogNorm
 pytest.importorskip("eyepiece")
 
 from hwoutils.grids import PixelGrid
+from hwoutils.spectral import Band, Quadrature
 
-from physicaloptix.core import Field, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind
 from physicaloptix.elements import MultiScaleVortex, SampledOptic
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.system import BeamSplitter, Branch, OpticalSystem
@@ -140,7 +141,7 @@ def test_plot_path_chromatic_field_works():
     # to Field.intensity().data specifically, not merely "did not raise".
     grid = PixelGrid.pupil(16)
     focal = PixelGrid.focal(16, 0.5, TEST_FRAME)
-    spec = Spectrum(nodes_nm=jnp.array([500.0, 600.0]), weights=jnp.array([0.25, 0.75]))
+    spec = Quadrature((Band(500.0, 600.0),), [[500.0, 600.0]], [[25.0, 75.0]])
     data = jnp.stack([jnp.full((16, 16), 1.0 + 0j), jnp.full((16, 16), 3.0 + 0j)])
     field = Field(data=data, grid=grid, plane=PlaneKind.PUPIL, spectrum=spec)
     path = OpticalPath(stages=(Stage("cam", Fraunhofer(grid_in=grid, grid_out=focal)),))
@@ -157,9 +158,8 @@ def test_plot_path_phase_chromatic_defaults_to_mid_band_channel():
     # I2: show_phase=True on a chromatic Field must not raise, and the
     # auto-selected band is the middle one (index nlam // 2).
     grid = PixelGrid.pupil(8)
-    spec = Spectrum(
-        nodes_nm=jnp.array([500.0, 550.0, 600.0]),
-        weights=jnp.array([0.2, 0.3, 0.5]),
+    spec = Quadrature(
+        (Band(500.0, 600.0),), [[500.0, 550.0, 600.0]], [[20.0, 30.0, 50.0]]
     )
     data = jnp.stack(
         [
@@ -186,9 +186,8 @@ def test_plot_path_phase_channel_out_of_range_raises_named_error():
     # B3: an out-of-range channel= used to raise a bare IndexError from deep
     # inside fields._resolve, naming neither plot_path nor channel.
     grid = PixelGrid.pupil(8)
-    spec = Spectrum(
-        nodes_nm=jnp.array([500.0, 550.0, 600.0]),
-        weights=jnp.array([0.2, 0.3, 0.5]),
+    spec = Quadrature(
+        (Band(500.0, 600.0),), [[500.0, 550.0, 600.0]], [[20.0, 30.0, 50.0]]
     )
     data = jnp.stack([jnp.full((8, 8), 1.0 + 0j) for _ in range(3)])
     field = Field(data=data, grid=grid, plane=PlaneKind.PUPIL, spectrum=spec)

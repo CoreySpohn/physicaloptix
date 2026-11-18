@@ -165,6 +165,10 @@ class CoordinateInversion(Element):
         if self.axis not in ("x", "y"):
             raise ValueError(f"axis must be 'x' or 'y', got {self.axis!r}")
 
+    def spectral_breaks_nm(self) -> np.ndarray:
+        """Flipping a grid axis is independent of wavelength."""
+        return np.empty(0)
+
     def __call__(self, field):
         """Reverse the field along ``axis`` (leading axes broadcast)."""
         validate_field(

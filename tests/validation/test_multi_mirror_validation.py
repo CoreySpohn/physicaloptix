@@ -11,13 +11,12 @@ import numpy as np
 import pytest
 from conftest import TEST_FRAME
 from hwoutils.grids import PixelGrid
-from hwoutils.spectral import Band
+from hwoutils.spectral import Band, Quadrature
 
 from physicaloptix import (
     Field,
     Fraunhofer,
     PlaneKind,
-    Spectrum,
     broadcast_to_spectrum,
 )
 from physicaloptix.core.grid import _grid_axis
@@ -50,7 +49,9 @@ def setup():
             for n, a in ALPHAS.items()
         ]
     )
-    spectrum = Spectrum.from_band(Band(WL0 * (1 - 0.2 / 2), WL0 * (1 + 0.2 / 2)), NLAM)
+    spectrum = Quadrature.build(
+        (Band(WL0 * (1 - 0.2 / 2), WL0 * (1 + 0.2 / 2)),), order=NLAM
+    )
     field = broadcast_to_spectrum(
         Field(data=jnp.asarray(aperture), grid=grid, plane=PlaneKind.PUPIL), spectrum
     )
@@ -114,7 +115,7 @@ class TestMultiMirrorPhysics:
         grid, _aperture, field, spectrum, honest, _ap, lumped_opd, _ = setup
         mask = _annulus(NFOC, PSCALE)
         e_h, _ = honest.propagate(field)
-        wl = np.asarray(spectrum.nodes_nm)[:, None, None]
+        wl = np.asarray(spectrum.nodes_nm[0])[:, None, None]
         e_l = Field(
             data=field.data * jnp.exp(1j * 2 * jnp.pi * jnp.asarray(lumped_opd) / wl),
             grid=grid,
@@ -129,7 +130,7 @@ class TestMultiMirrorPhysics:
         grid, _aperture, field, spectrum, honest, ap, lumped_opd, _ = setup
         mask = _annulus(NFOC, PSCALE)
         i0 = NLAM // 2
-        wl = np.asarray(spectrum.nodes_nm)
+        wl = np.asarray(spectrum.nodes_nm[0])
 
         def corrected(e_out):
             ratio0 = np.asarray(e_out.data[i0]) / np.where(

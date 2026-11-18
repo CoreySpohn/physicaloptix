@@ -10,11 +10,11 @@ import pytest
 from hwoutils import enable_x64, set_platform
 from hwoutils.constants import d2s
 from hwoutils.grids import Frame, PixelGrid
-from hwoutils.spectral import Band
+from hwoutils.spectral import Band, Quadrature
 from hypothesis import settings
 from optixstuff import FocalResponse
 
-from physicaloptix.core import Field, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import ModeBasis, SampledOptic
 from physicaloptix.path import OpticalPath, Stage
@@ -127,7 +127,9 @@ def mono_field():
 def chromatic_field():
     """Three-band field with wavelength-identical slices (a flat input)."""
     grid, disk = _disk_pupil()
-    spectrum = Spectrum.from_band(Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)), 3)
+    spectrum = Quadrature.build(
+        (Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)),), order=3
+    )
     data = jnp.broadcast_to(jnp.asarray(disk).astype(complex), (3, 24, 24))
     return Field(data=data, grid=grid, plane=PlaneKind.PUPIL, spectrum=spectrum)
 

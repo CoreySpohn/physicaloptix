@@ -113,6 +113,10 @@ class DispersiveScreen(AbstractCommandableElement, AbstractChromaticOp):
         """Return a screen with the specified command."""
         return eqx.tree_at(lambda screen: screen.basis.coeffs, self, command)
 
+    def spectral_breaks_nm(self) -> np.ndarray:
+        """Nodes of the linearly interpolated, endpoint-clamped kernel [nm]."""
+        return np.asarray(self.table_wavelengths_nm)
+
     def kernel_at(self, wavelengths_nm):
         """Interpolated kernel ``D_k`` at given wavelengths, shape ``(m, w)``.
 
@@ -146,7 +150,7 @@ class DispersiveScreen(AbstractCommandableElement, AbstractChromaticOp):
             d = self.kernel_at(self.wavelength_nm)[:, 0]
             log_response = jnp.tensordot(self.command * d, self.basis.B, axes=1)
         else:
-            d = self.kernel_at(field.spectrum.nodes_nm)
+            d = self.kernel_at(field.spectrum.nodes_nm[0])
             log_response = jnp.einsum("m,mw,myx->wyx", self.command, d, self.basis.B)
         return Field(
             data=field.data * jnp.exp(log_response),

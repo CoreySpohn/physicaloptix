@@ -9,6 +9,7 @@ MFT (``Fraunhofer``) on any other window.
 """
 
 import equinox as eqx
+import numpy as np
 from hwoutils.grids import PixelGrid
 from jaxtyping import Array
 
@@ -105,6 +106,10 @@ class FocalPlaneMask(eqx.Module):
     transmission: Array
     plane_in: PlaneKind = eqx.field(static=True, default=PlaneKind.PUPIL)
     plane_out: PlaneKind = eqx.field(static=True, default=PlaneKind.PUPIL)
+
+    def spectral_breaks_nm(self) -> np.ndarray:
+        """The sampled mask is fixed; its transform supplies any breaks."""
+        return self.transform.spectral_breaks_nm()
 
     def __check_init__(self):
         """Validate that the transmission matches the window grid."""

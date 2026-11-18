@@ -48,6 +48,10 @@ class ZernikeWavefrontSensor(eqx.Module):
     plane_in: PlaneKind = eqx.field(static=True)
     plane_out: PlaneKind = eqx.field(static=True)
 
+    def spectral_breaks_nm(self) -> np.ndarray:
+        """The fixed phase mask has no wavelength breaks."""
+        return np.empty(0)
+
     @classmethod
     def build(
         cls,

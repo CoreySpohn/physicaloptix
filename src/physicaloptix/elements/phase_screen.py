@@ -5,6 +5,7 @@ from typing import Self
 
 import equinox as eqx
 import jax.numpy as jnp
+import numpy as np
 from hwoutils.grids import PixelGrid
 from jaxtyping import Array
 
@@ -90,7 +91,7 @@ class PhaseScreen(AbstractCommandableElement, AbstractChromaticOp):
         if field.spectrum is None:
             phasor = jnp.exp(1j * 2.0 * jnp.pi * opd / self.wavelength_nm)
         else:
-            wavelengths = field.spectrum.nodes_nm[:, jnp.newaxis, jnp.newaxis]
+            wavelengths = field.spectrum.nodes_nm[0, :, None, None]
             phasor = jnp.exp(1j * 2.0 * jnp.pi * opd[jnp.newaxis] / wavelengths)
         return Field(
             data=field.data * phasor,
@@ -98,6 +99,10 @@ class PhaseScreen(AbstractCommandableElement, AbstractChromaticOp):
             plane=field.plane,
             spectrum=field.spectrum,
         )
+
+    def spectral_breaks_nm(self) -> np.ndarray:
+        """The OPD phase varies smoothly with wavelength."""
+        return np.empty(0)
 
     def at_wavelength(self, wavelength_nm):
         """The same screen with the OPD-to-phase wavelength rebound.
@@ -142,6 +147,10 @@ class SampledPhaseScreen(Element, AbstractChromaticOp):
                 f"opd_nm shape {self.opd_nm.shape} does not match grid ({npix}, {npix})"
             )
 
+    def spectral_breaks_nm(self) -> np.ndarray:
+        """The OPD phase varies smoothly with wavelength."""
+        return np.empty(0)
+
     def at_wavelength(self, wavelength_nm):
         """The same screen bound to ``wavelength_nm``.
 
@@ -171,7 +180,7 @@ class SampledPhaseScreen(Element, AbstractChromaticOp):
                 )
             phasor = jnp.exp(1j * 2.0 * jnp.pi * self.opd_nm / self.wavelength_nm)
         else:
-            wavelengths = field.spectrum.nodes_nm[:, jnp.newaxis, jnp.newaxis]
+            wavelengths = field.spectrum.nodes_nm[0, :, None, None]
             phasor = jnp.exp(1j * 2.0 * jnp.pi * self.opd_nm[jnp.newaxis] / wavelengths)
         return Field(
             data=field.data * phasor,

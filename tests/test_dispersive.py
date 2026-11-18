@@ -5,9 +5,9 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from hwoutils.grids import PixelGrid
-from hwoutils.spectral import Band
+from hwoutils.spectral import Band, Quadrature
 
-from physicaloptix.core import Field, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind
 from physicaloptix.elements import DispersiveScreen, ModeBasis, PhaseScreen
 
 NPIX = 64
@@ -26,7 +26,9 @@ def _basis(grid, m=3, seed=0):
 
 
 def _flat_field(grid, spectrum=None):
-    shape = (NPIX, NPIX) if spectrum is None else (len(spectrum), NPIX, NPIX)
+    shape = (
+        (NPIX, NPIX) if spectrum is None else (spectrum.nodes_nm.shape[1], NPIX, NPIX)
+    )
     return Field(
         data=jnp.ones(shape, dtype=complex),
         grid=grid,
@@ -53,8 +55,10 @@ class TestOpdEquivalence:
     def test_chromatic(self):
         grid = _grid()
         basis = _basis(grid)
-        spectrum = Spectrum.from_band(Band(WL0 * (1 - 0.2 / 2), WL0 * (1 + 0.2 / 2)), 5)
-        table = spectrum.nodes_nm  # nodes AT the samples: interp exact
+        spectrum = Quadrature.build(
+            (Band(WL0 * (1 - 0.2 / 2), WL0 * (1 + 0.2 / 2)),), order=5
+        )
+        table = spectrum.nodes_nm[0]  # nodes AT the samples: interp exact
         kernel = jnp.broadcast_to(1j * 2.0 * jnp.pi / table, (basis.n_modes, 5))
         screen = DispersiveScreen(basis, kernel, table, grid, wavelength_nm=WL0)
         reference = PhaseScreen(basis, grid, wavelength_nm=WL0)
@@ -69,7 +73,9 @@ class TestDispersiveResponse:
         """A wavelength-constant kernel applies the identical multiplier per slice."""
         grid = _grid()
         basis = _basis(grid)
-        spectrum = Spectrum.from_band(Band(WL0 * (1 - 0.2 / 2), WL0 * (1 + 0.2 / 2)), 5)
+        spectrum = Quadrature.build(
+            (Band(WL0 * (1 - 0.2 / 2), WL0 * (1 + 0.2 / 2)),), order=5
+        )
         kernel = jnp.full((basis.n_modes, 2), 0.1 + 0.2j)
         screen = DispersiveScreen(
             basis, kernel, jnp.array([400.0, 700.0]), grid, wavelength_nm=WL0
@@ -110,6 +116,7 @@ class TestDispersiveResponse:
         table = jnp.array([400.0, 700.0])
         kernel = jnp.stack([(0.001 + 0.002j) * table] * basis.n_modes)
         screen = DispersiveScreen(basis, kernel, table, grid, wavelength_nm=WL0)
+        np.testing.assert_array_equal(screen.spectral_breaks_nm(), table)
         query = jnp.array([475.0, 550.0])
         got = screen.kernel_at(query)
         expected = jnp.stack([(0.001 + 0.002j) * query] * basis.n_modes)

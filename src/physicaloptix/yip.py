@@ -85,7 +85,10 @@ def emit_yip(
             pre-coronagraph energy).
         science_grid: The fixed angular science grid, in
             reference-wavelength lambda/D.
-        spectrum: The evaluation band (equal weights match the survey mean).
+        spectrum: A one-band Quadrature, for example
+            ``Quadrature.build((band,), core_path, order=4)``. Its dimensional
+            weights define the mean; an explicit midpoint rule reproduces the
+            survey sampling.
         reference_wavelength_nm: Band-center wavelength defining the grid.
         offsets_lod: 1D array of off-axis source offsets along +x, in
             reference lambda/D.
@@ -118,12 +121,16 @@ def emit_yip(
     stellar_diams_lod = np.asarray(stellar_diams_lod, dtype=float)
     offsets_lod = np.asarray(offsets_lod, dtype=float)
 
+    if len(spectrum.bands) != 1:
+        raise ValueError("a yield package requires a one-band quadrature")
+    active = np.asarray(spectrum.weights_nm[0]) != 0
+    nodes_nm = np.asarray(spectrum.nodes_nm[0])[active]
     base = unit_energy(input_field)
     science = Fraunhofer(
         grid_in=base.grid,
         grid_out=science_grid,
         reference_wavelength_nm=reference_wavelength_nm,
-        min_wavelength_nm=float(np.asarray(spectrum.nodes_nm).min()),
+        min_wavelength_nm=float(nodes_nm.min()),
     )
 
     # -- off-axis PSFs ------------------------------------------------------
@@ -178,12 +185,8 @@ def emit_yip(
     stellar = np.stack(stellar)
 
     # -- stochastic sky transmission ----------------------------------------
-    nodes_nm = np.asarray(spectrum.nodes_nm, dtype=float)
-    science_band_nm = (
-        (spectrum.band.lo_nm, spectrum.band.hi_nm)
-        if spectrum.band is not None
-        else (nodes_nm.min(), nodes_nm.max())
-    )
+    band = spectrum.bands[0]
+    science_band_nm = (band.lo_nm, band.hi_nm)
     sky_band_nm = science_band_nm if sky_band_nm is None else sky_band_nm
     sky = uniform_sky_image(
         core_path,
@@ -235,7 +238,7 @@ def emit_yip(
             time_multiplier_characterization=time_multiplier_characterization,
         )
 
-    headers = dict.fromkeys(products, product_header(science_band_nm, len(spectrum)))
+    headers = dict.fromkeys(products, product_header(science_band_nm, nodes_nm.size))
     headers["sky_transmission"] = product_header(sky_band_nm, n_sky_screens)
     write_yip(output_dir, {**products, "headers": headers})
     return products

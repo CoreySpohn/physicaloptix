@@ -137,7 +137,7 @@ class TestFeedsDispersiveScreen:
     def test_thickness_kernel_feeds_dispersive_screen(
         self, small_path, chromatic_field
     ):
-        wavelengths = chromatic_field.spectrum.nodes_nm
+        wavelengths = chromatic_field.spectrum.nodes_nm[0]
         kern = thickness_kernel(
             wavelengths, [2.35, 1.38], [60.0, 95.0], layer=0, n_substrate=1.5
         )

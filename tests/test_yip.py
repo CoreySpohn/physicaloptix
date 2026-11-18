@@ -4,10 +4,10 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from hwoutils.grids import Frame, PixelGrid
-from hwoutils.spectral import Band
+from hwoutils.spectral import Band, Quadrature
 from yippy import open_yip
 
-from physicaloptix.core import Field, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import MultiScaleVortex, SampledOptic
 from physicaloptix.path import OpticalPath, Stage
@@ -65,8 +65,8 @@ def emitted(vortex_setup, tmp_path_factory):
         core,
         field,
         science_grid=PixelGrid.focal(64, 0.5, YIP_FRAME),
-        spectrum=Spectrum.from_band(
-            Band(REF_NM * (1 - 0.1 / 2), REF_NM * (1 + 0.1 / 2)), 3
+        spectrum=Quadrature.build(
+            (Band(REF_NM * (1 - 0.1 / 2), REF_NM * (1 + 0.1 / 2)),), core, order=3
         ),
         reference_wavelength_nm=REF_NM,
         offsets_lod=np.array([2.0, 6.0, 10.0]),
@@ -133,7 +133,9 @@ class TestEmittedPackage:
         base = Field(data=normalized, grid=field.grid, plane=PlaneKind.PUPIL)
         band = broadcast_to_spectrum(
             base,
-            Spectrum.from_band(Band(REF_NM * (1 - 0.1 / 2), REF_NM * (1 + 0.1 / 2)), 3),
+            Quadrature.build(
+                (Band(REF_NM * (1 - 0.1 / 2), REF_NM * (1 + 0.1 / 2)),), core, order=3
+            ),
         )
         lyot, _ = core.propagate(band)
         out = science.forward(lyot)
@@ -155,9 +157,10 @@ class TestEmittedPackage:
         core, field = vortex_setup
         kwargs = dict(
             science_grid=PixelGrid.focal(32, 0.5, YIP_FRAME),
-            spectrum=Spectrum.from_band(
-                Band(REF_NM * (1 - 0.1 / 2), REF_NM * (1 + 0.1 / 2)), 2
-            ),
+            # Select a padded row: the other band needs two subintervals.
+            spectrum=Quadrature.build(
+                (Band(950, 1050), Band(1050, 1250)), core, order=2, breaks_nm=[1150]
+            ).band(0),
             reference_wavelength_nm=REF_NM,
             offsets_lod=np.array([4.0]),
             stellar_diams_lod=np.array([0.05]),
@@ -210,8 +213,8 @@ class TestSkyNormalization:
             science_grid=PixelGrid.focal(
                 48, 0.45, YIP_FRAME
             ),  # clean of the blue-end gate
-            spectrum=Spectrum.from_band(
-                Band(REF_NM * (1 - 0.1 / 2), REF_NM * (1 + 0.1 / 2)), 2
+            spectrum=Quadrature.build(
+                (Band(REF_NM * (1 - 0.1 / 2), REF_NM * (1 + 0.1 / 2)),), core, order=2
             ),
             reference_wavelength_nm=REF_NM,
             offsets_lod=np.array([4.0]),

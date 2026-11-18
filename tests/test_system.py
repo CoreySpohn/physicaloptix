@@ -6,9 +6,9 @@ import numpy as np
 import pytest
 from conftest import TEST_FRAME
 from hwoutils.grids import PixelGrid
-from hwoutils.spectral import Band
+from hwoutils.spectral import Band, Quadrature
 
-from physicaloptix.core import Field, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import SampledOptic
 from physicaloptix.path import OpticalPath, Stage
@@ -140,10 +140,6 @@ class TestEnergySplit:
 class TestDichroic:
     def test_routes_color_and_conserves_per_wavelength(self):
         mono, grid = _pupil_field()
-        spectrum = Spectrum.from_band(
-            Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)), 3
-        )  # 3 wavelengths
-        field = broadcast_to_spectrum(mono, spectrum)
         # Step from transmit to reflect across the band.
         split = BeamSplitter.dichroic(
             wavelengths_nm=jnp.asarray([440.0, 560.0]),
@@ -151,6 +147,14 @@ class TestDichroic:
             grid=grid,
             plane=PlaneKind.PUPIL,
         )
+        band = Band(430.0, 570.0)
+        system, _, _ = _two_arm_system()
+        system = eqx.tree_at(lambda s: s.split, system, split)
+        channel, _ = system.as_channel_path("sci")
+        np.testing.assert_array_equal(channel.spectral_breaks_nm(), [440, 560])
+        spectrum = Quadrature.build((band,), system, order=1)
+        field = broadcast_to_spectrum(mono, spectrum)
+        np.testing.assert_array_equal(spectrum.nodes_nm[0], [435.0, 500.0, 565.0])
         ports = split(field)
         t_int = np.abs(np.asarray(ports["transmit"].data)) ** 2
         r_int = np.abs(np.asarray(ports["reflect"].data)) ** 2
@@ -254,8 +258,8 @@ class TestOpticalSystem:
 
     def test_chromatic_threads_through(self):
         system, mono, _ = _two_arm_system()
-        spectrum = Spectrum.from_band(
-            Band(500.0 * (1 - 0.1 / 2), 500.0 * (1 + 0.1 / 2)), 3
+        spectrum = Quadrature.build(
+            (Band(500.0 * (1 - 0.1 / 2), 500.0 * (1 + 0.1 / 2)),), order=3
         )
         field = broadcast_to_spectrum(mono, spectrum)
         outs, _ = system.propagate(field)
@@ -315,7 +319,9 @@ class TestAsChannelPath:
         system, mono, _ = _two_arm_system()
         field = broadcast_to_spectrum(
             mono,
-            Spectrum.from_band(Band(500.0 * (1 - 0.1 / 2), 500.0 * (1 + 0.1 / 2)), 3),
+            Quadrature.build(
+                (Band(500.0 * (1 - 0.1 / 2), 500.0 * (1 + 0.1 / 2)),), order=3
+            ),
         )
         outs, _ = system.propagate(field)
         flat, _ = system.as_channel_path("sci")

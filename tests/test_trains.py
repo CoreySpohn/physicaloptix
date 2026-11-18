@@ -6,13 +6,12 @@ import numpy as np
 import pytest
 from conftest import TEST_FRAME
 from hwoutils.grids import PixelGrid
-from hwoutils.spectral import Band
+from hwoutils.spectral import Band, Quadrature
 
 from physicaloptix import (
     Field,
     ModeBasis,
     PlaneKind,
-    Spectrum,
     broadcast_to_spectrum,
 )
 from physicaloptix.core.grid import _grid_axis
@@ -187,8 +186,8 @@ class TestBuildMirrorTrain:
 
     def test_chromatic_field_propagates(self):
         grid = PixelGrid.pupil(128)
-        spectrum = Spectrum.from_band(
-            Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)), 3
+        spectrum = Quadrature.build(
+            (Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)),), order=3
         )
         path = build_mirror_train(
             _specs(grid), grid, wavelength_nm=500.0, beam_diameter_m=0.085
@@ -228,14 +227,14 @@ class TestSpeckleProcessWiring:
         focal = PixelGrid.focal(64, 0.3, TEST_FRAME)
         science = Stage("science", Fraunhofer(grid_in=grid, grid_out=focal))
         path = OpticalPath(stages=(*train.stages, science))
-        spectrum = Spectrum.from_band(
-            Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)), 3
+        spectrum = Quadrature.build(
+            (Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)),), order=3
         )
         field = broadcast_to_spectrum(
             Field(data=jnp.asarray(aperture), grid=grid, plane=PlaneKind.PUPIL),
             spectrum,
         )
-        wavelengths = np.asarray(spectrum.nodes_nm)
+        wavelengths = np.asarray(spectrum.nodes_nm[0])
         lin, slices = linearize_stages(
             path, field, ("a_drift", "b_drift"), wavelengths_nm=wavelengths
         )

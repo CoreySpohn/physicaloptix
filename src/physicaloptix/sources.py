@@ -22,12 +22,12 @@ def broadcast_to_spectrum(field, spectrum):
 
     Args:
         field: A mono ``Field`` (2D data).
-        spectrum: The ``Spectrum`` to broadcast over.
+        spectrum: The one-row ``hwoutils.spectral.Quadrature`` to broadcast over.
 
     Returns:
         A chromatic ``Field`` with ``(nlam, y, x)`` data.
     """
-    data = jnp.broadcast_to(field.data, (len(spectrum), *field.data.shape))
+    data = jnp.broadcast_to(field.data, (spectrum.nodes_nm.shape[1], *field.data.shape))
     return Field(data=data, grid=field.grid, plane=field.plane, spectrum=spectrum)
 
 
@@ -88,7 +88,7 @@ def point_source(
             "define the fixed angle"
         )
 
-    wavelengths = spectrum.nodes_nm
+    wavelengths = spectrum.nodes_nm[0]
 
     def slice_for(wavelength_nm):
         data = field.data

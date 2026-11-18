@@ -4,6 +4,7 @@ import jax
 import numpy as np
 from conftest import TEST_FRAME
 from hwoutils.grids import PixelGrid
+from hwoutils.spectral import Band, Quadrature
 
 from physicaloptix.core.grid import _grid_axis
 
@@ -85,7 +86,7 @@ def test_explicit_spectrum_psf_equals_parent_formula():
     """
     import jax.numpy as jnp
 
-    from physicaloptix import Field, Fraunhofer, PlaneKind, Spectrum, point_source
+    from physicaloptix import Field, Fraunhofer, PlaneKind, point_source
 
     n, m, step = 24, 32, 0.5
     x = jnp.asarray((np.arange(n) - n / 2 + 0.5) * (1.0 / n))
@@ -94,23 +95,20 @@ def test_explicit_spectrum_psf_equals_parent_formula():
     nodes, weights = jnp.array([450.0, 500.0, 550.0]), jnp.array([0.25, 0.5, 0.25])
     source = point_source(
         Field(disk, PixelGrid.pupil(n), PlaneKind.PUPIL),
-        spectrum=Spectrum(nodes, weights),
+        spectrum=Quadrature((Band(450.0, 550.0),), nodes[None], 100.0 * weights[None]),
     )
-    actual = (
-        Fraunhofer(
-            source.grid,
-            PixelGrid.focal(m, step, TEST_FRAME),
-            reference_wavelength_nm=500.0,
-        )
-        .forward(source)
-        .intensity()
-        .data
-    )
+    propagated = Fraunhofer(
+        source.grid, PixelGrid.focal(m, step, TEST_FRAME), reference_wavelength_nm=500.0
+    ).forward(source)
 
     def old_slice(data, scale):
         kernel = jnp.exp(-2j * jnp.pi * jnp.outer(u * scale, x))
         return (x[1] - x[0]) ** 2 * (kernel @ data @ kernel.T) * scale
 
     old = jax.vmap(old_slice)(source.data, 500.0 / nodes)
+    np.testing.assert_array_equal(propagated.data, old)
     expected = jnp.tensordot(weights, old.real**2 + old.imag**2, axes=1)
-    np.testing.assert_array_equal(actual, expected)
+    # Dimensional-weight reduction divides by the width after summation.
+    np.testing.assert_allclose(
+        propagated.intensity().data, expected, atol=0, rtol=4 * np.finfo(float).eps
+    )

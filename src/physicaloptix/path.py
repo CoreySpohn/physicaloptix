@@ -14,6 +14,8 @@ renderer consumes them directly).
 """
 
 import equinox as eqx
+import numpy as np
+from hwoutils.spectral import spectral_breaks
 
 from physicaloptix.core.chromatic import AbstractChromaticOp
 from physicaloptix.transforms import Fraunhofer, Fresnel, FullBandFraunhofer
@@ -58,6 +60,10 @@ class OpticalPath(eqx.Module):
                     f"plane but the chain is in the {current.value} plane"
                 )
             current = plane_out
+
+    def spectral_breaks_nm(self) -> np.ndarray:
+        """Union of the wavelength breaks declared by the path's stages."""
+        return spectral_breaks(*(stage.op for stage in self.stages))
 
     def at_wavelength(self, wavelength_nm):
         """The path with every late-bound stage bound to ``wavelength_nm``.

@@ -8,11 +8,11 @@ import pytest
 from conftest import TEST_FRAME
 from hwoutils.constants import s2d
 from hwoutils.grids import PixelGrid
-from hwoutils.spectral import Band
+from hwoutils.spectral import Band, Quadrature
 from jax.test_util import check_grads
 
 from physicaloptix import command_response
-from physicaloptix.core import Field, PlaneKind, Spectrum
+from physicaloptix.core import Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import (
     DispersiveScreen,
@@ -236,7 +236,9 @@ def test_rejects_chromatic_field(setup):
     """linearize is monochromatic; a chromatic field must raise, not silently
     apply the design-wavelength phase factor to every channel."""
     path, field, basis = setup
-    spectrum = Spectrum.from_band(Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)), 3)
+    spectrum = Quadrature.build(
+        (Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)),), order=3
+    )
     chrom = Field(
         data=jnp.broadcast_to(field.data, (3, *field.data.shape)),
         grid=field.grid,
@@ -276,7 +278,7 @@ class TestChromaticLinearize:
         self, small_path, chromatic_field, opd_basis
     ):
         """The correctness anchor: chromatic == the validated mono path per band."""
-        wavelengths = chromatic_field.spectrum.nodes_nm
+        wavelengths = chromatic_field.spectrum.nodes_nm[0]
         lin = linearize(
             small_path, chromatic_field, opd_basis, wavelengths_nm=wavelengths
         )
@@ -316,7 +318,7 @@ class TestChromaticLinearize:
         complex contraction and amplitude conversion; the scaling mutant
         must differ by more than 1e-3 in relative L2 norm.
         """
-        wavelengths = chromatic_field.spectrum.nodes_nm
+        wavelengths = chromatic_field.spectrum.nodes_nm[0]
         kernel_row = 0.002j * wavelengths  # linear in lambda: interp-exact
         path = _dispersive_path(small_path, wavelengths, kernel_row)
         lin = linearize(path, chromatic_field, opd_basis, wavelengths_nm=wavelengths)
@@ -372,7 +374,7 @@ class TestChromaticLinearize:
         """The kernel_at -> dispersion contract: linearizing w.r.t. an
         input-plane screen's own coefficients via dispersion=kernel_at(...)
         equals autodiff through eqx.tree_at on those coefficients."""
-        wavelengths = chromatic_field.spectrum.nodes_nm
+        wavelengths = chromatic_field.spectrum.nodes_nm[0]
         kernel_row = 0.001 + 0.002j * wavelengths
         path = _dispersive_path(small_path, wavelengths, kernel_row)
         screen = path.stages[0].op
@@ -399,7 +401,7 @@ class TestChromaticLinearize:
         self, small_path, chromatic_field, opd_basis
     ):
         """A non-trivial D(lambda) table: analytic columns == autodiff Jacobian."""
-        wavelengths = chromatic_field.spectrum.nodes_nm
+        wavelengths = chromatic_field.spectrum.nodes_nm[0]
         key = jax.random.PRNGKey(0)
         d = 0.1 * (
             jax.random.normal(key, (opd_basis.n_modes, len(wavelengths), 2))
@@ -426,7 +428,7 @@ class TestChromaticLinearize:
         self, small_path, chromatic_field, opd_basis
     ):
         """The jvp branch needs the same (w, m, y, x) layout normalization."""
-        wavelengths = chromatic_field.spectrum.nodes_nm
+        wavelengths = chromatic_field.spectrum.nodes_nm[0]
         lin_a = linearize(
             small_path, chromatic_field, opd_basis, wavelengths_nm=wavelengths
         )
@@ -446,7 +448,7 @@ class TestChromaticLinearize:
         self, small_path, chromatic_field, opd_basis
     ):
         """The chunk loop must slice the factor table in lockstep with B."""
-        wavelengths = chromatic_field.spectrum.nodes_nm
+        wavelengths = chromatic_field.spectrum.nodes_nm[0]
         full = linearize(
             small_path, chromatic_field, opd_basis, wavelengths_nm=wavelengths
         )
@@ -465,7 +467,7 @@ class TestChromaticLinearize:
         """Achromatic masks + native lambda/D output + identical input slices:
         G(w) == G(0) * (wl0/wlw) exactly -- the regime where
         reference/wavelength scaling is exact, pinned as an equality."""
-        wavelengths = chromatic_field.spectrum.nodes_nm
+        wavelengths = chromatic_field.spectrum.nodes_nm[0]
         lin = linearize(
             small_path, chromatic_field, opd_basis, wavelengths_nm=wavelengths
         )
@@ -480,7 +482,7 @@ class TestChromaticLinearize:
     ):
         """Mutation direction: a genuinely non-OPD dispersion (phase INCREASING
         with lambda) must break the scaling law."""
-        wavelengths = chromatic_field.spectrum.nodes_nm
+        wavelengths = chromatic_field.spectrum.nodes_nm[0]
         path = _dispersive_path(
             small_path, jnp.array([400.0, 700.0]), jnp.array([0.5j, 1.5j])
         )
@@ -493,7 +495,7 @@ class TestChromaticLinearize:
     ):
         """kind="amplitude" default factors are 1 at every band."""
         amp_basis = ModeBasis(B=opd_basis.B, coeffs=opd_basis.coeffs, kind="amplitude")
-        wavelengths = chromatic_field.spectrum.nodes_nm
+        wavelengths = chromatic_field.spectrum.nodes_nm[0]
         lin = linearize(
             small_path, chromatic_field, amp_basis, wavelengths_nm=wavelengths
         )
@@ -506,7 +508,7 @@ class TestChromaticLinearize:
         self, small_path, chromatic_field, opd_basis
     ):
         """linearity_residual generalizes: small at small eps, scales as eps^2."""
-        wavelengths = chromatic_field.spectrum.nodes_nm
+        wavelengths = chromatic_field.spectrum.nodes_nm[0]
         lin = linearize(
             small_path, chromatic_field, opd_basis, wavelengths_nm=wavelengths
         )
@@ -548,7 +550,7 @@ class TestChromaticLinearize:
     def test_rejects_dispersion_shape_mismatch(
         self, small_path, chromatic_field, opd_basis
     ):
-        wavelengths = chromatic_field.spectrum.nodes_nm
+        wavelengths = chromatic_field.spectrum.nodes_nm[0]
         with pytest.raises(ValueError, match="dispersion shape"):
             linearize(
                 small_path,
@@ -565,7 +567,7 @@ class TestChromaticLinearize:
         band centers, or a resampled grid) must raise the intended
         length-mismatch message, not numpy's opaque broadcast ValueError
         from allclose on differently-shaped arrays."""
-        wavelengths = chromatic_field.spectrum.nodes_nm
+        wavelengths = chromatic_field.spectrum.nodes_nm[0]
         with pytest.raises(ValueError, match="wavelengths_nm must match"):
             linearize(
                 small_path,
@@ -610,8 +612,8 @@ def _train_and_field(nlam=None, npix=96):
     path = build_mirror_train(specs, grid, wavelength_nm=500.0, beam_diameter_m=0.085)
     field = Field(data=jnp.asarray(aperture), grid=grid, plane=PlaneKind.PUPIL)
     if nlam is not None:
-        spectrum = Spectrum.from_band(
-            Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)), nlam
+        spectrum = Quadrature.build(
+            (Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)),), order=nlam
         )
         field = broadcast_to_spectrum(field, spectrum)
     return path, field
@@ -697,7 +699,7 @@ class TestPerturbationStage:
         # changes the physics. Compare single-column and batched
         # materialization on the same chromatic path.
         path, field = _train_and_field(nlam=3)
-        wavelengths = np.asarray(field.spectrum.nodes_nm)
+        wavelengths = np.asarray(field.spectrum.nodes_nm[0])
         lin_fwd = linearize(
             path,
             field,

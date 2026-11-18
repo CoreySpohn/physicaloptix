@@ -31,6 +31,7 @@ import warnings
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
 from hwoutils.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind, validate_field
@@ -119,11 +120,15 @@ class Fraunhofer(eqx.Module):
             if on_undersampled == "warn":
                 warnings.warn(message, stacklevel=2)
 
+    def spectral_breaks_nm(self) -> np.ndarray:
+        """Fourier propagation varies smoothly with wavelength."""
+        return np.empty(0)
+
     def _chromatic_scaling(self, field):
         """Per-slice coordinate scale factors, or None for the native path."""
         if field.spectrum is None or self.reference_wavelength_nm is None:
             return None
-        return self.reference_wavelength_nm / field.spectrum.nodes_nm
+        return self.reference_wavelength_nm / field.spectrum.nodes_nm[0]
 
     def forward(self, field):
         """Propagate ``plane_in`` -> ``plane_out`` (retags plane and grid)."""
