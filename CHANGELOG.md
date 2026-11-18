@@ -1,5 +1,46 @@
 # Changelog
 
+## [4.0.0](https://github.com/CoreySpohn/physicaloptix/compare/v3.0.0...v4.0.0) (2026-11-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* store YIP and field intensities with explicit measures and integrate through footprints
+* replace Spectrum with one-row quadratures
+* compute the live uniform-sky response from the incoherent pupil screen and expose point energy separately
+* differentiate commanded elements through their own call with command_response and hold speckle fields as a FocalResponse
+* write YIP products through yippy and integrate hard-edged leakage over the exact region in tests
+* take raster extents, radii and radial profiles from the hwoutils grid
+* take photometry from optixstuff and reject finite stars in PathCoronagraph.stellar_map
+* **ifs:** remove save_psflet_pack; coronachrome owns the PSFlet pack format
+* build PSD surfaces on hwoutils random fields; add ou_exposure_neff; colours from eyepiece
+* binning from hwoutils, one FFT and MFT helper each, and no propagator call aliases
+* drop the deprecated path renderer and the unweighted speckle option; geometric centres come from hwoutils
+* **speckle:** build analytic speckle fields on the shared linear speckle field
+* build fields, spectra, coronagraph records and detectors on the shared grid, quadrature and detector types
+
+### Features
+
+* build fields, spectra, coronagraph records and detectors on the shared grid, quadrature and detector types ([e5c9ccc](https://github.com/CoreySpohn/physicaloptix/commit/e5c9ccc70a0deab3b530d93a67c63e1151dfa655))
+* compute the live uniform-sky response from the incoherent pupil screen and expose point energy separately ([0a3df8d](https://github.com/CoreySpohn/physicaloptix/commit/0a3df8d2933b77abbfb3af7842c71a30613a0d79))
+* differentiate commanded elements through their own call with command_response and hold speckle fields as a FocalResponse ([44c9e9b](https://github.com/CoreySpohn/physicaloptix/commit/44c9e9b1e90b518bd36921df456fc48703e1c260))
+* optical products declare band-limited reconstruction so resampling preserves aperture photometry ([19f0fbc](https://github.com/CoreySpohn/physicaloptix/commit/19f0fbc98fa8ed257995236c584ed15b87f560e9))
+* **speckle:** build analytic speckle fields on the shared linear speckle field ([dfaa8f3](https://github.com/CoreySpohn/physicaloptix/commit/dfaa8f3dcc64fec39fb2f077093bc441405d0c78))
+* stellar and sky maps declare that they continue past the field ([2f96c35](https://github.com/CoreySpohn/physicaloptix/commit/2f96c35c3f1249373c9790ae90e23fa405d52eed))
+
+
+### Code Refactoring
+
+* binning from hwoutils, one FFT and MFT helper each, and no propagator call aliases ([836336f](https://github.com/CoreySpohn/physicaloptix/commit/836336ffed8448bd0b5f85abb1e6f67b4186d8e0))
+* build PSD surfaces on hwoutils random fields; add ou_exposure_neff; colours from eyepiece ([71ce0e4](https://github.com/CoreySpohn/physicaloptix/commit/71ce0e434081190936c543ad6ad70f7aeaad0e7f))
+* drop the deprecated path renderer and the unweighted speckle option; geometric centres come from hwoutils ([a39de1a](https://github.com/CoreySpohn/physicaloptix/commit/a39de1a1488e5ff3709dfe3f72796658afca7dd9))
+* **ifs:** remove save_psflet_pack; coronachrome owns the PSFlet pack format ([ca5ee67](https://github.com/CoreySpohn/physicaloptix/commit/ca5ee676fd0a9f38e2844a56066bf2c3b8de5f5a))
+* replace Spectrum with one-row quadratures ([50281de](https://github.com/CoreySpohn/physicaloptix/commit/50281de72058a2345c6fa76fba054d5934cb127a))
+* store YIP and field intensities with explicit measures and integrate through footprints ([fe6177c](https://github.com/CoreySpohn/physicaloptix/commit/fe6177caf9d87a008382bdf02596fb225272b87a))
+* take photometry from optixstuff and reject finite stars in PathCoronagraph.stellar_map ([1baa198](https://github.com/CoreySpohn/physicaloptix/commit/1baa1980b15f09508768f5b749efe66ea55feb1c))
+* take raster extents, radii and radial profiles from the hwoutils grid ([fd5847e](https://github.com/CoreySpohn/physicaloptix/commit/fd5847ee8fed0b0e7fbe2bc183d6571f882f7b5d))
+* write YIP products through yippy and integrate hard-edged leakage over the exact region in tests ([d06d18f](https://github.com/CoreySpohn/physicaloptix/commit/d06d18f3147369bc89bbd5d82bfaa25aca4abf98))
+
 ## [3.0.0](https://github.com/CoreySpohn/physicaloptix/compare/v2.3.1...v3.0.0) (2026-11-16)
 
 
