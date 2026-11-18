@@ -19,7 +19,7 @@ consumer adding the floor from its own throughput map cannot double count
 it. Displaying the boil normally wants the total, hence
 ``include_floor=True`` by default -- but the floor is precisely what the
 protocol does not carry, so it is recovered from the concrete field's
-``e_nom``/``input_energy`` when those exist, or supplied by the caller
+``FocalResponse`` when those exist, or supplied by the caller
 through ``floor=``. It is never guessed.
 
 **One scale across time, always.** The display bounds are resolved once
@@ -162,15 +162,14 @@ def _floor_map(field, floor):
     has e_nom=0; pass floor= to display a separate deterministic leakage map.
 
     Raises:
-        ValueError: Neither ``floor=`` nor the ``e_nom``/``input_energy``
+        ValueError: Neither ``floor=`` nor the ``FocalResponse``
             pair is available, or the field is chromatic.
     """
     if floor is not None:
         return np.asarray(floor, dtype=float)
 
-    e_nom = getattr(field, "e_nom", None)
-    input_energy = getattr(field, "input_energy", None)
-    if e_nom is None or input_energy is None:
+    response = getattr(field, "response", None)
+    if response is None:
         msg = (
             "boiling: include_floor=True needs the deterministic floor, which "
             "realize() deliberately excludes and the speckle-field protocol "
@@ -180,7 +179,7 @@ def _floor_map(field, floor):
         )
         raise ValueError(msg)
 
-    e = np.asarray(e_nom)
+    e = np.asarray(response.e_nom)
     if e.ndim != 2:
         msg = (
             f"boiling: e_nom has shape {e.shape}, not (y, x) -- this looks "
@@ -188,7 +187,11 @@ def _floor_map(field, floor):
             "showing."
         )
         raise ValueError(msg)
-    return np.abs(e) ** 2 / _scalar(input_energy, "input_energy")
+    return (
+        np.abs(e) ** 2
+        * response.grid.pixel_area
+        / _scalar(response.input_energy, "input_energy")
+    )
 
 
 def _contrast_scale(field, telescope_peak):
@@ -197,8 +200,8 @@ def _contrast_scale(field, telescope_peak):
     Raises:
         ValueError: The field carries no ``input_energy``.
     """
-    input_energy = getattr(field, "input_energy", None)
-    if input_energy is None:
+    response = getattr(field, "response", None)
+    if response is None:
         msg = (
             "boiling: telescope_peak= needs the field's input_energy to "
             "convert flux fractions into peak-referenced contrast, and the "
@@ -206,7 +209,7 @@ def _contrast_scale(field, telescope_peak):
             "frames already in contrast units instead."
         )
         raise ValueError(msg)
-    return _scalar(input_energy, "input_energy") / (
+    return _scalar(response.input_energy, "input_energy") / (
         float(telescope_peak) * field.grid.pixel_area
     )
 
@@ -523,7 +526,7 @@ def prepare_speckles(
             default, prepares a total intensity; False the signed delta).
             Does not apply to a bare array.
         floor: The floor map in ``realize``'s flux-fraction units,
-            overriding the reconstruction from ``e_nom``/``input_energy``;
+            overriding the reconstruction from ``FocalResponse``;
             on a bare array it is added as given and makes the frames a
             total.
         pixscale_lod: Pixel scale in lambda/D for a bare array. Fields use

@@ -16,7 +16,6 @@ renderer consumes them directly).
 import equinox as eqx
 
 from physicaloptix.core.chromatic import AbstractChromaticOp
-from physicaloptix.linearize import linearize as _linearize
 from physicaloptix.transforms import Fraunhofer, Fresnel, FullBandFraunhofer
 
 
@@ -134,7 +133,7 @@ class OpticalPath(eqx.Module):
                 tapped[stage.name] = field
         return field, tapped
 
-    def linearize(self, field, basis, **kwargs):
+    def linearize(self, field, basis=None, **kwargs):
         """Build the (E_nom, G) linearization of this path around ``field``.
 
         See :func:`physicaloptix.linearize.linearize` for the arguments
@@ -142,4 +141,6 @@ class OpticalPath(eqx.Module):
         defaults to the first band when ``wavelengths_nm`` is given for a
         chromatic one; ``method`` defaults to ``"auto"``).
         """
-        return _linearize(self, field, basis, **kwargs)
+        from physicaloptix.linearize import linearize
+
+        return linearize(self, field, basis, **kwargs)

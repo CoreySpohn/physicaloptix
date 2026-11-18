@@ -7,6 +7,7 @@ import optixstuff as ox
 import pytest
 from conftest import TEST_FRAME, analytic_from_density, speckle_grid
 from hwoutils.constants import s2d
+from optixstuff import FocalResponse
 
 from physicaloptix import AnalyticSpeckleField
 from physicaloptix.core.grid import _grid_axis
@@ -75,15 +76,15 @@ class TestSpeckleProcess:
         g = jax.random.normal(k3, (_M, _DIMS, _DIMS)) + 1j * jax.random.normal(
             k4, (_M, _DIMS, _DIMS)
         )
+        response = FocalResponse(
+            e_nom,
+            g,
+            speckle_grid((_DIMS, _DIMS), reference=1000.0),
+            _e_in(10.0),
+            1000.0,
+        )
         defaults = dict(
-            e_nom=e_nom,
-            G=g,
-            per_mode_rms=0.1,
-            knee_hz=1e-4,
-            input_energy=_e_in(10.0),
-            grid=speckle_grid((_DIMS, _DIMS), reference=1000.0),
-            reference_wavelength_nm=1000.0,
-            epoch_d=_EPOCH_D,
+            response=response, per_mode_rms=0.1, knee_hz=1e-4, epoch_d=_EPOCH_D
         )
         defaults.update(kwargs)
         return SpeckleProcess(**defaults)
@@ -92,10 +93,7 @@ class TestSpeckleProcess:
         proc = self._process(coherent=True, epoch_d=2.0)
         field = proc.draw(jax.random.PRNGKey(2))
         assert isinstance(field, AnalyticSpeckleField)
-        assert jnp.array_equal(field.e_nom, proc.e_nom * jnp.sqrt(proc.grid.pixel_area))
-        assert jnp.array_equal(field.G, proc.G * jnp.sqrt(proc.grid.pixel_area))
-        assert jnp.array_equal(field.input_energy, proc.input_energy)
-        assert field.grid == proc.grid
+        assert field.response is proc.response
         assert field.epoch_d == proc.epoch_d
         time_d = field.epoch_d + 10.0 * s2d
         m = field.realize(wavelength_nm=1000.0, time_d=time_d).data
@@ -151,13 +149,15 @@ class TestSpeckleProcess:
 
         proc = self._process()
         proc2 = SpeckleProcess.from_decorrelation(
-            e_nom=proc.e_nom,
-            G=proc.G,
+            FocalResponse(
+                proc.response.e_nom,
+                proc.response.G,
+                speckle_grid((proc.response.e_nom).shape[-2:], 0.25, 1000.0),
+                proc.response.input_energy,
+                1000.0,
+            ),
             decorr_hours=10.0,
             total_rms=0.3,
-            input_energy=proc.input_energy,
-            grid=speckle_grid((proc.e_nom).shape[-2:], 0.25, 1000.0),
-            reference_wavelength_nm=1000.0,
         )
         tau_s = 10.0 * 3600.0
         # knee_hz broadcasts to (m,) now (per-mode timescales are expressible).
@@ -199,15 +199,12 @@ def _small_process(m=_M, dims=_DIMS, **kwargs):
     g = jax.random.normal(k3, (m, dims, dims)) + 1j * jax.random.normal(
         k4, (m, dims, dims)
     )
-    defaults = dict(
-        per_mode_rms=0.1,
-        knee_hz=1e-4,
-        input_energy=_e_in(10.0),
-        grid=speckle_grid((dims, dims), reference=1000.0),
-        reference_wavelength_nm=1000.0,
+    response = FocalResponse(
+        e_nom, g, speckle_grid((dims, dims), reference=1000.0), _e_in(10.0), 1000.0
     )
+    defaults = dict(per_mode_rms=0.1, knee_hz=1e-4)
     defaults.update(kwargs)
-    return SpeckleProcess(e_nom, g, **defaults)
+    return SpeckleProcess(response, **defaults)
 
 
 class TestPerModePSD:
@@ -384,14 +381,12 @@ def _oracle_process(coherent, m=6, dims=8):
     )
     rms = jnp.asarray(np.linspace(0.02, 0.08, m))
     return SpeckleProcess(
-        e_nom,
-        g,
+        FocalResponse(
+            e_nom, g, speckle_grid((e_nom).shape[-2:], 0.25, 1000.0), _e_in(5.0), 1000.0
+        ),
         per_mode_rms=rms,
         knee_hz=1e-3,
-        input_energy=_e_in(5.0),
         coherent=coherent,
-        grid=speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
-        reference_wavelength_nm=1000.0,
     )
 
 
@@ -468,9 +463,9 @@ class TestMoments:
             jnp.einsum(
                 "k,kyx->yx",
                 kappa * rms2**2,
-                jnp.abs(proc.G * jnp.sqrt(proc.grid.pixel_area)) ** 4,
+                jnp.abs(proc.response.G) ** 4 * proc.response.grid.pixel_area**2,
             )
-            / proc.input_energy**2
+            / proc.response.input_energy**2
         )
         corrected = mom.var_map + correction
         # the deficit is real: the Gaussian form overpredicts on average
@@ -505,15 +500,17 @@ class TestMoments:
             rng.standard_normal((3, 4, 4)) + 1j * rng.standard_normal((3, 4, 4))
         )
         flat = SpeckleProcess(
-            e_nom,
-            g,
+            FocalResponse(
+                e_nom,
+                g,
+                speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
+                _e_in(1.0),
+                1000.0,
+            ),
             per_mode_rms=0.1,
             knee_hz=1e-3,
-            input_energy=_e_in(1.0),
             slope=0.0,
             n_freq=2,
-            grid=speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
-            reference_wavelength_nm=1000.0,
         )
         kappa = flat.renormalization_kurtosis()
         assert kappa.shape == (3,)
@@ -733,7 +730,8 @@ class TestRealizedSpectrum:
             type(proc),
             "line_weights",
             lambda self: jnp.broadcast_to(
-                self.psd(self.frequencies_hz()), (self.G.shape[-3], self.n_freq)
+                self.psd(self.frequencies_hz()),
+                (self.response.G.shape[-3], self.n_freq),
             ),
         )
         assert np.abs(self._realized_csdf(proc) - spec).max() > 0.30
@@ -749,30 +747,21 @@ class TestFluxFractionNormalization:
         sp = _field()
         with pytest.raises(TypeError):
             AnalyticSpeckleField(
-                sp.e_nom,
-                sp.G,
+                sp.response,
                 sp.amplitudes,
                 sp.frequencies_hz,
                 sp.phases,
                 normalization=10.0,
             )
         with pytest.raises(TypeError):
-            SpeckleProcess(
-                sp.e_nom,
-                sp.G,
-                0.1,
-                1e-4,
-                normalization=10.0,
-                grid=speckle_grid((sp.e_nom).shape[-2:], 0.25, 1000.0),
-                reference_wavelength_nm=1000.0,
-            )
+            SpeckleProcess(sp.response, 0.1, 1e-4, normalization=10.0)
 
     def test_realize_is_flux_fraction_of_primitives(self):
         """realize == raw intensity delta * du^2 / E_in, from primitives."""
         sp = _field()
         t = 10.0
-        g_eps = jnp.tensordot(sp.coefficients((t) * s2d), sp.G, axes=1)
-        expected = jnp.abs(g_eps) ** 2 / sp.input_energy
+        g_eps = jnp.tensordot(sp.coefficients((t) * s2d), sp.response.G, axes=1)
+        expected = jnp.abs(g_eps) ** 2 * sp.grid.pixel_area / sp.response.input_energy
         got = sp.realize(wavelength_nm=1000.0, time_d=t * s2d).data
         np.testing.assert_allclose(
             np.asarray(got), np.asarray(expected), rtol=0, atol=1e-15
@@ -787,7 +776,7 @@ class TestFluxFractionNormalization:
         )
         np.testing.assert_allclose(
             np.asarray(contrast),
-            np.asarray(frac * sp.input_energy / (sp.grid.pixel_area * peak)),
+            np.asarray(frac * sp.response.input_energy / (sp.grid.pixel_area * peak)),
             rtol=0,
             atol=1e-15,
         )
@@ -837,14 +826,16 @@ class TestChromaticProcess:
         g = jax.random.normal(key, (w, m, n, n, 2)) @ jnp.array([1.0, 1j])
         wavelengths = jnp.array([500.0, 550.0, 600.0])
         process = SpeckleProcess(
-            e_nom,
-            g,
+            FocalResponse(
+                e_nom,
+                g,
+                speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
+                _UNIT_E_IN,
+                1000.0,
+            ),
             100.0,
             1e-4,
-            input_energy=_UNIT_E_IN,
             wavelengths_nm=wavelengths,
-            grid=speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
-            reference_wavelength_nm=1000.0,
         )
         field = process.draw(jax.random.PRNGKey(1))
         assert field.wavelengths_nm is not None
@@ -871,24 +862,28 @@ class TestChromaticProcess:
         wavelengths = jnp.array([500.0, 550.0, 600.0])
         energies = _UNIT_E_IN * jnp.array([1.0, 2.0, 4.0])
         scalar = SpeckleProcess(
-            e_nom,
-            g,
+            FocalResponse(
+                e_nom,
+                g,
+                speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
+                _UNIT_E_IN,
+                1000.0,
+            ),
             100.0,
             1e-4,
-            input_energy=_UNIT_E_IN,
             wavelengths_nm=wavelengths,
-            grid=speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
-            reference_wavelength_nm=1000.0,
         )
         vector = SpeckleProcess(
-            e_nom,
-            g,
+            FocalResponse(
+                e_nom,
+                g,
+                speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
+                energies,
+                1000.0,
+            ),
             100.0,
             1e-4,
-            input_energy=energies,
             wavelengths_nm=wavelengths,
-            grid=speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
-            reference_wavelength_nm=1000.0,
         )
         f_s = scalar.draw(jax.random.PRNGKey(1))
         f_v = vector.draw(jax.random.PRNGKey(1))
@@ -906,14 +901,16 @@ class TestChromaticProcess:
         e_nom = jnp.zeros((w, n, n), dtype=complex)
         g = jax.random.normal(key, (w, m, n, n, 2)) @ jnp.array([1.0, 1j])
         proc = SpeckleProcess.from_decorrelation(
-            e_nom,
-            g,
+            FocalResponse(
+                e_nom,
+                g,
+                speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
+                _UNIT_E_IN,
+                1000.0,
+            ),
             decorr_hours=10.0,
             total_rms=0.3,
-            input_energy=_UNIT_E_IN,
             wavelengths_nm=jnp.array([500.0, 550.0, 600.0]),
-            grid=speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
-            reference_wavelength_nm=1000.0,
         )
         assert proc.per_mode_rms.shape == (m,)
         np.testing.assert_allclose(proc.per_mode_rms, 0.3 / jnp.sqrt(m))
@@ -925,14 +922,16 @@ class TestChromaticProcess:
         e_nom = jnp.zeros((w, n, n), dtype=complex)
         g = jax.random.normal(key, (w, m, n, n, 2)) @ jnp.array([1.0, 1j])
         proc = SpeckleProcess(
-            e_nom,
-            g,
+            FocalResponse(
+                e_nom,
+                g,
+                speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
+                _UNIT_E_IN,
+                1000.0,
+            ),
             100.0,
             1e-4,
-            input_energy=_UNIT_E_IN,
             wavelengths_nm=jnp.array([500.0, 550.0, 600.0]),
-            grid=speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
-            reference_wavelength_nm=1000.0,
         )
         with pytest.raises(NotImplementedError, match="monochromatic"):
             proc.moments()
@@ -944,14 +943,16 @@ class TestChromaticProcess:
         g = jax.random.normal(key, (m, n, n, 2)) @ jnp.array([1.0, 1j])
         with pytest.raises(ValueError, match="chromatic ingredients"):
             SpeckleProcess(
-                e_nom,
-                g,
+                FocalResponse(
+                    e_nom,
+                    g,
+                    speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
+                    _UNIT_E_IN,
+                    1000.0,
+                ),
                 100.0,
                 1e-4,
-                input_energy=_UNIT_E_IN,
                 wavelengths_nm=jnp.array([500.0, 550.0]),
-                grid=speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
-                reference_wavelength_nm=1000.0,
             )
 
     def test_mono_process_unchanged(self):
@@ -960,13 +961,15 @@ class TestChromaticProcess:
         e_nom = jnp.zeros((n, n), dtype=complex)
         g = jax.random.normal(key, (m, n, n, 2)) @ jnp.array([1.0, 1j])
         process = SpeckleProcess(
-            e_nom,
-            g,
+            FocalResponse(
+                e_nom,
+                g,
+                speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
+                _UNIT_E_IN,
+                1000.0,
+            ),
             100.0,
             1e-4,
-            input_energy=_UNIT_E_IN,
-            grid=speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
-            reference_wavelength_nm=1000.0,
         )
         assert type(process.draw(jax.random.PRNGKey(1))) is AnalyticSpeckleField
 
@@ -982,7 +985,7 @@ class TestChromaticProcess:
         process = lin.to_speckle_process(per_mode_rms=100.0, knee_hz=1e-4)
         assert process.wavelengths_nm is not None
         np.testing.assert_allclose(
-            np.asarray(process.input_energy),
+            np.asarray(process.response.input_energy),
             np.asarray(chromatic_field.energy()),
             rtol=1e-12,
         )
@@ -1057,15 +1060,13 @@ def _chromatic_process(coherent, e_scale=0.5, seed=0):
     g = jax.random.normal(k1, (w, m, ny, nx, 2)) @ jnp.array([1.0, 1j])
     e = e_scale * (jax.random.normal(k2, (w, ny, nx, 2)) @ jnp.array([1.0, 1j]))
     return SpeckleProcess(
-        e,
-        g,
+        FocalResponse(
+            e, g, speckle_grid((e).shape[-2:], 0.25, 1000.0), _e_in(1.0), 1000.0
+        ),
         1.0,
         1e-3,
-        input_energy=_e_in(1.0),
         coherent=coherent,
         wavelengths_nm=jnp.array(_CROSS_WLS),
-        grid=speckle_grid((e).shape[-2:], 0.25, 1000.0),
-        reference_wavelength_nm=1000.0,
     )
 
 
@@ -1088,14 +1089,16 @@ class TestCrossBandMoments:
         cbm = proc.cross_band_moments(renormalized=renormalized)
         for i in range(len(self._WLS)):
             mono = SpeckleProcess(
-                proc.e_nom[i],
-                proc.G[i],
+                FocalResponse(
+                    proc.response.e_nom[i],
+                    proc.response.G[i],
+                    speckle_grid((proc.response.e_nom[i]).shape[-2:], 0.25, 1000.0),
+                    _e_in(1.0),
+                    1000.0,
+                ),
                 proc.per_mode_rms,
                 proc.knee_hz,
-                input_energy=_e_in(1.0),
                 coherent=coherent,
-                grid=speckle_grid((proc.e_nom[i]).shape[-2:], 0.25, 1000.0),
-                reference_wavelength_nm=1000.0,
             ).moments(renormalized=renormalized)
             np.testing.assert_allclose(
                 np.asarray(cbm.mean_map[i]),
@@ -1172,7 +1175,9 @@ class TestCrossBandMoments:
         """
         proc = _chromatic_process(coherent=False)
         cbm = proc.cross_band_moments()
-        norms = np.broadcast_to(np.asarray(proc.input_energy), (len(self._WLS),))
+        norms = np.broadcast_to(
+            np.asarray(proc.response.input_energy), (len(self._WLS),)
+        )
         denom = norms[:, None, None, None] * norms[None, :, None, None]
         wrong = (
             np.asarray(cbm.cov_map) - np.abs(np.asarray(cbm.p_pixel_map)) ** 2 / denom
@@ -1189,15 +1194,17 @@ class TestCrossBandMoments:
         e_stack = jnp.zeros((3, ny, nx), dtype=complex)
         g_stack = g0[None] * (550.0 / jnp.array(self._WLS))[:, None, None, None]
         proc = SpeckleProcess(
-            e_stack,
-            g_stack,
+            FocalResponse(
+                e_stack,
+                g_stack,
+                speckle_grid((e_stack).shape[-2:], 0.25, 1000.0),
+                _e_in(1.0),
+                1000.0,
+            ),
             1.0,
             1e-3,
-            input_energy=_e_in(1.0),
             coherent=False,
             wavelengths_nm=jnp.array(self._WLS),
-            grid=speckle_grid((e_stack).shape[-2:], 0.25, 1000.0),
-            reference_wavelength_nm=1000.0,
         )
         cov = proc.cross_band_moments().cov_map
         d = jnp.sqrt(jnp.einsum("iiyx->iyx", cov))
@@ -1264,15 +1271,17 @@ class TestCrossBandMoments:
         key = jax.random.PRNGKey(0)
         g = jax.random.normal(key, (w, m, ny, nx, 2)) @ jnp.array([1.0, 1j])
         mono = SpeckleProcess(
-            jnp.zeros((ny, nx), dtype=complex),
-            g[0],
+            FocalResponse(
+                jnp.zeros((ny, nx), dtype=complex),
+                g[0],
+                speckle_grid(
+                    (jnp.zeros((ny, nx), dtype=complex)).shape[-2:], 0.25, 1000.0
+                ),
+                _e_in(1.0),
+                1000.0,
+            ),
             1.0,
             1e-3,
-            input_energy=_e_in(1.0),
-            grid=speckle_grid(
-                (jnp.zeros((ny, nx), dtype=complex)).shape[-2:], 0.25, 1000.0
-            ),
-            reference_wavelength_nm=1000.0,
         )
         with pytest.raises(ValueError, match="chromatic"):
             mono.cross_band_moments()
@@ -1301,15 +1310,17 @@ class TestCrossBandViews:
         e_stack = jnp.zeros((3, ny, nx), dtype=complex)
         g_stack = g0[None] * (550.0 / jnp.array(self._WLS))[:, None, None, None]
         proc = SpeckleProcess(
-            e_stack,
-            g_stack,
+            FocalResponse(
+                e_stack,
+                g_stack,
+                speckle_grid((e_stack).shape[-2:], 0.25, 1000.0),
+                _e_in(1.0),
+                1000.0,
+            ),
             1.0,
             1e-3,
-            input_energy=_e_in(1.0),
             coherent=False,
             wavelengths_nm=jnp.array(self._WLS),
-            grid=speckle_grid((e_stack).shape[-2:], 0.25, 1000.0),
-            reference_wavelength_nm=1000.0,
         )
         n_eff = np.asarray(proc.cross_band_moments().n_eff())
         np.testing.assert_allclose(n_eff, 1.0, rtol=0, atol=1e-12)
@@ -1396,13 +1407,15 @@ class TestCrossBandViews:
         with pytest.raises(ValueError, match="4096"):
             proc.joint_covariance(jnp.ones((40, 40), dtype=bool))
         mono = SpeckleProcess(
-            proc.e_nom[0],
-            proc.G[0],
+            FocalResponse(
+                proc.response.e_nom[0],
+                proc.response.G[0],
+                speckle_grid((proc.response.e_nom[0]).shape[-2:], 0.25, 1000.0),
+                _e_in(1.0),
+                1000.0,
+            ),
             proc.per_mode_rms,
             proc.knee_hz,
-            input_energy=_e_in(1.0),
-            grid=speckle_grid((proc.e_nom[0]).shape[-2:], 0.25, 1000.0),
-            reference_wavelength_nm=1000.0,
         )
         with pytest.raises(ValueError, match="chromatic"):
             mono.joint_covariance(jnp.ones((1, 12), dtype=bool))
@@ -1426,13 +1439,15 @@ class TestSingleBandImpropriety:
         if e_nom is None:
             e_nom = jnp.zeros((ny, nx), dtype=complex)
         return SpeckleProcess(
-            e_nom,
-            g,
+            FocalResponse(
+                e_nom,
+                g,
+                speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
+                _e_in(1.0),
+                1000.0,
+            ),
             rms,
             1e-3,
-            input_energy=_e_in(1.0),
-            grid=speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
-            reference_wavelength_nm=1000.0,
         )
 
     def test_matches_kernels(self):
@@ -1507,13 +1522,15 @@ class TestPhotometryReport:
         if input_energy is None:
             input_energy = 1.0
         return SpeckleProcess(
-            e_nom,
-            g,
+            FocalResponse(
+                e_nom,
+                g,
+                speckle_grid((e_nom).shape[-2:], du, 1000.0),
+                input_energy,
+                1000.0,
+            ),
             1.0,
             1e-3,
-            input_energy=input_energy,
-            grid=speckle_grid((e_nom).shape[-2:], du, 1000.0),
-            reference_wavelength_nm=1000.0,
         )
 
     def test_reports_the_primitives_and_the_derived_divisor(self):
@@ -1528,7 +1545,7 @@ class TestPhotometryReport:
         rep = proc.photometry(telescope_peak=2.0)
         np.testing.assert_allclose(
             float(rep.contrast_scale),
-            float(proc.input_energy) / (proc.grid.pixel_area * 2.0),
+            float(proc.response.input_energy) / (proc.response.grid.pixel_area * 2.0),
             rtol=1e-12,
         )
 
@@ -1563,14 +1580,16 @@ class TestPhotometryReport:
         key = jax.random.PRNGKey(0)
         g_stack = jax.random.normal(key, (2, 2, 4, 4, 2)) @ jnp.array([1.0, 1j])
         proc = SpeckleProcess(
-            e_stack,
-            g_stack,
+            FocalResponse(
+                e_stack,
+                g_stack,
+                speckle_grid((e_stack).shape[-2:], 0.25, 1000.0),
+                jnp.array([1.0, 2.0]),
+                1000.0,
+            ),
             1.0,
             1e-3,
-            input_energy=jnp.array([1.0, 2.0]),
             wavelengths_nm=wls,
-            grid=speckle_grid((e_stack).shape[-2:], 0.25, 1000.0),
-            reference_wavelength_nm=1000.0,
         )
         rep = proc.photometry()
         assert np.asarray(rep.input_energy).shape == (2,)
@@ -1624,7 +1643,7 @@ def test_shared_law_matches_density_parent_formula(record_property):
     assert image.grid == grid
     assert image.measure == "per_pixel"
     assert image.quantity == "stellar_flux_fraction"
-    np.testing.assert_allclose(field.G, g * 0.3, rtol=4 * np.finfo(float).eps, atol=0)
+    np.testing.assert_array_equal(field.response.G, g)
     record_property("parent_pixel", float(parent[0, 0]))
     record_property("shared_pixel", float(image.data[0, 0]))
     record_property("max_abs_difference", float(np.max(np.abs(image.data - parent))))
@@ -1651,11 +1670,7 @@ def test_synthesis_clock_origin_and_time_axes():
     field = _field(coherent=True)
     # Static epoch is a constructor argument, never a float32 device scalar.
     shifted = AnalyticSpeckleField(
-        e_nom=field.e_nom,
-        G=field.G,
-        input_energy=field.input_energy,
-        grid=field.grid,
-        reference_wavelength_nm=field.reference_wavelength_nm,
+        field.response,
         epoch_d=17.0,
         amplitudes=field.amplitudes,
         frequencies_hz=field.frequencies_hz,

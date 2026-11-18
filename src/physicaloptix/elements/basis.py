@@ -48,6 +48,11 @@ class ModeBasis(eqx.Module):
         """Number of modes in the stack."""
         return self.B.shape[0]
 
+    @property
+    def grid_shape(self):
+        """Spatial shape of the sampled modes."""
+        return self.B.shape[-2:]
+
     def opd(self):
         """The coefficient-weighted map ``coeffs . B``, shape ``(y, x)``."""
         return jnp.tensordot(self.coeffs, self.B, axes=1)

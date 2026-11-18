@@ -9,6 +9,7 @@ import pytest
 from conftest import TEST_FRAME, speckle_grid
 from hwoutils.constants import s2d
 from hwoutils.grids import PixelGrid
+from optixstuff import FocalResponse
 
 from physicaloptix.speckle import SpeckleProcess
 from physicaloptix.stats import (
@@ -98,13 +99,15 @@ class TestMonteCarloConsistency:
         )
         rms = 0.4
         process = SpeckleProcess(
-            e_nom,
-            g,
+            FocalResponse(
+                e_nom,
+                g,
+                speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
+                0.25**2,
+                1000.0,
+            ),
             per_mode_rms=rms,
             knee_hz=1e-3,
-            input_energy=0.25**2,  # derived normalization 1.0 at default du
-            grid=speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
-            reference_wavelength_nm=1000.0,
         )
         keys = jax.random.split(jax.random.PRNGKey(0), 400)
         # Each draw is one frozen realization; sample its eps at a fixed time.

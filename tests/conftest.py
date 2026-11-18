@@ -12,6 +12,7 @@ from hwoutils.constants import d2s
 from hwoutils.grids import Frame, PixelGrid
 from hwoutils.spectral import Band
 from hypothesis import settings
+from optixstuff import FocalResponse
 
 from physicaloptix.core import Field, PlaneKind, Spectrum
 from physicaloptix.core.grid import _grid_axis
@@ -246,13 +247,9 @@ def analytic_from_density(
     from physicaloptix.speckle import SpeckleProcess
 
     process = SpeckleProcess(
-        e_nom,
-        G,
+        FocalResponse(e_nom, G, grid, input_energy, reference_wavelength_nm),
         1.0,
         1e-3,
-        input_energy=input_energy,
-        grid=grid,
-        reference_wavelength_nm=reference_wavelength_nm,
         epoch_d=epoch_d,
         coherent=coherent,
         wavelengths_nm=wavelengths_nm,

@@ -34,6 +34,7 @@ import hwostyle
 import matplotlib.pyplot as plt
 import numpy as np
 from IPython.display import HTML
+from optixstuff import FocalResponse
 
 import eyepiece.mpl as mpl
 from eyepiece.prepared import find_element
@@ -64,8 +65,8 @@ drift on top of it with periods between half an hour and two hours.
 
 As the protocol requires, `realize` returns only the change in intensity over
 the deterministic floor $|E_\mathrm{nom}|^2$, in flux-fraction units. The
-field also carries per-pixel `e_nom` and `input_energy`, which is what lets the
-preparation add the floor back. The field counts its own evaluations so the
+field also carries a `FocalResponse` so that preparation can reconstruct
+the floor from the nominal amplitude density and input energy. The field counts its own evaluations so the
 page can show when the science runs.
 
 ```{code-cell} python
@@ -81,13 +82,13 @@ half_pixel = np.exp(-1j * np.pi * (uu + vv) / N_PIX)
 
 
 def focal(pupil_field):
-    """Far field of a pupil-plane field, scaled by the clear aperture's area."""
+    """Far-field amplitude density of a pupil field on the native lod grid."""
     shifted = np.fft.ifftshift(pupil_field * half_pixel)
-    return np.fft.fftshift(np.fft.fft2(shifted)) / pupil.sum()
+    return np.fft.fftshift(np.fft.fft2(shifted)) / (pupil.sum() * PIXSCALE_LOD)
 
 
 # The peak of the unocculted PSF on this grid, which references contrast.
-TELESCOPE_PEAK = float(np.max(np.abs(focal(pupil)) ** 2)) / PIXSCALE_LOD**2
+TELESCOPE_PEAK = float(np.max(np.abs(focal(pupil)) ** 2))
 
 
 class DriftingSpeckles:
@@ -95,8 +96,6 @@ class DriftingSpeckles:
 
     from hwoutils.grids import Frame, PixelGrid
     grid = PixelGrid.focal(N_PIX, PIXSCALE_LOD, Frame(500.0, 1.0, "circumscribed"))
-    # Total focal-plane flux of the clear aperture, in the units of |e_nom|^2.
-    input_energy = N_PIX**2 / pupil.sum()
 
     def __init__(self, n_ripples=12, seed=0):
         rng = np.random.default_rng(seed)
@@ -120,7 +119,14 @@ class DriftingSpeckles:
         self.amplitude_rad = 1.5e-4 * rng.uniform(0.5, 1.0, n_ripples)
         self.period_s = rng.uniform(1800.0, 7200.0, n_ripples)
         self.phase_rad = rng.uniform(0.0, 2.0 * np.pi, n_ripples)
-        self.e_nom = self._field(self.static_rad)
+        # Preparation only needs the nominal field and the clear-aperture flux.
+        self.response = FocalResponse(
+            self._field(self.static_rad),
+            np.empty((0, *self.grid.shape), dtype=complex),
+            self.grid,
+            N_PIX**2 / pupil.sum(),
+            self.grid.frame.reference_wavelength_nm,
+        )
         self.calls = 0
 
     def _field(self, phase_rad):
@@ -138,8 +144,9 @@ class DriftingSpeckles:
         phase = self.static_rad + np.tensordot(drift, self.ripples, axes=1)
         total = np.abs(self._field(phase)) ** 2
         from hwoutils.grids import Image
-        return Image((total - np.abs(self.e_nom) ** 2) / self.input_energy,
-                     self.grid, (), "per_pixel", "stellar_flux_fraction")
+        nominal = np.abs(np.asarray(self.response.e_nom)) ** 2
+        delta = (total - nominal) * self.grid.pixel_area / self.response.input_energy
+        return Image(delta, self.grid, (), "per_pixel", "stellar_flux_fraction")
 
 
 field = DriftingSpeckles()
@@ -149,7 +156,7 @@ field = DriftingSpeckles()
 
 Thirty exposures arrive a few minutes apart, with one forty-minute pause in
 the middle. `prepare_speckles` evaluates the field once per epoch into one
-allocated cube, adds the floor reconstructed from per-pixel `e_nom` and `input_energy`
+allocated cube, adds the floor reconstructed from the focal response
 (`include_floor=True` is the default), and divides by `telescope_peak`, the
 peak of the unocculted PSF, so the frames are contrast. `trace=(3.0, 11.0)`
 computes the mean over that annulus in $\lambda/D$ for every frame, from the

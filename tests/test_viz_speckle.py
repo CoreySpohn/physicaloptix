@@ -14,6 +14,8 @@ import pytest
 # collectible when the viz extra is present.
 pytest.importorskip("eyepiece")
 
+from optixstuff import FocalResponse
+
 from physicaloptix.speckle import SpeckleMoments, SpeckleProcess
 from physicaloptix.viz import plot_process, plot_speckle_ensemble
 
@@ -59,14 +61,12 @@ def _process(npix=8, m=3, knee_hz=1e-4, slope=-2.0, **kwargs):
         * (rng.normal(size=(m, npix, npix)) + 1j * rng.normal(size=(m, npix, npix)))
     )
     return SpeckleProcess(
-        e_nom,
-        g,
+        FocalResponse(
+            e_nom, g, speckle_grid((e_nom).shape[-2:], 0.25, 500.0), 1.0, 500.0
+        ),
         per_mode_rms=1.0,
         knee_hz=knee_hz,
         slope=slope,
-        input_energy=1.0,
-        grid=speckle_grid((e_nom).shape[-2:], 0.25, 500.0),
-        reference_wavelength_nm=500.0,
         **kwargs,
     )
 
@@ -260,10 +260,10 @@ def _capturing_law():
 
 def _hand_moments(process, *, gamma, p):
     """A SpeckleMoments whose kernels differ unmistakably from the process's."""
-    shape = np.asarray(process.e_nom).shape
+    shape = np.asarray(process.response.e_nom).shape
     ones = jnp.ones(shape)
     return SpeckleMoments(
-        grid=process.grid,
+        grid=process.response.grid,
         mean_map=ones,
         var_map=ones,
         gamma_pixel_map=ones * gamma,
@@ -532,13 +532,15 @@ def test_field_ellipse_consumes_delta_e_from_a_real_field():
     times = np.linspace(0.0, 3600.0, 64)
     draws = np.stack(
         [
-            np.asarray(jnp.einsum("m,myx->yx", field.coefficients(t * s2d), field.G))
+            np.asarray(
+                jnp.einsum("m,myx->yx", field.coefficients(t * s2d), field.response.G)
+            )
             for t in times
         ]
     )
     _, ax = plt.subplots()
     result = plot_field_ellipse(
-        (2, 3), draws=draws, e_nom=np.asarray(process.e_nom), ax=ax
+        (2, 3), draws=draws, e_nom=np.asarray(process.response.e_nom), ax=ax
     )
     assert result.artists["cloud"].get_offsets().shape == (len(times), 2)
     assert result.artists["ellipse"].get_width() > 0.0

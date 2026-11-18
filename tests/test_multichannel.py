@@ -1,7 +1,5 @@
 """Tests for the shared-trunk multi-channel linearization."""
 
-import equinox as eqx
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -123,30 +121,27 @@ def _interior_system(npix=NPIX):
     return system, field, basis
 
 
-def _true_channel_jacobian(system, field, name, screen_stage):
-    """jacfwd truth: d(channel field)/d(screen coeffs) on the flattened path."""
+def _channel_jacobian(system, field, name, screen_stage):
+    """Differentiate the same command on the corresponding single path."""
     flat, index_map = system.as_channel_path(name)
-    idx = index_map[screen_stage]
-
-    def run(eps):
-        with_eps = eqx.tree_at(lambda p: p.stages[idx].op.basis.coeffs, flat, eps)
-        out, _ = with_eps.propagate(field)
-        return out.data
-
-    n = flat.stages[idx].op.basis.n_modes
-    jac = jax.jacfwd(run)(jnp.zeros(n))
-    return jnp.moveaxis(jac, -1, 0)
+    stage = flat.stages[index_map[screen_stage]].name
+    return flat.linearize(
+        field, wavelength_nm=WL, method="jacfwd", perturbation_stage=stage
+    ).G
 
 
 class TestLinearizeShared:
     def test_entrance_screen_matches_jacfwd_per_channel(self):
+        """Fails if a chunked trunk derivative differs from either channel path."""
         system, field, _basis = _entrance_system()
-        mcl = linearize_shared(system, field, wavelength_nm=WL, shared_stage="screen")
+        mcl = linearize_shared(
+            system, field, wavelength_nm=WL, shared_stage="screen", chunk_size=2
+        )
         assert set(mcl.names) == {"sci", "wfs"}
         # the shared photometric primitive is recorded once for all channels
         assert mcl.input_energy == pytest.approx(float(field.energy()))
         for name in mcl.names:
-            truth = _true_channel_jacobian(system, field, name, "screen")
+            truth = _channel_jacobian(system, field, name, "screen")
             got = mcl[name].g_shared
             rel = float(jnp.linalg.norm(got - truth) / jnp.linalg.norm(truth))
             assert rel < 1e-10
@@ -166,7 +161,7 @@ class TestLinearizeShared:
     def test_interior_screen_matches_jacfwd_and_entrance_injection_is_wrong(self):
         system, field, basis = _interior_system()
         mcl = linearize_shared(system, field, wavelength_nm=WL, shared_stage="screen")
-        truth = _true_channel_jacobian(system, field, "sci", "screen")
+        truth = _channel_jacobian(system, field, "sci", "screen")
         got = mcl["sci"].g_shared
         rel = float(jnp.linalg.norm(got - truth) / jnp.linalg.norm(truth))
         assert rel < 1e-10

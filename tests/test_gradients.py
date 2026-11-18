@@ -74,7 +74,9 @@ def _masked_loss(path, field, mask, dm_stage):
     idx = [s.name for s in path.stages].index(dm_stage)
 
     def loss(coeffs):
-        commanded = eqx.tree_at(lambda p: p.stages[idx].op.basis.coeffs, path, coeffs)
+        commanded = eqx.tree_at(
+            lambda p: p.stages[idx].op, path, path.stages[idx].op.with_command(coeffs)
+        )
         out, _ = commanded.propagate(field)
         return jnp.sum(jnp.abs(out.data) ** 2 * mask)
 

@@ -469,7 +469,11 @@ def test_explicit_floor_is_added_in_flux_fraction_units(protocol_fake):
 def test_analytic_field_reconstructs_its_own_floor(analytic_speckle_field):
     field = analytic_speckle_field(coherent=True)
     times = _times(3)
-    expected = np.abs(np.asarray(field.e_nom)) ** 2 / float(field.input_energy)
+    expected = (
+        np.abs(np.asarray(field.response.e_nom)) ** 2
+        * field.grid.pixel_area
+        / float(field.response.input_energy)
+    )
     bare = prepare_speckles(
         field, times_s=times, wavelength_nm=500.0, include_floor=False
     )
@@ -498,12 +502,15 @@ def test_chromatic_field_uses_the_requested_node_floor():
             500.0,
         ),
         reference_wavelength_nm=500.0,
+        coherent=True,
         wavelengths_nm=jnp.asarray([500.0, 600.0]),
     )
     sequence = prepare_speckles(field, times_s=_times(2), wavelength_nm=500.0)
     expected = (
         field.realize(wavelength_nm=500.0).data
-        + np.abs(field.e_nodes[0]) ** 2 / field.energy_nodes[0]
+        + np.abs(field.response.e_nom[0]) ** 2
+        * field.grid.pixel_area
+        / field.response.input_energy[0]
     )
     np.testing.assert_allclose(sequence.frame(0).data, expected, rtol=1e-14, atol=0)
 
@@ -529,7 +536,9 @@ def test_telescope_peak_rescales_by_normalization_over_peak(analytic_speckle_fie
     )
     ratio = contrast.frame(0).data / flux.frame(0).data
     assert np.allclose(
-        ratio, float(field.input_energy) / (field.grid.pixel_area * peak), rtol=1e-6
+        ratio,
+        float(field.response.input_energy) / (field.grid.pixel_area * peak),
+        rtol=1e-6,
     )
     assert contrast.frame(0).quantity == "contrast delta"
 

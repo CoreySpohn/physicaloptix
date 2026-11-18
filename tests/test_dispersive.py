@@ -1,6 +1,5 @@
 """Tests for DispersiveScreen (chromatic per-element response)."""
 
-import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -126,7 +125,7 @@ class TestDispersiveResponse:
         field = _flat_field(grid)
 
         def loss(coeffs):
-            s = eqx.tree_at(lambda m: m.basis.coeffs, screen, coeffs)
+            s = screen.with_command(coeffs)
             return jnp.sum(jnp.abs(s(field).data) ** 2)
 
         g = jax.grad(loss)(basis.coeffs)

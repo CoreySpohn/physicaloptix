@@ -1,6 +1,7 @@
 """DispersiveScreen: a mode-basis stage with a chromatic complex response."""
 
 import dataclasses
+from typing import Self
 
 import equinox as eqx
 import jax
@@ -15,11 +16,11 @@ from physicaloptix.core import (
     PlaneKind,
     validate_field,
 )
-from physicaloptix.elements.base import Element
+from physicaloptix.elements.base import AbstractCommandableElement
 from physicaloptix.elements.basis import ModeBasis
 
 
-class DispersiveScreen(Element, AbstractChromaticOp):
+class DispersiveScreen(AbstractCommandableElement, AbstractChromaticOp):
     """A pupil-plane response ``exp(sum_k c_k D_k(lambda) B_k)`` from a mode basis.
 
     The chromatic generalization of ``PhaseScreen``: instead of the OPD law
@@ -98,6 +99,20 @@ class DispersiveScreen(Element, AbstractChromaticOp):
         if not np.all(np.diff(table) > 0):
             raise ValueError("table_wavelengths_nm must be strictly increasing")
 
+    @property
+    def command(self) -> Array:
+        """The mode coefficients supplied to the dispersive kernel."""
+        return self.basis.coeffs
+
+    @property
+    def command_kind(self) -> str:
+        """The underlying mode basis kind."""
+        return self.basis.kind
+
+    def with_command(self, command: Array) -> Self:
+        """Return a screen with the specified command."""
+        return eqx.tree_at(lambda screen: screen.basis.coeffs, self, command)
+
     def kernel_at(self, wavelengths_nm):
         """Interpolated kernel ``D_k`` at given wavelengths, shape ``(m, w)``.
 
@@ -129,12 +144,10 @@ class DispersiveScreen(Element, AbstractChromaticOp):
         )
         if field.spectrum is None:
             d = self.kernel_at(self.wavelength_nm)[:, 0]
-            log_response = jnp.tensordot(self.basis.coeffs * d, self.basis.B, axes=1)
+            log_response = jnp.tensordot(self.command * d, self.basis.B, axes=1)
         else:
             d = self.kernel_at(field.spectrum.nodes_nm)
-            log_response = jnp.einsum(
-                "m,mw,myx->wyx", self.basis.coeffs, d, self.basis.B
-            )
+            log_response = jnp.einsum("m,mw,myx->wyx", self.command, d, self.basis.B)
         return Field(
             data=field.data * jnp.exp(log_response),
             grid=field.grid,

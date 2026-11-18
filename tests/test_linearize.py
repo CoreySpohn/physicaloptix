@@ -9,10 +9,17 @@ from conftest import TEST_FRAME
 from hwoutils.constants import s2d
 from hwoutils.grids import PixelGrid
 from hwoutils.spectral import Band
+from jax.test_util import check_grads
 
+from physicaloptix import command_response
 from physicaloptix.core import Field, PlaneKind, Spectrum
 from physicaloptix.core.grid import _grid_axis
-from physicaloptix.elements import DispersiveScreen, ModeBasis, SampledOptic
+from physicaloptix.elements import (
+    DispersiveScreen,
+    ModeBasis,
+    PhaseScreen,
+    SampledOptic,
+)
 from physicaloptix.linearize import linearity_residual, linearize, linearize_stages
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.sources import broadcast_to_spectrum
@@ -21,6 +28,24 @@ from physicaloptix.trains import MirrorSpec, build_mirror_train, synthesize_psd_
 from physicaloptix.transforms import Fraunhofer
 
 WL_NM = 500.0
+
+
+def test_command_response_jvp_has_correct_tangent_derivative(mono_field, opd_basis):
+    """Fails if the command JVP's forward or reverse derivative is wrong."""
+    screen = PhaseScreen(opd_basis, mono_field.grid, wavelength_nm=WL_NM)
+    screen = screen.with_command(jnp.zeros_like(screen.command, dtype=int))
+    path = OpticalPath(stages=(Stage("screen", screen),))
+    with jax.enable_x64():
+        response = command_response(path, mono_field, "screen")
+        check_grads(
+            response.jvp,
+            (jnp.array([0.5, -1.0, 0.75, 1.5]),),
+            order=2,
+            modes=("fwd", "rev"),
+            eps=1e-4,
+            atol=1e-4,
+            rtol=1e-4,
+        )
 
 
 @pytest.fixture
@@ -112,10 +137,10 @@ class TestLinearizationProduct:
         assert lin.grid.step == 0.5  # the focal grid's dx
         assert lin.input_energy == pytest.approx(float(field.energy()))
         proc = lin.to_speckle_process(per_mode_rms=1.0, knee_hz=1e-3)
-        assert proc.grid.step == 0.5
-        assert proc.grid == lin.grid
+        assert proc.response.grid.step == 0.5
+        assert proc.response.grid == lin.grid
         np.testing.assert_allclose(
-            proc.draw(jax.random.PRNGKey(0)).G, lin.G * 0.5, rtol=0, atol=0
+            proc.draw(jax.random.PRNGKey(0)).response.G, lin.G, rtol=0, atol=0
         )
 
     def test_auto_resolves_by_memory_budget(self, setup):
@@ -152,7 +177,7 @@ class TestSpeckleBridge:
         lin = path.linearize(field, basis, wavelength_nm=WL_NM)
         process = lin.to_speckle_process(decorr_hours=1.0, total_rms=0.01)
         assert isinstance(process, SpeckleProcess)
-        np.testing.assert_array_equal(np.asarray(process.G), np.asarray(lin.G))
+        np.testing.assert_array_equal(np.asarray(process.response.G), np.asarray(lin.G))
         speckle_field = process.draw(jax.random.PRNGKey(0))
         delta = speckle_field.realize(wavelength_nm=WL_NM, time_d=0.0 * s2d).data
         assert delta.shape == lin.e_nom.shape
@@ -326,9 +351,8 @@ class TestChromaticLinearize:
             rtol=0,
             atol=64 * np.finfo(float).eps * float(jnp.max(jnp.abs(parent))),
         )
-        from optixstuff import LinearSpeckleField
-
-        scaled = LinearSpeckleField.realize(field, wavelength_nm=wavelengths[-1]).data
+        reference = field.at_wavelength(field.response.reference_wavelength_nm)
+        scaled = reference.realize(wavelength_nm=wavelengths[-1]).data
         relative = float(
             jnp.linalg.norm(exact_node - scaled) / jnp.linalg.norm(exact_node)
         )
@@ -361,11 +385,11 @@ class TestChromaticLinearize:
         )
 
         def run(coeffs):
-            p = eqx.tree_at(lambda q: q.stages[0].op.basis.coeffs, path, coeffs)
+            p = eqx.tree_at(lambda q: q.stages[0].op, path, screen.with_command(coeffs))
             out, _ = p.propagate(chromatic_field)
             return out.data
 
-        jac = jax.jacfwd(run)(screen.basis.coeffs)  # (w, y, x, m)
+        jac = jax.jacfwd(run)(screen.command)  # (w, y, x, m)
         g_ad = jnp.moveaxis(jac, -1, 1)  # (w, m, y, x)
         np.testing.assert_allclose(
             np.asarray(lin.G), np.asarray(g_ad), rtol=0, atol=1e-12
@@ -634,9 +658,9 @@ class TestPerturbationStage:
         index = [s.name for s in path.stages].index("q_drift")
         eps = 1e-4
         bumped = eqx.tree_at(
-            lambda p: p.stages[index].op.basis.coeffs,
+            lambda p: p.stages[index].op,
             path,
-            jnp.zeros(2).at[0].set(eps),
+            path.stage("q_drift").with_command(jnp.zeros(2).at[0].set(eps)),
         )
         e_plus, _ = bumped.propagate(field)
         e_zero, _ = path.propagate(field)
@@ -670,9 +694,8 @@ class TestPerturbationStage:
         # A mono control at a band-edge wavelength is NOT comparable here:
         # PhaseScreen carries a static wavelength_nm and the train's z was
         # derived from alpha at the reference wavelength, so a mono rebuild
-        # changes the physics. The independent check is method-vs-method on
-        # the same chromatic path: jvp and jacfwd share no code path beyond
-        # the perturbed map itself.
+        # changes the physics. Compare single-column and batched
+        # materialization on the same chromatic path.
         path, field = _train_and_field(nlam=3)
         wavelengths = np.asarray(field.spectrum.nodes_nm)
         lin_fwd = linearize(

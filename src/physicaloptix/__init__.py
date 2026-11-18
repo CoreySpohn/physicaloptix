@@ -29,6 +29,7 @@ from physicaloptix.apertures import (
     rasterize_segments,
 )
 from physicaloptix.coatings import multilayer_response, sellmeier, thickness_kernel
+from physicaloptix.command import CommandResponse, command_response
 from physicaloptix.core import (
     AbstractChromaticOp,
     ChromaticTable,
@@ -46,6 +47,7 @@ from physicaloptix.diagnostics import (
 )
 from physicaloptix.diff import diff_spec
 from physicaloptix.elements import (
+    AbstractCommandableElement,
     DispersiveScreen,
     ModeBasis,
     MultiScaleVortex,
@@ -108,12 +110,14 @@ from physicaloptix.transforms import Fraunhofer, Fresnel, cmft_bwd, cmft_fwd
 __all__ = [
     "REFLECTION_OPD_FACTOR",
     "AbstractChromaticOp",
+    "AbstractCommandableElement",
     "AnalyticSpeckleField",
     "BeamSplitter",
     "Branch",
     "ChannelLinearization",
     "ChromaticAnalyticSpeckleField",
     "ChromaticTable",
+    "CommandResponse",
     "CrossBandMoments",
     "DispersiveScreen",
     "Field",
@@ -150,6 +154,7 @@ __all__ = [
     "build_mirror_train",
     "cmft_bwd",
     "cmft_fwd",
+    "command_response",
     "detector_scene",
     "diff_spec",
     "eac1_primary",

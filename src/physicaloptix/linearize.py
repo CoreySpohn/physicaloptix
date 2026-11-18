@@ -38,9 +38,12 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.constants import two_pi
 from hwoutils.grids import PixelGrid
 from jaxtyping import Array
+from optixstuff import FocalResponse
 
+from physicaloptix.command import command_response
 from physicaloptix.core import Field
 from physicaloptix.speckle import SpeckleProcess
 
@@ -81,7 +84,7 @@ class Linearization(eqx.Module):
             table, shape ``(m, w)``, for a chromatic linearization (whether
             supplied explicitly or derived from ``basis.kind``); ``None``
             for a mono one.
-        perturbation_stage: The name of the stage whose own ``ModeBasis``
+        perturbation_stage: The name of the stage whose optical command
             was differentiated (the plane-aware route), or ``None`` for the
             input-plane injection route.
     """
@@ -90,7 +93,7 @@ class Linearization(eqx.Module):
     G: Array
     wavelength_nm: float = eqx.field(static=True)
     method: str = eqx.field(static=True)
-    kind: str = eqx.field(static=True)
+    kind: str | None = eqx.field(static=True)
     grid: PixelGrid
     input_energy: float | tuple[float, ...] = eqx.field(static=True)
     wavelengths_nm: Array | None = None
@@ -134,34 +137,30 @@ class Linearization(eqx.Module):
             The parameter object whose ``draw(key)`` yields
             ``AnalyticSpeckleField`` realizations.
         """
-        kwargs.setdefault("grid", self.grid)
-        kwargs.setdefault(
+        grid = kwargs.pop("grid", self.grid)
+        reference_wavelength_nm = kwargs.pop(
             "reference_wavelength_nm",
             self.wavelength_nm
             if self.wavelengths_nm is None
-            else self.grid.frame.reference_wavelength_nm,
+            else grid.frame.reference_wavelength_nm,
         )
-        kwargs.setdefault("input_energy", self.input_energy)
+        response = FocalResponse(
+            self.e_nom,
+            self.G,
+            grid,
+            jnp.asarray(kwargs.pop("input_energy", self.input_energy), dtype=float),
+            reference_wavelength_nm,
+        )
         kwargs.setdefault("wavelengths_nm", self.wavelengths_nm)
         if decorr_hours is not None:
             return SpeckleProcess.from_decorrelation(
-                self.e_nom,
-                self.G,
-                decorr_hours=decorr_hours,
-                total_rms=total_rms,
-                **kwargs,
+                response, decorr_hours=decorr_hours, total_rms=total_rms, **kwargs
             )
-        return SpeckleProcess(
-            self.e_nom,
-            self.G,
-            per_mode_rms,
-            knee_hz,
-            **kwargs,
-        )
+        return SpeckleProcess(response, per_mode_rms, knee_hz, **kwargs)
 
 
 def _phase_factor(wavelength_nm):
-    return 1j * 2.0 * jnp.pi / wavelength_nm
+    return 1j * two_pi / wavelength_nm
 
 
 def _replace_data(field, data):
@@ -226,38 +225,6 @@ def perturbed_map(
     return run
 
 
-def _perturbation_run(
-    path, field, basis, wavelength_nm, *, stage_index, wavelengths_nm, dispersion
-):
-    """The map ``run`` for the jvp/jacfwd routes.
-
-    ``stage_index is None`` is the input-plane injection (``perturbed_map``);
-    otherwise the map is an additive coefficient swap on that stage's own
-    ``ModeBasis``, propagated through the remainder of the path -- correct
-    for modes living at any plane, not just the input plane.
-    """
-    if stage_index is None:
-        return perturbed_map(
-            path,
-            field,
-            basis,
-            wavelength_nm,
-            wavelengths_nm=wavelengths_nm,
-            dispersion=dispersion,
-        )
-    base_coeffs = path.stages[stage_index].op.basis.coeffs
-
-    def run(delta):
-        swapped = eqx.tree_at(
-            lambda p: p.stages[stage_index].op.basis.coeffs,
-            path,
-            base_coeffs + delta,
-        )
-        return swapped.propagate(field)[0].data
-
-    return run
-
-
 def linearize(
     path,
     field,
@@ -280,7 +247,7 @@ def linearize(
 
     Two ways to place the perturbed modes: ``basis`` injects them at the
     INPUT plane ``field`` is given at; ``perturbation_stage`` instead
-    differentiates with respect to a named stage's OWN ``ModeBasis.coeffs``
+    differentiates with respect to a named stage's current command
     (an additive delta around its current values, propagated through the
     remainder of the path). The stage route is correct for modes living at
     any plane, at the cost of requiring ``method="jvp"`` or ``"jacfwd"``
@@ -320,8 +287,8 @@ def linearize(
             ``"amplitude"``). Only meaningful with ``wavelengths_nm`` set.
             Not used by the ``perturbation_stage`` route (the stage's own
             per-wavelength physics runs unchanged).
-        perturbation_stage: Name of a stage in ``path.stages`` whose own
-            ``ModeBasis.coeffs`` to differentiate, instead of injecting
+        perturbation_stage: Name of a stage in ``path.stages`` whose command
+            to differentiate, instead of injecting
             ``basis`` at the input plane. Mutually exclusive with ``basis``;
             ``method="analytic"``/``"auto"`` raise ``NotImplementedError``
             for this route.
@@ -329,18 +296,12 @@ def linearize(
     Returns:
         A ``Linearization``.
     """
-    stage_index = None
     if perturbation_stage is not None:
         if basis is not None:
             raise ValueError(
                 "pass either basis (input-plane injection) or "
                 "perturbation_stage (a stage's own modes), not both"
             )
-        names = [stage.name for stage in path.stages]
-        if perturbation_stage not in names:
-            raise ValueError(f"no stage named {perturbation_stage!r}")
-        stage_index = names.index(perturbation_stage)
-        basis = path.stages[stage_index].op.basis
         if method in ("auto", "analytic"):
             raise NotImplementedError(
                 "analytic remaining-path injection is not built; use "
@@ -376,13 +337,23 @@ def linearize(
                 "wavelength_nm is required for a monochromatic linearization"
             )
 
-    e_nom_field, _ = path.propagate(field)
-    n_modes = basis.n_modes
-
+    if method not in ("auto", "analytic", "jvp", "jacfwd"):
+        raise ValueError(f"method must be auto/analytic/jvp/jacfwd, got {method!r}")
     resolved = method
+    if perturbation_stage is not None:
+        response = command_response(path, field, perturbation_stage)
+        e_nom_field = response._propagate(response.element.command)
+        kind = response.element.command_kind
+        if resolved == "jvp" and chunk_size is None:
+            chunk_size = 1
+        g = response.materialize(chunk_size)
+    else:
+        e_nom_field, _ = path.propagate(field)
+        kind = basis.kind
+
     if method == "auto":
         resolved = "analytic"
-        estimate = n_modes * field.data.size * 16
+        estimate = basis.n_modes * field.data.size * 16
         if chunk_size is None and estimate > memory_budget_bytes:
             per_mode = field.data.size * 16
             chunk_size = max(1, int(memory_budget_bytes // per_mode))
@@ -418,39 +389,29 @@ def linearize(
             g = jnp.concatenate(
                 [
                     columns(basis.B[s : s + chunk_size], factors[s : s + chunk_size])
-                    for s in range(0, n_modes, chunk_size)
+                    for s in range(0, basis.n_modes, chunk_size)
                 ]
             )
-    elif resolved == "jvp":
-        run = _perturbation_run(
+    elif perturbation_stage is None:
+        run = perturbed_map(
             path,
             field,
             basis,
             wavelength_nm,
-            stage_index=stage_index,
             wavelengths_nm=wavelengths_nm,
             dispersion=dispersion,
         )
+        n_modes = basis.n_modes
         zero = jnp.zeros(n_modes)
-        cols = [
-            jax.jvp(run, (zero,), (jnp.zeros(n_modes).at[k].set(1.0),))[1]
-            for k in range(n_modes)
-        ]
-        g = jnp.stack(cols)
-    elif resolved == "jacfwd":
-        run = _perturbation_run(
-            path,
-            field,
-            basis,
-            wavelength_nm,
-            stage_index=stage_index,
-            wavelengths_nm=wavelengths_nm,
-            dispersion=dispersion,
-        )
-        jacobian = jax.jacfwd(run)(jnp.zeros(n_modes))
-        g = jnp.moveaxis(jacobian, -1, 0)
-    else:
-        raise ValueError(f"method must be auto/analytic/jvp/jacfwd, got {method!r}")
+        if resolved == "jvp":
+            g = jnp.stack(
+                [
+                    jax.jvp(run, (zero,), (jnp.zeros(n_modes).at[k].set(1.0),))[1]
+                    for k in range(n_modes)
+                ]
+            )
+        else:
+            g = jnp.moveaxis(jax.jacfwd(run)(zero), -1, 0)
 
     # All three methods produce a leading mode axis; under the chromatic map
     # that is (m, w, y, x), normalized here to the documented (w, m, y, x).
@@ -477,7 +438,7 @@ def linearize(
         G=g,
         wavelength_nm=float(wavelength_nm),
         method=resolved,
-        kind=basis.kind,
+        kind=kind,
         grid=e_nom_field.grid,
         input_energy=input_energy,
         wavelengths_nm=wavelengths_nm,

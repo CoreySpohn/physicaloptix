@@ -253,10 +253,9 @@ stated stellar peak photon rate at the caller.
 When a normalization crosses a library seam, pass the primitive references
 (input energy, pixel scale), never a pre-derived scalar: derived ratios such
 as the peak-pixel fraction are sampling-dependent, and a bare number carries
-no record of which convention it encodes. This is now the implemented
-contract: speckle constructors take `input_energy` (there is no raw
-`normalization` kwarg -- legacy call sites fail loudly), and npz/YIP exports
-record `input_energy` and complete grid/frame provenance beside their maps.
+no record of which convention it encodes. `FocalResponse` carries
+`input_energy` and grid/frame provenance with the amplitude densities.
+The npz/YIP exports record those same references alongside their maps.
 
 A legacy *call* fails loudly; a legacy *value* does not. Passing a peak
 intensity where a total energy belongs is type-correct, so the process builds
@@ -283,16 +282,14 @@ wavefront error over the aperture disk for Zernike and Fourier modes, and
 over-aperture RMS is smaller by the square root of the segment-to-aperture
 area ratio. Several unit coefficients add in quadrature.
 
-An OPD of $h$ nanometers is a phase of $2\pi h/\lambda$;
-{func}`~physicaloptix.linearize.linearize` applies that factor when it builds the
-sensitivity `G`, and it injects the perturbation **at the input field's
-plane** -- linearizing about an interior stage means linearizing the
-sub-path from that stage onward. Coefficient units follow the basis kind:
-`"opd"` coefficients are lengths in nanometers; `"amplitude"` coefficients
-are dimensionless fractional amplitude ($E(1 + B\,\epsilon)$) with
-wavelength-independent sensitivity columns. The analytic method is exact
-because every stage is linear in the field; any future nonlinear stage makes
-it silently wrong (cross-check against `method="jvp"`).
+An OPD of $h$ nanometers is a phase of $2\pi h/\lambda$.
+An explicit basis passed to `linearize` perturbs the input field.
+The analytic method assumes every stage is linear in the field.
+For modes on an optic, pass `perturbation_stage` to `linearize` or
+`shared_stage` to `linearize_shared`. Both use `command_response`
+to differentiate the element's applied optical response around its
+current command. The response exposes a directional derivative and
+chunked Jacobian materialization.
 
 ## The speckle process
 
@@ -300,13 +297,13 @@ A speckle realization is a **flux-fraction delta**: the wavefront-error
 excess over the deterministic floor $|E_{\mathrm{nom}}|^2$, expressed as
 per-pixel flux fractions ($\Delta I\,\mathrm{d}u^2/E_{\mathrm{in}}$) -- the
 consumer's stellar-intensity map already carries the floor, so adding it
-here would double count. `SpeckleProcess` and `Linearization` retain density
-amplitudes. `SpeckleProcess.draw` multiplies both nominal and sensitivity
-amplitudes by `sqrt(grid.pixel_area)` exactly once when constructing a field.
-`AnalyticSpeckleField` is a `LinearSpeckleField`: its constructor accepts
-per-pixel amplitudes and its inherited intensity law divides only by
-`input_energy`. A process with `coherent=False` constructs the pure halo
-with `e_nom=0`; use `coherent=True` to retain the pinning cross term.
+here would double count. `SpeckleProcess` and `LinearSpeckleField` both
+store a density-amplitude `optixstuff.FocalResponse`. Use
+`response.per_pixel()` to get the nominal and sensitivity amplitudes
+on the pixel grid. The shared intensity law divides their intensity
+difference by `response.input_energy`. A process with `coherent=False`
+constructs a pure halo with zero nominal amplitude. Use `coherent=True`
+to retain the pinning cross term.
 `peak_contrast` accepts the telescope peak density and converts it to
 peak-pixel energy using the field's grid.
 
@@ -319,8 +316,8 @@ interpolation approximation. `broadened(quadrature=..., time_d=...)` returns
 an `Image` of the normalized node sum at fixed native lambda/D coordinates.
 For detector photometry, resample each node at its wavelength before
 spectral weighting. `coefficients(time_d)` replaces the old coefficient
-accessors; complex increments can be formed by contracting these with `G`
-and applying the wavelength factor. Raw moment kernels are named
+accessors; complex increments can be formed by contracting these with the Jacobian from
+`response.per_pixel()` and applying the wavelength factor. Raw moment kernels are named
 `gamma_pixel_map`, `p_pixel_map`, and `var_x_pixel_map` in energy/pixel units.
 
 The time axis is a frozen spectral synthesis: a draw fixes amplitudes and

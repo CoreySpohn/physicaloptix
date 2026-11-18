@@ -129,7 +129,7 @@ class TestVmapMatchesLoop:
 
         def focal(command):
             commanded = eqx.tree_at(
-                lambda p: p.stages[0].op.basis.coeffs, path, command
+                lambda p: p.stages[0].op, path, path.stages[0].op.with_command(command)
             )
             out, _ = commanded.propagate(field)
             return out.data

@@ -168,7 +168,9 @@ class TestTwoDeformableMirrorControl:
 
         def focal(command):
             commanded = eqx.tree_at(
-                lambda p: p.stages[idx].op.basis.coeffs, path, command
+                lambda p: p.stages[idx].op,
+                path,
+                path.stages[idx].op.with_command(command),
             )
             out, _ = commanded.propagate(field)
             return out.data[mask]

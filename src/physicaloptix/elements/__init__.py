@@ -1,6 +1,10 @@
 """Optical elements: plane-validated Field -> Field operators."""
 
-from physicaloptix.elements.base import Element, SampledOptic
+from physicaloptix.elements.base import (
+    AbstractCommandableElement,
+    Element,
+    SampledOptic,
+)
 from physicaloptix.elements.basis import ModeBasis
 from physicaloptix.elements.dispersive import DispersiveScreen
 from physicaloptix.elements.focal_mask import (
@@ -20,6 +24,7 @@ from physicaloptix.elements.vortex import MultiScaleVortex
 from physicaloptix.elements.zernike_wfs import ZernikeWavefrontSensor
 
 __all__ = [
+    "AbstractCommandableElement",
     "DispersiveScreen",
     "Element",
     "FocalPlaneMask",

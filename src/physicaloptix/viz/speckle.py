@@ -236,17 +236,13 @@ def _resolve_from_process(process, pixel):
         msg = "plot_speckle_ensemble: process= needs pixel=(iy, ix) to pick a pixel"
         raise ValueError(msg)
     moments = process.moments()
-    e_nom = (
-        np.asarray(process.e_nom)[tuple(pixel)] * np.sqrt(process.grid.pixel_area)
-        if process.coherent
-        else 0j
-    )
+    e_nom = process.response.per_pixel(pixels=pixel)[0] if process.coherent else 0j
     return {
         "i_c": float(abs(e_nom) ** 2),
         "phi_c": float(np.angle(e_nom)),
         "gamma": float(np.asarray(moments.gamma_pixel_map)[tuple(pixel)]),
         "p": complex(np.asarray(moments.p_pixel_map)[tuple(pixel)]),
-        "normalization": float(np.asarray(process.input_energy)),
+        "normalization": float(np.asarray(process.response.input_energy)),
     }
 
 
@@ -535,7 +531,7 @@ def plot_field_ellipse(
 
     At the reference wavelength, build complex increments from the public
     coefficients as ``np.einsum("tm,myx->tyx", field.coefficients(times_d),
-    field.G)``. For a propagated chromatic field first use
+    field.response.per_pixel()[1])``. For a propagated chromatic field first use
     ``field.at_wavelength(w)`` and include its reference/w phase factor.
 
     The false-alarm circle is origin-centered with radius

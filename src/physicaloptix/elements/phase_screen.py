@@ -1,6 +1,7 @@
 """PhaseScreen: a mode-basis phase stage (a deformable mirror or a fixed aberration)."""
 
 import dataclasses
+from typing import Self
 
 import equinox as eqx
 import jax.numpy as jnp
@@ -13,20 +14,18 @@ from physicaloptix.core import (
     PlaneKind,
     validate_field,
 )
-from physicaloptix.elements.base import Element
+from physicaloptix.elements.base import AbstractCommandableElement, Element
 from physicaloptix.elements.basis import ModeBasis
 
 
-class PhaseScreen(Element, AbstractChromaticOp):
+class PhaseScreen(AbstractCommandableElement, AbstractChromaticOp):
     """A pupil-plane phasor ``exp(i 2 pi (coeffs . B) / lambda)`` from a mode basis.
 
     The mode basis is the programmable state: its ``coeffs`` are the
     differentiable command (a deformable-mirror actuation, a segment-phasing
     setpoint) or the fixed coefficients of a static aberration. The OPD map
     ``coeffs . B`` (nanometers) becomes a monochromatic pupil phasor, so the
-    stage enters an ``OpticalPath`` as a commandable, differentiable optic whose
-    command is swapped per step with ``eqx.tree_at`` on the basis coefficients --
-    never a reconstruction, which would re-run the construction-time gates.
+    stage enters an ``OpticalPath`` as a commandable, differentiable optic.
     """
 
     basis: ModeBasis
@@ -54,12 +53,29 @@ class PhaseScreen(Element, AbstractChromaticOp):
             raise ValueError(
                 f"PhaseScreen needs an opd basis, got kind={self.basis.kind!r}"
             )
-        npix = self.grid.shape[0]
-        if self.basis.B.shape[-2:] != (npix, npix):
+        if self.basis.grid_shape != self.grid.shape:
             raise ValueError(
-                f"basis B {tuple(self.basis.B.shape)} does not match grid "
-                f"({npix}, {npix})"
+                f"basis shape {self.basis.grid_shape} does not match grid "
+                f"{self.grid.shape}"
             )
+
+    @property
+    def command(self) -> Array:
+        """The command vector in nm."""
+        return self.basis.coeffs
+
+    @property
+    def command_kind(self) -> str:
+        """The command changes optical path difference."""
+        return "opd"
+
+    def with_command(self, command: Array) -> Self:
+        """Return a screen with the specified command."""
+        return eqx.tree_at(lambda screen: screen.basis.coeffs, self, command)
+
+    def opd(self) -> Array:
+        """The applied optical path difference map in nm."""
+        return self.basis.opd()
 
     def __call__(self, field):
         """Apply the OPD phasor to the field (same plane and grid).
@@ -70,7 +86,7 @@ class PhaseScreen(Element, AbstractChromaticOp):
         broadband dark hole needs.
         """
         validate_field(field, plane=self.plane, grid=self.grid, context="PhaseScreen")
-        opd = self.basis.opd()
+        opd = self.opd()
         if field.spectrum is None:
             phasor = jnp.exp(1j * 2.0 * jnp.pi * opd / self.wavelength_nm)
         else:

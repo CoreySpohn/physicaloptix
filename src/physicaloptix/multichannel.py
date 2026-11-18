@@ -1,20 +1,10 @@
 """Multi-channel linearization: the shared trunk hoisted once.
 
-For an ``OpticalSystem`` whose shared wavefront modes live in the TRUNK (at
-the entrance, or on a named trunk ``PhaseScreen``), every channel sees the
-SAME driving coefficients through its OWN downstream optics. Because each
-stage is linear in the field, the shared-mode column of channel ``i`` is
-exact:
-
-    G_i[k] = factor * P_i(port_i(T_post(B_k * V)))
-
-with ``V`` the field at the shared plane, ``T_post`` the trunk remainder,
-``port_i`` the splitter amplitude, ``P_i`` the branch, and ``factor`` the OPD
-phase factor ``i 2 pi / lambda`` (one, for an amplitude basis). The trunk
-remainder is propagated ONCE per mode and every branch reuses the stack --
-the hoist. An INTERIOR shared stage matters: a naive entrance injection is
-wrong whenever optics precede the shared plane (they do not commute with the
-mode multiply).
+Every channel sees the same shared command through its own downstream
+optics. A named trunk stage is differentiated through its real optical
+response at its current command. The prefix is evaluated once, and the
+splitter and branches share the trunk output and its tangent. An explicitly
+supplied basis instead perturbs the field at the entrance plane.
 
 The blocks feed two consumers: correlated per-channel speckle (the same
 shared draw through each channel's ``g_shared``) and cross-channel
@@ -28,8 +18,9 @@ import jax.numpy as jnp
 from hwoutils.grids import PixelGrid
 from jaxtyping import Array
 
+from physicaloptix.command import command_response
 from physicaloptix.elements import PhaseScreen
-from physicaloptix.linearize import _phase_factor, _replace_data
+from physicaloptix.linearize import _replace_data, linearize
 from physicaloptix.path import OpticalPath
 
 
@@ -70,7 +61,7 @@ class MultiChannelLinearization(eqx.Module):
 
     channels: tuple
     wavelength_nm: float = eqx.field(static=True)
-    kind: str = eqx.field(static=True)
+    kind: str | None = eqx.field(static=True)
     input_energy: float = eqx.field(static=True)
 
     @property
@@ -101,9 +92,9 @@ def linearize_shared(
         system: The ``OpticalSystem``.
         field: The unperturbed entrance field (monochromatic).
         wavelength_nm: Design wavelength for the OPD phase factor.
-        shared_stage: Name of the trunk ``PhaseScreen`` carrying the shared
-            modes; the injection happens at ITS plane, linearized about its
-            current coefficients. Mutually exclusive with ``basis``.
+        shared_stage: Name of the commanded trunk element. The derivative
+            is evaluated at its current command. Mutually exclusive with
+            ``basis``.
         basis: A ``ModeBasis`` applied at the ENTRANCE plane instead (only
             correct when nothing precedes the shared modes).
         chunk_size: Modes per propagation batch; ``None`` batches all.
@@ -120,69 +111,48 @@ def linearize_shared(
         raise ValueError("provide exactly one of shared_stage or basis")
 
     if shared_stage is not None:
-        names = [stage.name for stage in system.trunk.stages]
-        if shared_stage not in names:
-            raise ValueError(
-                f"unknown shared_stage {shared_stage!r}; trunk stages are {names}"
-            )
-        idx = names.index(shared_stage)
-        screen = system.trunk.stages[idx].op
-        if not isinstance(screen, PhaseScreen):
-            raise TypeError(
-                f"shared_stage {shared_stage!r} is not a PhaseScreen; got "
-                f"{type(screen).__name__}"
-            )
-        basis = screen.basis
-        pre = OpticalPath(stages=system.trunk.stages[: idx + 1])
-        post = OpticalPath(stages=system.trunk.stages[idx + 1 :])
+        response = command_response(system, field, shared_stage)
+        outputs = response._propagate(response.element.command)
+        blocks = response.materialize(chunk_size)
+        kind = response.element.command_kind
     else:
-        pre = OpticalPath(stages=())
-        post = system.trunk
+        # An explicitly supplied entrance basis is a perturbation of the
+        # input field. Reuse the single-path analytic linearization.
+        trunk = linearize(
+            system.trunk,
+            field,
+            basis,
+            wavelength_nm=wavelength_nm,
+            method="analytic",
+            chunk_size=chunk_size,
+        )
+        trunk_out, _ = system.trunk.propagate(field)
+        downstream = eqx.tree_at(lambda s: s.trunk, system, OpticalPath(()))
+        outputs, _ = downstream.propagate(trunk_out)
+        kind = trunk.kind
 
-    shared_plane_field, _ = pre.propagate(field)
-    factor = _phase_factor(wavelength_nm) if basis.kind == "opd" else 1.0
-    injected = factor * basis.B * shared_plane_field.data  # (m, y, x)
+        def through_channels(data):
+            fields, _ = downstream.propagate(_replace_data(trunk_out, data))
+            return {name: out.data for name, out in fields.items()}
 
-    def to_split_plane(data):
-        out, _ = post.propagate(_replace_data(shared_plane_field, data))
-        return out.data
-
-    def stack(fn, block):
         if chunk_size is None:
-            return jax.vmap(fn)(block)
-        return jnp.concatenate(
-            [
-                jax.vmap(fn)(block[start : start + chunk_size])
-                for start in range(0, block.shape[0], chunk_size)
-            ]
+            blocks = jax.vmap(through_channels)(trunk.G)
+        else:
+            blocks = jax.lax.map(through_channels, trunk.G, batch_size=chunk_size)
+
+    channels = tuple(
+        ChannelLinearization(
+            name=branch.name,
+            e_nom=outputs[branch.name].data,
+            g_shared=blocks[branch.name],
+            grid=outputs[branch.name].grid,
         )
-
-    trunk_stack = stack(to_split_plane, injected)  # (m, y, x) at the split
-    trunk_out, _ = system.trunk.propagate(field)
-    outputs, _ = system.propagate(field)
-
-    channels = []
-    for branch in system.branches:
-
-        def through_channel(data, branch=branch):
-            ports = system.split(_replace_data(trunk_out, data))
-            out, _ = branch.path.propagate(ports[branch.port])
-            return out.data
-
-        g_shared = stack(through_channel, trunk_stack)
-        out_field = outputs[branch.name]
-        channels.append(
-            ChannelLinearization(
-                name=branch.name,
-                e_nom=out_field.data,
-                g_shared=g_shared,
-                grid=out_field.grid,
-            )
-        )
+        for branch in system.branches
+    )
     return MultiChannelLinearization(
-        channels=tuple(channels),
+        channels=channels,
         wavelength_nm=float(wavelength_nm),
-        kind=basis.kind,
+        kind=kind,
         input_energy=float(field.energy()),
     )
 
@@ -190,9 +160,8 @@ def linearize_shared(
 def ncpa_differential_opd(system, name_a, name_b):
     """The differential (non-common-path) OPD map between two branches.
 
-    Sums each branch's ``PhaseScreen`` OPD maps (``B . coeffs``) and returns
-    branch ``a`` minus branch ``b`` -- the aberration a sensor in one arm can
-    never see about the other, the irreducible cross-channel floor.
+    Sum the applied ``PhaseScreen`` OPD maps in each branch and return
+    branch ``a`` minus branch ``b``.
 
     Args:
         system: The ``OpticalSystem``.
@@ -213,10 +182,7 @@ def ncpa_differential_opd(system, name_a, name_b):
         total = jnp.zeros((npix, npix))
         for stage in branch.path.stages:
             if isinstance(stage.op, PhaseScreen):
-                screen = stage.op
-                total = total + jnp.tensordot(
-                    screen.basis.coeffs, screen.basis.B, axes=1
-                )
+                total = total + stage.op.opd()
         return total
 
     return branch_opd(by_name[name_a]) - branch_opd(by_name[name_b])

@@ -1,5 +1,8 @@
 """Element base contract and the sampled (ingested-array) optic."""
 
+from abc import abstractmethod
+from typing import Self
+
 import equinox as eqx
 import jax.numpy as jnp
 from hwoutils.grids import PixelGrid
@@ -22,6 +25,21 @@ class Element(eqx.Module):
     def __call__(self, field):
         """Apply the element to a field."""
         raise NotImplementedError
+
+
+class AbstractCommandableElement(Element):
+    """An optic driven by a real vector of commanded coefficients."""
+
+    command: eqx.AbstractVar[Array]
+
+    @property
+    def command_kind(self) -> str | None:
+        """Optional basis kind recorded in linearization products."""
+        return None
+
+    @abstractmethod
+    def with_command(self, command: Array) -> Self:
+        """Return this optic with a new command in the same units and layout."""
 
 
 class SampledOptic(Element):

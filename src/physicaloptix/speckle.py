@@ -1,12 +1,12 @@
 """Spectral-synthesis speckles on the shared linear per-pixel field law.
 
-Propagation products and SpeckleProcess inputs retain density amplitudes.
-Draws convert both amplitudes once to sqrt(energy/pixel); the shared law
-returns excess Images divided only by input_energy, excluding the nominal
-floor. Random spectral amplitudes and phases are frozen at construction.
+FocalResponse stores the density amplitudes and converts them to per-pixel
+amplitudes for the shared excess intensity law. Random spectral amplitudes
+and phases are frozen at construction.
 """
 
 from dataclasses import dataclass, replace
+from typing import ClassVar
 
 import equinox as eqx
 import jax
@@ -16,7 +16,7 @@ from hwoutils.constants import d2s
 from hwoutils.grids import PixelGrid
 from hwoutils.spectral import trapezoid_weights
 from jaxtyping import Array
-from optixstuff.speckle import LinearSpeckleField
+from optixstuff import FocalResponse, LinearSpeckleField
 
 from physicaloptix.transforms.fraunhofer import Fraunhofer
 
@@ -97,43 +97,23 @@ def telescope_peak(field, grid_out):
     return float(jnp.max(transform.forward(field).intensity().data))
 
 
-def _check_chromatic_layout(e_nom, G, input_energy, wavelengths_nm):
-    """Validate mono ``(y,x)/(m,y,x)`` or chromatic ``(w,...)`` ingredients."""
+def _check_wavelength_layout(response, wavelengths_nm):
+    """Match the response's wavelength axis to the interpolation nodes."""
     if wavelengths_nm is None:
-        if e_nom.ndim != 2 or G.ndim != 3:
+        if response.e_nom.ndim != 2:
             raise ValueError(
-                "monochromatic ingredients must be e_nom (y, x) and G "
-                f"(m, y, x); got {e_nom.shape} and {G.shape} (set "
-                "wavelengths_nm for a chromatic field)"
+                "monochromatic ingredients require a monochromatic response"
             )
-        if input_energy.ndim != 0:
-            raise ValueError(
-                "monochromatic input_energy must be a scalar, got shape "
-                f"{input_energy.shape}"
-            )
-        return
-    w = wavelengths_nm.shape[0]
-    if e_nom.ndim != 3 or G.ndim != 4 or e_nom.shape[0] != w or G.shape[0] != w:
-        raise ValueError(
-            f"chromatic ingredients must be e_nom (w, y, x) and G "
-            f"(w, m, y, x) with w == {w}; got {e_nom.shape} and {G.shape}"
-        )
-    if input_energy.ndim not in (0, 1) or (
-        input_energy.ndim == 1 and input_energy.shape[0] != w
-    ):
-        raise ValueError(
-            f"chromatic input_energy must be a scalar or shape ({w},); "
-            f"got {input_energy.shape}"
-        )
+    elif wavelengths_nm.ndim != 1 or response.e_nom.shape[:-2] != wavelengths_nm.shape:
+        raise ValueError("chromatic ingredients must match the wavelength nodes")
 
 
 class AnalyticSpeckleField(LinearSpeckleField):
     """Frozen spectral synthesis using the shared per-pixel field law.
 
-    All amplitude inputs are per pixel, as in LinearSpeckleField. Density
-    producers multiply by sqrt(grid.pixel_area) before construction. A pure
-    halo uses e_nom=0. The inherited chromatic model holds e_nom fixed and
-    scales G by reference_wavelength_nm / wavelength_nm.
+    A pure halo uses a zero nominal response. The inherited chromatic
+    model holds e_nom fixed and scales G by reference_wavelength_nm /
+    wavelength_nm.
     """
 
     amplitudes: Array
@@ -149,7 +129,11 @@ class AnalyticSpeckleField(LinearSpeckleField):
     def peak_contrast(self, *, telescope_peak, wavelength_nm, time_d=0.0):
         """Peak-referenced delta; telescope_peak is an intensity density."""
         delta = self.realize(wavelength_nm=wavelength_nm, time_d=time_d)
-        return delta.data * self.input_energy / (telescope_peak * self.grid.pixel_area)
+        return (
+            delta.data
+            * self.response.input_energy
+            / (telescope_peak * self.grid.pixel_area)
+        )
 
 
 def _interpolate_nodes(wavelength_nm, wavelengths_nm, values):
@@ -167,7 +151,7 @@ def _interpolate_nodes(wavelength_nm, wavelengths_nm, values):
 class ChromaticAnalyticSpeckleField(AnalyticSpeckleField):
     """Propagated chromatic amplitudes with the shared intensity law.
 
-    Stored node amplitudes are per pixel. Each query linearly interpolates
+    Stored node amplitudes are densities. Each query linearly interpolates
     the complex e_nom and G and the input energy (endpoints are clamped).
     This replaces reference/lambda scaling, retaining propagated morphology,
     dispersion and nominal leakage exactly at stored nodes. Between nodes
@@ -177,20 +161,11 @@ class ChromaticAnalyticSpeckleField(AnalyticSpeckleField):
     """
 
     wavelengths_nm: Array
-    e_nodes: Array
-    g_nodes: Array
-    energy_nodes: Array
+    _response_ndim: ClassVar[int] = 3
 
     def __check_init__(self):
         """Validate the propagated node table."""
-        _check_chromatic_layout(
-            self.e_nodes, self.g_nodes, self.energy_nodes, self.wavelengths_nm
-        )
-        if (
-            self.e_nodes.shape[1:] != self.grid.shape
-            or self.g_nodes.shape[1:] != self.G.shape
-        ):
-            raise ValueError("node amplitudes must match the reference modes and grid")
+        _check_wavelength_layout(self.response, self.wavelengths_nm)
         if self.wavelengths_nm.size < 1:
             raise ValueError("chromatic fields need at least one wavelength node")
         if not isinstance(self.wavelengths_nm, jax.core.Tracer):
@@ -203,10 +178,6 @@ class ChromaticAnalyticSpeckleField(AnalyticSpeckleField):
                 raise ValueError(
                     "wavelength nodes must be positive and strictly increasing"
                 )
-        if not isinstance(self.energy_nodes, jax.core.Tracer):
-            energies = np.asarray(self.energy_nodes)
-            if not (np.all(np.isfinite(energies)) and np.all(energies > 0)):
-                raise ValueError("node input energies must be positive and finite")
 
     def at_wavelength(self, wavelength_nm):
         """A mono field whose shared law equals the interpolated node law.
@@ -215,17 +186,19 @@ class ChromaticAnalyticSpeckleField(AnalyticSpeckleField):
         no phase factor is applied twice. The returned e_nom is also the
         correct nominal floor for visualization at this wavelength.
         """
-        e = _interpolate_nodes(wavelength_nm, self.wavelengths_nm, self.e_nodes)
-        g = _interpolate_nodes(wavelength_nm, self.wavelengths_nm, self.g_nodes)
-        energy = _interpolate_nodes(
-            wavelength_nm, self.wavelengths_nm, self.energy_nodes
-        )
+        response = self.response
+        e = _interpolate_nodes(wavelength_nm, self.wavelengths_nm, response.e_nom)
+        g = _interpolate_nodes(wavelength_nm, self.wavelengths_nm, response.G)
+        energies = jnp.broadcast_to(response.input_energy, self.wavelengths_nm.shape)
+        energy = _interpolate_nodes(wavelength_nm, self.wavelengths_nm, energies)
         return AnalyticSpeckleField(
-            e_nom=e,
-            G=g * (wavelength_nm / self.reference_wavelength_nm),
-            input_energy=energy,
-            grid=self.grid,
-            reference_wavelength_nm=self.reference_wavelength_nm,
+            response=FocalResponse(
+                e,
+                g * (wavelength_nm / response.reference_wavelength_nm),
+                self.grid,
+                energy,
+                response.reference_wavelength_nm,
+            ),
             epoch_d=self.epoch_d,
             amplitudes=self.amplitudes,
             frequencies_hz=self.frequencies_hz,
@@ -433,8 +406,7 @@ class CrossBandMoments(eqx.Module):
 class SpeckleProcess(eqx.Module):
     """One parameter set for the linear speckle process; views derive from it.
 
-    Holds density-amplitude spatial ingredients (``e_nom``, ``G``), as
-    returned by propagation, together with the
+    Holds a density-amplitude FocalResponse together with the
     per-mode temporal PSD specification (knee + slope + per-mode rms), so the
     generator view and any future inference view (the state-space ``(A, Q)``
     of a filter) derive from the SAME parameters and cannot drift apart ("one
@@ -471,14 +443,10 @@ class SpeckleProcess(eqx.Module):
     through :meth:`from_decorrelation`.
     """
 
-    e_nom: Array  # complex (y, x) or (w, y, x): nominal focal field
-    G: Array  # complex (m, y, x) or (w, m, y, x): d(E_focal)/d(mode)
+    response: FocalResponse
     per_mode_rms: Array  # float (m,): rms drift per mode
     knee_hz: Array  # float (m,): per-mode temporal PSD knee
     slope: Array  # float (m,): per-mode high-frequency PSD slope
-    input_energy: Array
-    grid: PixelGrid
-    reference_wavelength_nm: float = eqx.field(static=True)
     epoch_d: float = eqx.field(static=True)
     wavelengths_nm: Array | None
     coherent: bool = eqx.field(static=True)
@@ -489,15 +457,11 @@ class SpeckleProcess(eqx.Module):
 
     def __init__(
         self,
-        e_nom,
-        G,
+        response: FocalResponse,
         per_mode_rms,
         knee_hz,
         *,
-        input_energy,
         slope=-2.0,
-        grid,
-        reference_wavelength_nm,
         epoch_d=0.0,
         coherent=False,
         n_freq=64,
@@ -508,26 +472,15 @@ class SpeckleProcess(eqx.Module):
         """Build the process parameter object.
 
         Args:
-            e_nom: Complex nominal density amplitude, shape ``(y, x)`` -- or
-                ``(w, y, x)`` with ``wavelengths_nm`` set.
-            G: Complex density-amplitude sensitivity per coefficient, shape
-                ``(m, y, x)`` -- or ``(w, m, y, x)`` with ``wavelengths_nm``
-                set.
+            response: Complex density amplitudes and their photometric reference.
             per_mode_rms: Per-mode rms drift, scalar (broadcast to every
                 mode) or shape ``(m,)``.
             knee_hz: Temporal PSD knee frequency in Hz
                 (``1 / (2 pi tau)`` for a decorrelation time ``tau``);
                 scalar (shared by every mode) or shape ``(m,)`` for
                 per-mode timescales.
-            input_energy: Total energy of the field handed to the coronagraph
-                train at the pre-coronagraph reference plane
-                (``field.energy()``). A scalar, or one value per channel
-                for a chromatic process. Intensities are divided only by
-                this energy after converting amplitudes to per-pixel units.
             slope: High-frequency PSD power-law slope. Default -2; scalar
                 or shape ``(m,)`` for per-mode slopes.
-            grid: Native focal grid, including its Frame.
-            reference_wavelength_nm: Reference wavelength matching grid.frame.
             epoch_d: Days from the scene epoch at which elapsed time is zero.
                 Default 0.0.
             coherent: Drawn fields include the pinning cross term.
@@ -542,9 +495,8 @@ class SpeckleProcess(eqx.Module):
                 into the returned :class:`AnalyticSpeckleField`. ``None``
                 (default) for a monochromatic process.
         """
-        self.e_nom = e_nom
-        self.G = G
-        m = G.shape[-3]
+        self.response = response
+        m = response.G.shape[-3]
         self.per_mode_rms = jnp.broadcast_to(
             jnp.asarray(per_mode_rms, dtype=float), (m,)
         )
@@ -558,9 +510,6 @@ class SpeckleProcess(eqx.Module):
             bool(jnp.all(self.knee_hz == self.knee_hz[0]))
             and bool(jnp.all(self.slope == self.slope[0]))
         )
-        self.input_energy = jnp.asarray(input_energy, dtype=float)
-        self.grid = grid
-        self.reference_wavelength_nm = float(reference_wavelength_nm)
         self.epoch_d = float(epoch_d)
         self.wavelengths_nm = (
             None if wavelengths_nm is None else jnp.asarray(wavelengths_nm, dtype=float)
@@ -572,11 +521,9 @@ class SpeckleProcess(eqx.Module):
 
     def __check_init__(self):
         """Validate mode parameters, native geometry and ingredient layout."""
-        if self.grid.unit != "lod" or self.grid.shape != self.e_nom.shape[-2:]:
+        if self.response.grid.unit != "lod":
             raise ValueError("speckle ingredients require their native lod grid")
-        if self.reference_wavelength_nm != self.grid.frame.reference_wavelength_nm:
-            raise ValueError("reference_wavelength_nm must match grid.frame")
-        m = (self.G.shape[-3],)
+        m = (self.response.G.shape[-3],)
         for name, value in (
             ("per_mode_rms", self.per_mode_rms),
             ("knee_hz", self.knee_hz),
@@ -587,19 +534,15 @@ class SpeckleProcess(eqx.Module):
                     f"{name} has shape {value.shape}; expected {m} to match "
                     "G's mode axis"
                 )
-        _check_chromatic_layout(
-            self.e_nom, self.G, self.input_energy, self.wavelengths_nm
-        )
+        _check_wavelength_layout(self.response, self.wavelengths_nm)
 
     @classmethod
     def from_decorrelation(
         cls,
-        e_nom,
-        G,
+        response: FocalResponse,
         *,
         decorr_hours,
         total_rms,
-        input_energy,
         **kwargs,
     ):
         """Parameterize by decorrelation time and a total WFE budget.
@@ -609,13 +552,11 @@ class SpeckleProcess(eqx.Module):
         (``per_mode_rms = total_rms / sqrt(m)``; rms adds in quadrature).
         """
         tau_s = decorr_hours * 3600.0
-        m = G.shape[-3]
+        m = response.G.shape[-3]
         return cls(
-            e_nom,
-            G,
+            response,
             total_rms / jnp.sqrt(float(m)),
             1.0 / (2.0 * jnp.pi * tau_s),
-            input_energy=input_energy,
             **kwargs,
         )
 
@@ -672,7 +613,9 @@ class SpeckleProcess(eqx.Module):
         f = self.frequencies_hz()
         weights = self.psd(f) * trapezoid_weights(f)
         if weights.ndim == 1:
-            weights = jnp.broadcast_to(weights, (self.G.shape[-3], self.n_freq))
+            weights = jnp.broadcast_to(
+                weights, (self.response.G.shape[-3], self.n_freq)
+            )
         return weights
 
     def autocorrelation(self, lag_s) -> Array:
@@ -701,7 +644,7 @@ class SpeckleProcess(eqx.Module):
         tau = jnp.asarray(lag_s, dtype=float)
         f = self.frequencies_hz()
         if f.ndim == 1:
-            f = jnp.broadcast_to(f, (self.G.shape[-3], self.n_freq))
+            f = jnp.broadcast_to(f, (self.response.G.shape[-3], self.n_freq))
         w = self.line_weights()
         flat = tau.reshape(-1)  # (t,)
         phase = 2.0 * jnp.pi * f[:, :, None] * flat[None, None, :]  # (m, f, t)
@@ -754,7 +697,7 @@ class SpeckleProcess(eqx.Module):
         t_exp = jnp.asarray(exposure_s, dtype=float)
         f = self.frequencies_hz()
         if f.ndim == 1:
-            f = jnp.broadcast_to(f, (self.G.shape[-3], self.n_freq))
+            f = jnp.broadcast_to(f, (self.response.G.shape[-3], self.n_freq))
         w = self.line_weights()
         flat = t_exp.reshape(-1)  # (t,)
         # jnp.sinc is the normalized sin(pi x) / (pi x), which is exactly the
@@ -783,7 +726,7 @@ class SpeckleProcess(eqx.Module):
           ensemble is the exact improper-Gaussian process :meth:`moments`
           describes -- the oracle-exact draw.
         """
-        m = self.G.shape[-3]
+        m = self.response.G.shape[-3]
         f = self.frequencies_hz()
         # The line weight S(f_j) df_j, not the bare PSD ordinate, is what the
         # synthesis coefficients carry; see line_weights.
@@ -809,35 +752,20 @@ class SpeckleProcess(eqx.Module):
             c = jnp.sqrt(weights) * rms * z
             amp = jnp.abs(c)
             phases = jnp.angle(c)
-        # Density -> per-pixel amplitude conversion occurs once here.
-        amplitude_scale = jnp.sqrt(self.grid.pixel_area)
-        e = (
-            self.e_nom if self.coherent else jnp.zeros_like(self.e_nom)
-        ) * amplitude_scale
-        g = self.G * amplitude_scale
+        response = self.response
+        if not self.coherent:
+            response = replace(response, e_nom=jnp.zeros_like(response.e_nom))
         common = dict(
-            grid=self.grid,
-            reference_wavelength_nm=self.reference_wavelength_nm,
+            response=response,
             epoch_d=self.epoch_d,
             amplitudes=amp,
             frequencies_hz=f,
             phases=phases,
         )
         if self.wavelengths_nm is None:
-            return AnalyticSpeckleField(
-                e_nom=e, G=g, input_energy=self.input_energy, **common
-            )
-        energies = jnp.broadcast_to(self.input_energy, self.wavelengths_nm.shape)
-        ref = self.reference_wavelength_nm
+            return AnalyticSpeckleField(**common)
         return ChromaticAnalyticSpeckleField(
-            e_nom=_interpolate_nodes(ref, self.wavelengths_nm, e),
-            G=_interpolate_nodes(ref, self.wavelengths_nm, g),
-            input_energy=_interpolate_nodes(ref, self.wavelengths_nm, energies),
-            wavelengths_nm=self.wavelengths_nm,
-            e_nodes=e,
-            g_nodes=g,
-            energy_nodes=energies,
-            **common,
+            wavelengths_nm=self.wavelengths_nm, **common
         )
 
     def renormalization_kurtosis(self, n_points=4000) -> Array:
@@ -877,7 +805,7 @@ class SpeckleProcess(eqx.Module):
             integrand = t**2 * jnp.exp(log_prod) * inner  # dt = t dlog(t)
             return -1.5 * 3.0 * jnp.trapezoid(integrand, jnp.log(t))
 
-        m = self.G.shape[-3]
+        m = self.response.G.shape[-3]
         if not self.per_mode_freq:
             # Every mode shares one grid, so one quadrature serves them all.
             return jnp.broadcast_to(kappa_of(weights[0]), (m,))
@@ -920,13 +848,14 @@ class SpeckleProcess(eqx.Module):
             A :class:`Photometry` report; ``warnings`` is empty when both
             checks pass.
         """
-        du2 = self.grid.pixel_area
-        e_energy = jnp.sum(jnp.abs(self.e_nom) ** 2, axis=(-2, -1)) * du2
-        flux_fraction = e_energy / self.input_energy
+        du2 = self.response.grid.pixel_area
+        e_energy = jnp.sum(jnp.abs(self.response.e_nom) ** 2, axis=(-2, -1)) * du2
+        flux_fraction = e_energy / self.response.input_energy
         contrast_scale = (
             None
             if telescope_peak is None
-            else self.input_energy / (self.grid.pixel_area * telescope_peak)
+            else self.response.input_energy
+            / (self.response.grid.pixel_area * telescope_peak)
         )
 
         warnings: list[str] = []
@@ -951,8 +880,8 @@ class SpeckleProcess(eqx.Module):
             )
 
         return Photometry(
-            input_energy=self.input_energy,
-            grid=self.grid,
+            input_energy=self.response.input_energy,
+            grid=self.response.grid,
             e_nom_flux_fraction=flux_fraction,
             contrast_scale=contrast_scale,
             warnings=tuple(warnings),
@@ -997,15 +926,14 @@ class SpeckleProcess(eqx.Module):
                 "first, or use cross_band_moments for the joint band "
                 "statistics"
             )
-        g_pixel = self.G * jnp.sqrt(self.grid.pixel_area)
-        e_pixel = self.e_nom * jnp.sqrt(self.grid.pixel_area)
+        e_pixel, g_pixel = self.response.per_pixel()
         rms2 = self.per_mode_rms**2
         gamma = jnp.einsum("k,kyx->yx", rms2, jnp.abs(g_pixel) ** 2)
         p = jnp.einsum("k,kyx->yx", rms2, g_pixel**2)
         i_c = jnp.abs(e_pixel) ** 2
         phi_c = jnp.angle(e_pixel)
         var_x = 0.5 * (gamma + jnp.real(p * jnp.exp(-2j * phi_c)))
-        norm = self.input_energy
+        norm = self.response.input_energy
         mean_map = gamma / norm
         heterodyne = 4.0 * i_c * var_x if self.coherent else 0.0
         var_map = (heterodyne + gamma**2 + jnp.abs(p) ** 2) / norm**2
@@ -1022,7 +950,7 @@ class SpeckleProcess(eqx.Module):
             annulus_mean = jnp.sum(mean_map * w) / denom
             annulus_var = jnp.sum(var_map * w) / denom
         return SpeckleMoments(
-            grid=self.grid,
+            grid=self.response.grid,
             mean_map=mean_map,
             var_map=var_map,
             gamma_pixel_map=gamma,
@@ -1078,14 +1006,13 @@ class SpeckleProcess(eqx.Module):
                 "the renormalization correction is equal-time only; pass "
                 "tau_s=0.0 or renormalized=False"
             )
-        g_pixel = self.G * jnp.sqrt(self.grid.pixel_area)
-        e_pixel = self.e_nom * jnp.sqrt(self.grid.pixel_area)
+        e_pixel, g_pixel = self.response.per_pixel()
         rms2 = self.per_mode_rms**2
         damped = rms2 * self.autocorrelation(tau_s)
         gamma = jnp.einsum("m,imyx,jmyx->ijyx", damped, g_pixel, jnp.conj(g_pixel))
         p = jnp.einsum("m,imyx,jmyx->ijyx", damped, g_pixel, g_pixel)
         w = self.wavelengths_nm.shape[0]
-        norms = jnp.broadcast_to(self.input_energy, (w,))
+        norms = jnp.broadcast_to(self.response.input_energy, (w,))
         denom = norms[:, None, None, None] * norms[None, :, None, None]
         cov = jnp.abs(gamma) ** 2 + jnp.abs(p) ** 2
         if self.coherent:
@@ -1111,7 +1038,7 @@ class SpeckleProcess(eqx.Module):
             annulus_mean = jnp.einsum("wyx,yx->w", mean, weights) / total
             annulus_cov = jnp.einsum("ijyx,yx->ij", cov, weights) / total
         return CrossBandMoments(
-            grid=self.grid,
+            grid=self.response.grid,
             mean_map=mean,
             cov_map=cov,
             gamma_pixel_map=gamma,
@@ -1162,13 +1089,12 @@ class SpeckleProcess(eqx.Module):
                 "(w p) x (w p) covariance would be too large -- select fewer "
                 "pixels"
             )
-        if tuple(np.shape(mask)) != tuple(self.G.shape[-2:]):
+        if tuple(np.shape(mask)) != tuple(self.response.G.shape[-2:]):
             raise ValueError(
                 f"mask shape {tuple(np.shape(mask))} does not match the focal "
-                f"grid {tuple(self.G.shape[-2:])}"
+                f"grid {tuple(self.response.G.shape[-2:])}"
             )
-        g = self.G[:, :, rows, cols] * jnp.sqrt(self.grid.pixel_area)  # (w, m, p)
-        e = self.e_nom[:, rows, cols] * jnp.sqrt(self.grid.pixel_area)  # (w, p)
+        e, g = self.response.per_pixel(pixels=(rows, cols))
         damped = self.per_mode_rms**2 * self.autocorrelation(tau_s)
         gamma = jnp.einsum("m,imp,jmq->ipjq", damped, g, jnp.conj(g))
         p_kern = jnp.einsum("m,imp,jmq->ipjq", damped, g, g)
@@ -1177,5 +1103,5 @@ class SpeckleProcess(eqx.Module):
             a_i = jnp.conj(e)[:, :, None, None]
             a_j = e[None, None, :, :]
             cov = cov + 2.0 * jnp.real(a_i * a_j * gamma + a_i * jnp.conj(a_j) * p_kern)
-        norms = jnp.broadcast_to(self.input_energy, (w,))
+        norms = jnp.broadcast_to(self.response.input_energy, (w,))
         return cov / (norms[:, None, None, None] * norms[None, None, :, None])

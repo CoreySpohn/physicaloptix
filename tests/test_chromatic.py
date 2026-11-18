@@ -99,7 +99,11 @@ class TestAtWavelength:
         path = _path(500.0)
 
         def loss(coeff, wavelength_nm):
-            tree = eqx.tree_at(lambda p: p.stage("screen").basis.coeffs, path, coeff)
+            tree = eqx.tree_at(
+                lambda p: p.stage("screen"),
+                path,
+                path.stage("screen").with_command(coeff),
+            )
             out, _ = tree.at_wavelength(wavelength_nm).propagate(_field())
             return jnp.sum(
                 out.intensity().data * jnp.arange(out.data.size).reshape(24, 24)

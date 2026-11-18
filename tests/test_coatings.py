@@ -173,11 +173,11 @@ class TestFeedsDispersiveScreen:
         )
 
         def run(coeffs):
-            p = eqx.tree_at(lambda q: q.stages[0].op.basis.coeffs, path, coeffs)
+            p = eqx.tree_at(lambda q: q.stages[0].op, path, screen.with_command(coeffs))
             out, _ = p.propagate(chromatic_field)
             return out.data
 
-        jac = jax.jacfwd(run)(screen.basis.coeffs)  # (w, y, x, m)
+        jac = jax.jacfwd(run)(screen.command)  # (w, y, x, m)
         g_ad = jnp.moveaxis(jac, -1, 1)  # (w, m, y, x)
         np.testing.assert_allclose(
             np.asarray(lin.G), np.asarray(g_ad), rtol=0, atol=1e-12
