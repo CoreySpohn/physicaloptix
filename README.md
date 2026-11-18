@@ -98,7 +98,7 @@ Built on [JAX](https://github.com/google/jax) and
 
 ```mermaid
 flowchart TB
-    optix["<b>optixstuff</b><br/>Telescope / Coronagraph / Detector / OpticalPath"]
+    optix["<b>optixstuff</b><br/>Telescope / Coronagraph / Detector / Instrument"]
     physopt["<b>physicaloptix</b><br/>Owned propagation core / diffraction<br/>OpticalPath / PathCoronagraph"]
     yippy["<b>yippy</b><br/>Sampled-YIP PSF interpolation"]
     corono["<b>coronagraphoto</b><br/>2D image simulation"]

@@ -174,14 +174,14 @@ class TestSpeckleProcess:
 
 
 class TestInterface:
-    """Conformance to optixstuff's AbstractSpeckleField / OpticalPath."""
+    """Conformance to optixstuff's AbstractSpeckleField / Instrument."""
 
     def test_is_abstract_speckle_field(self):
         assert isinstance(_field(), ox.AbstractSpeckleField)
 
-    def test_attaches_to_optical_path(self):
+    def test_attaches_to_instrument(self):
         sp = _field()
-        op = ox.OpticalPath.from_default_setup(
+        op = ox.Instrument.from_default_setup(
             _mock_coro(), detector_shape=(16, 16), speckle=sp
         )
         assert op.speckle is sp
