@@ -160,8 +160,8 @@ always `G.shape[-3]`, never `G.shape[0]`.
 
 `Quadrature.build((Band(lo_nm, hi_nm),), path, order=4)` splits the
 Gauss-Legendre rule at the breaks declared by the optical path. Wavelengths
-are in `nodes_nm[0]`. Dimensional weights in `weights_nm[0]` sum to the band
-width. Dividing the integrated intensity by the width gives the same
+are in `nodes_nm[0]`. Dimensional weights in `weights()[0]` sum to the band
+width. Dividing the integrated intensity by the weight sum gives the same
 weighted average as normalizing the weights to one. `Field.intensity`
 uses `Quadrature.mean` for this average.
 For a custom sampling rule, supply the band, a row of nodes, and a row of

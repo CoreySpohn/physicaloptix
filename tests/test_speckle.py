@@ -1718,7 +1718,7 @@ def test_broadened_equals_explicit_node_sum():
         quadrature = Quadrature.build((Band(500, 550), Band(550, 600)), field, order=3)
         expected = []
         for nodes, weights in zip(
-            quadrature.nodes_nm, quadrature.weights_nm, strict=True
+            quadrature.nodes_nm, quadrature.weights(), strict=True
         ):
             expected.append(
                 sum(

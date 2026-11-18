@@ -117,7 +117,7 @@ def emit_yip(
 
     if len(spectrum.bands) != 1:
         raise ValueError("a yield package requires a one-band quadrature")
-    active = np.asarray(spectrum.weights_nm[0]) != 0
+    active = np.asarray(spectrum.active[0])
     nodes_nm = np.asarray(spectrum.nodes_nm[0])[active]
     base = unit_energy(input_field)
     science = Fraunhofer(
