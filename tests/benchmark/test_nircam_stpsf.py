@@ -50,7 +50,7 @@ import math
 import equinox as eqx
 import numpy as np
 import pytest
-from hwoutils.grids import Image, PixelGrid
+from hwoutils.grids import Image, Measure, PixelGrid
 
 from physicaloptix.instruments import (
     NIRCamBand,
@@ -157,7 +157,7 @@ def _config(bench, stage, source, **overrides):
 def _mono_image(config, inputs):
     path, field = build_nircam(config, inputs)
     out, _ = path.propagate(field)
-    return np.asarray(out.intensity().data) * out.grid.pixel_area
+    return np.asarray(out.intensity().integrated().data)
 
 
 def _mono_reference(bench, stage, source):
@@ -237,7 +237,7 @@ def test_monochromatic_case(bench, stage, source, bound, record_case):
                     po.shape, config.pixel_scale_arcsec / config.oversample, "arcsec"
                 ),
                 (),
-                "per_pixel",
+                Measure.integral(),
                 "stellar_flux_fraction",
             ),
             config.oversample,
@@ -276,7 +276,7 @@ def test_f335m_band_case(bench, stage, source, bound, record_case):
                     po.shape, config.pixel_scale_arcsec / config.oversample, "arcsec"
                 ),
                 (),
-                "per_pixel",
+                Measure.integral(),
                 "stellar_flux_fraction",
             ),
             config.oversample,

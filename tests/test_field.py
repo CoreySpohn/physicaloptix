@@ -5,9 +5,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from hwoutils.grids import GridArray, Image, PixelGrid
+from hwoutils.grids import GridArray, Image, Measure, PixelGrid
 from hwoutils.spectral import Band, Quadrature
 
+from physicaloptix._sky import entrance_energy
 from physicaloptix.core import Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis
 
@@ -110,7 +111,7 @@ class TestFieldPhysics:
         field = disk_field()
         image = field.intensity()
         assert isinstance(field, GridArray) and isinstance(image, Image)
-        assert image.measure == "per_unit_area"
+        assert image.measure == Measure.density("grid")
         assert image.reconstruction == "linear"
         intensity = np.asarray(image.data)
         assert intensity.shape == (64, 64)
@@ -119,15 +120,24 @@ class TestFieldPhysics:
         )
 
     def test_intensity_chromatic_is_weighted_sum(self):
-        grid = PixelGrid.pupil(8)
+        # The full-field integral must include every skew, displaced pupil cell.
+        grid = PixelGrid((5, 8), 13.25, -4.1, ((0.25, 0.1), (-0.5, 0.125)), "meter")
         spectrum = Quadrature((Band(500.0, 600.0),), [[500.0, 600.0]], [[25.0, 75.0]])
         data = jnp.stack(
-            [jnp.ones((8, 8), dtype=complex), 2.0 * jnp.ones((8, 8), dtype=complex)]
+            [
+                jnp.ones(grid.shape, dtype=complex),
+                2.0 * jnp.ones(grid.shape, dtype=complex),
+            ]
         )
         field = Field(data=data, grid=grid, plane=PlaneKind.FOCAL, spectrum=spectrum)
         image = field.intensity()
         assert isinstance(field, GridArray) and isinstance(image, Image)
-        assert image.measure == "per_unit_area"
+        assert image.measure == Measure.density("grid")
         assert image.reconstruction == "band_limited"
         intensity = np.asarray(image.data)
-        np.testing.assert_allclose(intensity, 0.25 * 1.0 + 0.75 * 4.0, rtol=1e-14)
+        mean_power = 0.25 * 1.0 + 0.75 * 4.0
+        np.testing.assert_allclose(intensity, mean_power, rtol=1e-14)
+        expected_area = 5 * 8 * (0.25 * 0.125 + 0.1 * 0.5)
+        np.testing.assert_allclose(
+            entrance_energy(field), mean_power * expected_area, rtol=1e-14
+        )

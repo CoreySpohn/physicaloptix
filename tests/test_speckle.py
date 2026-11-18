@@ -7,6 +7,7 @@ import optixstuff as ox
 import pytest
 from conftest import TEST_FRAME, analytic_from_density, speckle_grid
 from hwoutils.constants import s2d
+from hwoutils.grids import Measure
 from optixstuff import FocalResponse
 
 from physicaloptix import AnalyticSpeckleField
@@ -1641,7 +1642,7 @@ def test_shared_law_matches_density_parent_formula(record_property):
         atol=32 * np.finfo(float).eps * np.max(np.abs(parent)),
     )
     assert image.grid == grid
-    assert image.measure == "per_pixel"
+    assert image.measure == Measure.integral()
     assert image.quantity == "stellar_flux_fraction"
     np.testing.assert_array_equal(field.response.G, g)
     record_property("parent_pixel", float(parent[0, 0]))

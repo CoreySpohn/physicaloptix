@@ -77,7 +77,7 @@ Frames and signs:
 Normalization: the source field is scaled so the field just after the
 entrance pupil carries unit energy (``Field.energy() == 1``), the
 entrance-pupil normalization STPSF applies with ``normalize='first'``. No
-later renormalization happens, so ``out.intensity().data * out.grid.pixel_area`` is
+later renormalization happens, so ``out.intensity().integrated().data`` is
 the fraction of entrance-pupil energy per output sample and finite-field,
 mask and Lyot losses are kept.
 
@@ -108,9 +108,15 @@ import jax.numpy as jnp
 import numpy as np
 from hwoutils.constants import m2nm
 from hwoutils.conversions import arcsec_to_lambda_d, lambda_d_to_arcsec
-from hwoutils.grids import Frame, Image, PixelGrid
+from hwoutils.grids import (
+    Frame,
+    Image,
+    Measure,
+    PixelGrid,
+    footprint_overlap,
+    integrate_footprints,
+)
 from hwoutils.radial import get_center
-from hwoutils.transforms import downsample_psf
 from jaxtyping import Array
 
 from physicaloptix.core import ChromaticTable, Field, PlaneKind, validate_field
@@ -817,7 +823,7 @@ def mask_plane_field(path, taps):
 
     Returns:
         A focal-plane ``Field`` on the mask-plane window (lambda/D, rows y);
-        ``intensity() * grid.pixel_area`` is the fraction of entrance-pupil
+        ``intensity().integrated().data`` is the fraction of entrance-pupil
         energy per window sample.
 
     Raises:
@@ -1019,7 +1025,7 @@ def nircam_band_image(config, inputs, band):
         band: The nodes and weights.
 
     Returns:
-        A per_pixel stellar_flux_fraction Image on the fixed arcsecond grid;
+        A cell-integrated stellar_flux_fraction Image on the fixed arcsecond grid;
         data have shape (detector_npix * oversample,) on each spatial axis.
     """
     weights = np.asarray(band.weights) / np.sum(band.weights)
@@ -1035,14 +1041,19 @@ def nircam_band_image(config, inputs, band):
             )
         path, field = build_nircam(node_config, node_inputs)
         out, _ = path.propagate(field)
-        image = weight * out.intensity().data * out.grid.pixel_area
+        intensity = out.intensity()
+        image = (
+            dataclasses.replace(intensity, data=weight * intensity.data)
+            .integrated()
+            .data
+        )
         total = image if total is None else total + image
     grid = out.grid.to_arcsec(out.grid.frame.reference_wavelength_nm)
     return Image(
         total,
         grid,
         (),
-        "per_pixel",
+        Measure.integral(),
         "stellar_flux_fraction",
         reconstruction="band_limited",
     )
@@ -1161,13 +1172,13 @@ def integrate_detector_pixels(image, oversample):
     ``q**2 * ifs.pixel_integrate(image.data, q, q)`` in its data.
 
     Args:
-        image: Square per_pixel Image, ``(n, n)`` with ``n`` a multiple of
+        image: Square cell-integrated Image, ``(n, n)`` with ``n`` a multiple of
             ``oversample``, as returned by ``nircam_band_image`` or
             an explicitly constructed energy Image.
         oversample: Samples per detector pixel along each axis.
 
     Returns:
-        The per_pixel Image on the coarser detector grid, retaining quantity.
+        The cell-integrated Image on the coarser detector grid, retaining quantity.
         Coarsening a band-limited source declares linear reconstruction;
         oversample=1 retains its declaration, as do other reconstructions.
 
@@ -1175,8 +1186,8 @@ def integrate_detector_pixels(image, oversample):
         ValueError: The image is not square 2D or does not tile into pixels.
     """
     source = image
-    if not isinstance(source, Image) or source.measure != "per_pixel":
-        raise ValueError("image must be a per_pixel Image")
+    if not isinstance(source, Image) or source.measure != Measure.integral():
+        raise ValueError("image must be a cell-integrated Image")
     image = source.data
     if image.ndim != 2 or image.shape[0] != image.shape[1]:
         raise ValueError(f"image must be square 2D, got shape {image.shape}")
@@ -1186,7 +1197,6 @@ def integrate_detector_pixels(image, oversample):
             f"{oversample} samples"
         )
     n_pix = image.shape[0] // oversample
-    pixels, _ = downsample_psf(image, 1.0, (n_pix, n_pix))
     grid = dataclasses.replace(
         source.grid,
         shape=(n_pix, n_pix),
@@ -1194,9 +1204,8 @@ def integrate_detector_pixels(image, oversample):
         center_y=(source.grid.center_y + 0.5) / oversample - 0.5,
         basis=tuple(tuple(v * oversample for v in row) for row in source.grid.basis),
     )
+    collected = integrate_footprints(source, footprint_overlap(source.grid, grid))
     reconstruction = source.reconstruction
     if oversample > 1 and reconstruction == "band_limited":
         reconstruction = "linear"
-    return Image(
-        pixels, grid, (), "per_pixel", source.quantity, reconstruction=reconstruction
-    )
+    return dataclasses.replace(collected, reconstruction=reconstruction)

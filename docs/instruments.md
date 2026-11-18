@@ -42,7 +42,7 @@ import json
 from pathlib import Path
 
 import jax
-from hwoutils.grids import Image
+from dataclasses import replace
 
 jax.config.update("jax_enable_x64", True)
 
@@ -67,13 +67,7 @@ config = NIRCamConfig(
 )
 path, field = build_nircam(config, inputs)
 out, _ = path.propagate(field)
-energy = Image(
-    out.intensity().data * out.grid.pixel_area,
-    out.grid,
-    (),
-    "per_pixel",
-    "stellar_flux_fraction",
-)
+energy = replace(out.intensity().integrated(), quantity="stellar_flux_fraction")
 pixels = integrate_detector_pixels(energy, config.oversample)
 ```
 
@@ -127,7 +121,7 @@ conjugation-invariant and are used as given.
 
 The source field is scaled so the field just after the entrance pupil carries
 unit energy, the normalization STPSF applies with `normalize='first'`. No
-later renormalization happens, so `out.intensity().data * out.grid.pixel_area` is the
+later renormalization happens, so `out.intensity().integrated().data` is the
 fraction of entrance-pupil energy per output sample, and finite-field, mask
 and Lyot losses are kept.
 

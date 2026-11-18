@@ -3,7 +3,8 @@
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from hwoutils.grids import Frame, PixelGrid
+from astropy.io import fits
+from hwoutils.grids import Frame, Measure, PixelGrid
 from hwoutils.spectral import Band, Quadrature
 from yippy import open_yip
 
@@ -97,6 +98,9 @@ class TestEmittedPackage:
         assert package["stellar_intensity"].data.shape == (2, 64, 64)
         assert package["offaxis_psfs"].data.shape == (3, 64, 64)
         assert package["sky_transmission"].data.shape == (64, 64)
+        assert package["stellar_intensity"].measure == Measure.density("grid")
+        assert package["offaxis_psfs"].measure == Measure.density("grid")
+        assert package["sky_transmission"].measure == Measure.intensive()
         assert package["stellar_intensity"].reconstruction == "band_limited"
         assert package["offaxis_psfs"].reconstruction == "band_limited"
         assert package["sky_transmission"].reconstruction == "linear"
@@ -139,11 +143,21 @@ class TestEmittedPackage:
         )
         lyot, _ = core.propagate(band)
         out = science.forward(lyot)
-        # Emitted maps are per-pixel flux fractions: density times cell area.
-        expected = np.asarray(out.intensity().data) * 0.5**2
+        # The native point density and the area-scaled FITS encoding are distinct.
+        expected = np.asarray(out.intensity().data)
         np.testing.assert_allclose(
             package["stellar_intensity"].data[0], expected, rtol=1e-10
         )
+        directory, _ = emitted
+        for key, filename in (
+            ("stellar_intensity", "stellar_intens.fits"),
+            ("offaxis_psfs", "offax_psf.fits"),
+        ):
+            assert fits.getval(directory / filename, "SAMPKIND") == "point"
+            np.testing.assert_array_equal(
+                fits.getdata(directory / filename),
+                np.asarray(package[key].data) * 0.5**2,
+            )
 
     def test_finite_stellar_diameter_fills_the_null(self, emitted):
         """A resolved star leaks more light through the vortex core."""

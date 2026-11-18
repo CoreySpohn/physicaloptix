@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from conftest import TEST_FRAME
 from hwoutils.constants import s2d
-from hwoutils.grids import PixelGrid, resample
+from hwoutils.grids import Measure, PixelGrid, resample
 from hwoutils.radial import radial_profile
 from hwoutils.spectral import Band, Quadrature
 from optixstuff import SimplePrimary
@@ -126,6 +126,12 @@ class TestConformance:
             products.source_grid == products.stellar_grid == products.sky_grid == c.grid
         )
         assert c.stellar_frame(600.0) == c.frame == products.stellar_grid.frame
+        star = c.stellar_map(600.0, 0.0)
+        assert star.measure == Measure.density("grid")
+        assert c.source_psfs(600.0, 0.0, 0.0).image.measure == Measure.density("grid")
+        detector = c.stellar_map(600.0, 0.0, grid=star.grid)
+        assert detector.measure == Measure.integral()
+        np.testing.assert_allclose(star.integrated().data, detector.data, rtol=4e-15)
 
     def test_consumable_through_the_abstract_interface(self, vortex_coronagraph):
         def consumer(coro: AbstractImagingCoronagraph):

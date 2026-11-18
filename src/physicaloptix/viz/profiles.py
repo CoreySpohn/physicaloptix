@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import matplotlib.pyplot as plt
 import numpy as np
-from hwoutils.grids import Image, PixelGrid
+from hwoutils.grids import Image, Measure, PixelGrid
 from hwoutils.radial import radial_profile
 
 from physicaloptix.core import Field
@@ -130,7 +130,7 @@ def plot_contrast_profile(
             raise ValueError("pixscale_lod must be positive and finite")
         values = _intensity_from(np.asarray(image))
         grid = PixelGrid.regular(values.shape, 1, "pixel")
-        image = Image(values, grid, (), "per_pixel", "contrast")
+        image = Image(values, grid, (), Measure.intensive(), "contrast")
 
     separations, profile, _ = radial_profile(image, stat=stat, nbins=nbins)
 

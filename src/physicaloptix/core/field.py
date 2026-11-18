@@ -5,7 +5,7 @@ from enum import Enum
 
 import jax
 import jax.numpy as jnp
-from hwoutils.grids import GridArray, Image
+from hwoutils.grids import GridArray, Image, Measure
 from hwoutils.spectral import Quadrature
 
 
@@ -89,7 +89,7 @@ class Field(GridArray):
             abs2,
             self.grid,
             (),
-            "per_unit_area",
+            Measure.density("grid"),
             "field_power",
             reconstruction="band_limited"
             if self.plane is PlaneKind.FOCAL

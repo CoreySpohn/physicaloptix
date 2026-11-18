@@ -164,12 +164,9 @@ class TestCrossCheck:
     def test_onaxis_floor_matches(self, emitted, reference):
         """The aggregate null floor is far tighter than the pointwise shape
         (measured max ratio 1.0003)."""
-        # The reference npz holds the survey pipeline's INTERNAL density
-        # convention; emitted maps are per-pixel fractions (density * du^2).
-        du2 = float(reference["meta"][5]) ** 2
         ratio = float(
             np.asarray(emitted["stellar_intensity"].data[0]).max()
-            / (np.asarray(reference["stellar_intens"][0]).max() * du2)
+            / np.asarray(reference["stellar_intens"][0]).max()
         )
         assert abs(ratio - 1.0) < 0.01, f"floor ratio {ratio:.6f}"
 
@@ -185,13 +182,9 @@ class TestCrossCheck:
         """Bright products agree with the survey pipeline in ABSOLUTE value:
         fitted scales are 1 to ~5e-5 (deep-null maps excluded; their scale
         fit is biased by the shape mismatch)."""
-        # Emitted intensity maps are per-pixel fractions; the reference npz
-        # is the survey-internal density (1/du^2 larger). sky_trans is value
-        # semantics in both conventions and carries no factor.
-        du2 = float(reference["meta"][5]) ** 2
         scales = [
             scale_and_residual(
-                emitted["offaxis_psfs"].data[i] / du2, reference["offax_psf"][i]
+                emitted["offaxis_psfs"].data[i], reference["offax_psf"][i]
             )[0]
             for i in range(reference["offax_psf"].shape[0])
         ]

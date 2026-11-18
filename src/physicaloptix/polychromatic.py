@@ -12,9 +12,11 @@ The loop is outer over nodes and inner over sources, one unit of work per
 the backward pass holds about one propagation at a time.
 """
 
+from dataclasses import replace
+
 import equinox as eqx
 import numpy as np
-from hwoutils.grids import Image
+from hwoutils.grids import Image, Measure
 
 from physicaloptix.core import Field
 from physicaloptix.path import OpticalPath
@@ -29,14 +31,13 @@ def _node_image(path, entrance, source, scale, wavelength_nm, pupil_diameter_m, 
     """Energy image of one source at one node, times ``scale``."""
     field = source.entrance_field(entrance, wavelength_nm, pupil_diameter_m, parity)
     out, _ = path.at_wavelength(wavelength_nm).propagate(field)
-    return Image(
-        scale * out.intensity().data * out.grid.pixel_area,
-        out.grid,
-        (),
-        "per_pixel",
-        "stellar_flux_fraction",
+    intensity = out.intensity()
+    return replace(
+        intensity,
+        data=scale * intensity.data,
+        quantity="stellar_flux_fraction",
         reconstruction="band_limited",
-    )
+    ).integrated()
 
 
 class PolychromaticPath(eqx.Module):
@@ -107,7 +108,7 @@ class PolychromaticPath(eqx.Module):
             sources: A ``PointSource`` or a sequence of them.
 
         Returns:
-            A per_pixel stellar_flux_fraction Image on an arcsecond grid,
+            A cell-integrated stellar_flux_fraction Image on an arcsecond grid,
             with values equal to fractions of the unocculted source flux.
 
         Raises:
@@ -152,7 +153,7 @@ class PolychromaticPath(eqx.Module):
             total,
             image.grid.to_arcsec(image.grid.frame.reference_wavelength_nm),
             (),
-            "per_pixel",
+            Measure.integral(),
             "stellar_flux_fraction",
             reconstruction="band_limited",
         )

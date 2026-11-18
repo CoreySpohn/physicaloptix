@@ -143,10 +143,12 @@ class DriftingSpeckles:
         )
         phase = self.static_rad + np.tensordot(drift, self.ripples, axes=1)
         total = np.abs(self._field(phase)) ** 2
-        from hwoutils.grids import Image
+        from hwoutils.grids import Image, Measure
         nominal = np.abs(np.asarray(self.response.e_nom)) ** 2
-        delta = (total - nominal) * self.grid.pixel_area / self.response.input_energy
-        return Image(delta, self.grid, (), "per_pixel", "stellar_flux_fraction")
+        delta = (total - nominal) / self.response.input_energy
+        return Image(
+            delta, self.grid, (), Measure.density("grid"), "stellar_flux_fraction"
+        ).integrated()
 
 
 field = DriftingSpeckles()

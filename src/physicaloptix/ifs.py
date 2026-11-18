@@ -42,8 +42,13 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from hwoutils.grids import PixelGrid
-from hwoutils.transforms import downsample_psf
+from hwoutils.grids import (
+    Image,
+    Measure,
+    PixelGrid,
+    footprint_overlap,
+    integrate_footprints,
+)
 from jax import lax
 from jaxtyping import Array
 
@@ -392,17 +397,22 @@ def pixel_integrate(intensity, n_quad, stride):
     ny, nx = (max(0, (n - n_quad) // stride + 1) for n in intensity.shape)
     if not ny or not nx:
         return jnp.zeros((ny, nx), dtype=jnp.result_type(intensity, 1.0))
-    if stride == n_quad:
-        summed, _ = downsample_psf(
-            intensity[: ny * n_quad, : nx * n_quad], 1.0, (ny, nx)
-        )
-        return summed / n_quad**2
+    # Unit detector pixels surround n_quad fine samples in each dimension.
+    # For overlapping windows or gaps, reuse one pixel's translated footprint.
+    shape = (ny, nx) if stride == n_quad else (1, 1)
+    fine = PixelGrid.regular(tuple(n * n_quad for n in shape), 1 / n_quad, "pixel")
+    pixels = PixelGrid.regular(shape, 1, "pixel")
+    overlap = footprint_overlap(fine, pixels)
 
-    # Each offset has its own pixel footprint when windows overlap or have gaps.
+    def collect(window):
+        image = Image(window, fine, (), Measure.density("grid"), "field_power")
+        return integrate_footprints(image, overlap).data
+
+    if stride == n_quad:
+        return collect(intensity[: ny * n_quad, : nx * n_quad])
+
     def integrate_window(y, x):
-        window = lax.dynamic_slice(intensity, (y, x), (n_quad, n_quad))
-        summed, _ = downsample_psf(window, 1.0, (1, 1))
-        return summed[0, 0] / n_quad**2
+        return collect(lax.dynamic_slice(intensity, (y, x), fine.shape))[0, 0]
 
     return jax.vmap(
         lambda y: jax.vmap(lambda x: integrate_window(y, x))(jnp.arange(nx) * stride)

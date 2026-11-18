@@ -360,16 +360,19 @@ cell.
 
 ## Shared image boundaries
 
-`Field.intensity()` returns an `Image` with `measure="per_unit_area"` and
+`Field.intensity()` returns an `Image` with `measure=Measure.density("grid")` and
 `quantity="field_power"`; use `.data` for array arithmetic. Its numerical
 values and density convention are unchanged. `Field` subclasses `GridArray`.
 
-`PathCoronagraph` PSFs and stellar maps, `PolychromaticPath.image`,
-`nircam_band_image`, and the stellar/off-axis maps returned by `emit_yip`
-are `Image` objects with `measure="per_pixel"` and
+`PathCoronagraph` PSFs and stellar maps on a requested grid, `PolychromaticPath.image`,
+and `nircam_band_image`
+are `Image` objects with `measure=Measure.integral()` and
 `quantity="stellar_flux_fraction"`. Their values are fractions of the
-unocculted source flux in each pixel. Background and sky transmission maps
-use `measure="per_unit_area"`, `quantity="transmission"`, and no area factor.
+unocculted source flux in each pixel. With `grid=None`, the live coronagraph
+returns its propagated point densities per grid unit squared. The stellar and off-axis images from
+`emit_yip` return point densities per grid unit squared. Their FITS values
+are centre samples multiplied by the cell area. Sky transmission maps
+use `measure=Measure.intensive()`, `quantity="transmission"`, and no area factor.
 `integrate_detector_pixels` takes and returns a per-pixel `Image`, preserving
 its quantity. `plot_field` accepts these Images directly.
 

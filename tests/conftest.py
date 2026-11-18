@@ -159,7 +159,7 @@ class ProtocolFake:
         # conflation from a correct one.
         self.calls += 1
         y, x = np.ogrid[:SPECKLE_NPIX, :SPECKLE_NPIX]
-        from hwoutils.grids import Image
+        from hwoutils.grids import Image, Measure
 
         return Image(
             jnp.asarray(
@@ -167,7 +167,7 @@ class ProtocolFake:
             ),
             self.grid,
             (),
-            "per_pixel",
+            Measure.integral(),
             "stellar_flux_fraction",
         )
 
@@ -209,14 +209,14 @@ def analytic_speckle_field():
 
 def as_image(data):
     """Per-pixel energy fixture on a declared unit arcsecond grid."""
-    from hwoutils.grids import Image
+    from hwoutils.grids import Image, Measure
 
     data = jnp.asarray(data)
     return Image(
         data,
         PixelGrid.regular(data.shape[-2:], 1.0, "arcsec"),
         (),
-        "per_pixel",
+        Measure.integral(),
         "stellar_flux_fraction",
     )
 

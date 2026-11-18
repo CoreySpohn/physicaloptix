@@ -146,13 +146,13 @@ class _FakeCube:
 
     def realize(self, *, wavelength_nm, time_d=0.0):
         y, x = np.ogrid[:SPECKLE_NPIX, :SPECKLE_NPIX]
-        from hwoutils.grids import Image
+        from hwoutils.grids import Image, Measure
 
         return Image(
             1e-9 * (1.0 + 0.5 * np.sin(time_d * d2s)) * (1.0 + x + 3.0 * y),
             speckle_grid((SPECKLE_NPIX, SPECKLE_NPIX)),
             (),
-            "per_pixel",
+            Measure.integral(),
             "stellar_flux_fraction",
         )
 

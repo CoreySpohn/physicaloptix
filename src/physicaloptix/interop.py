@@ -11,7 +11,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from hwoutils.grids import Image, PixelGrid
+from hwoutils.grids import Image, Measure, PixelGrid
 from hwoutils.spectral import Band, Quadrature
 from optixstuff.apertures import DEFAULT_APERTURE_RULE, HalfMaximum
 from optixstuff.coronagraph import (
@@ -22,7 +22,7 @@ from optixstuff.coronagraph import (
 )
 from optixstuff.performance import SampledProfile, performance_curves
 
-from physicaloptix._sky import uniform_sky_image, unit_energy
+from physicaloptix._sky import entrance_energy, uniform_sky_image, unit_energy
 from physicaloptix.core import Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.transforms import Fraunhofer
@@ -101,16 +101,16 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         grid = PixelGrid.focal(
             npix, pixel_scale_lod, primary.frame(reference_wavelength_nm)
         )
-        energy = jnp.sum(input_field.intensity().data) * input_field.grid.pixel_area
+        energy = entrance_energy(input_field)
         lyot, _ = core_path.propagate(input_field)
         science = Fraunhofer(input_field.grid, grid)
 
         def psf(field, outside="zero"):
             return Image(
-                science.forward(field).intensity().data * grid.pixel_area / energy,
+                science.forward(field).intensity().integrated().data / energy,
                 grid,
                 (),
-                "per_pixel",
+                Measure.integral(),
                 "stellar_flux_fraction",
                 reconstruction="band_limited",
                 outside=outside,
@@ -181,7 +181,8 @@ class PathCoronagraph(AbstractImagingCoronagraph):
 
     def _psf(self, field, grid, outside="zero"):
         direct = (
-            grid.unit == "lod"
+            grid is not None
+            and grid.unit == "lod"
             and grid.frame == self.grid.frame
             and grid.shape[0] == grid.shape[1]
             and grid.is_geometric
@@ -190,18 +191,16 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         )
         render_grid = grid if direct else self.grid
         science = Fraunhofer(self.input_field.grid, render_grid)
-        native = Image(
-            science.forward(field).intensity().data
-            * render_grid.pixel_area
-            / self.input_energy,
-            render_grid,
-            (),
-            "per_pixel",
-            "stellar_flux_fraction",
-            reconstruction="band_limited",
+        power = science.forward(field).intensity()
+        if grid is not None:
+            power = power.integrated()
+        native = replace(
+            power,
+            data=power.data / self.input_energy,
+            quantity="stellar_flux_fraction",
             outside=outside,
         )
-        return native if native.grid == grid else _on_grid(native, grid)
+        return native if grid is None or native.grid == grid else _on_grid(native, grid)
 
     def stellar_map(self, wavelength_nm, stellar_diam_lod, *, grid=None):
         """Point-star flux fraction; reject concrete or mark traced finite stars NaN."""
@@ -211,9 +210,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         ):
             raise ValueError("finite stellar diameter requires a prepared stellar map")
         # The stellar halo continues past the field.
-        image = self._psf(
-            self.lyot_field, self.grid if grid is None else grid, outside="reflect"
-        )
+        image = self._psf(self.lyot_field, grid, outside="reflect")
         if not isinstance(stellar_diam_lod, jax.core.Tracer):
             return image
         return replace(
@@ -222,12 +219,11 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         )
 
     def source_psfs(self, wavelength_nm, x_lod, y_lod, *, grid=None):
-        """Per-pixel source fractions and support of each sampled pupil tilt.
+        """Native point densities or target pixel fractions for each pupil tilt.
 
         A tilt at or beyond the pupil Nyquist frequency on either axis is
         ambiguous with a different source position.
         """
-        grid = self.grid if grid is None else grid
 
         def one(x, y):
             lyot, _ = self.core_path.propagate(_tilted_xy(self.input_field, x, y))

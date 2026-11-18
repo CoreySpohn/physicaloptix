@@ -1,17 +1,44 @@
 """Uniform illumination by an incoherent ensemble of complex pupil screens."""
 
+from dataclasses import replace
+
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
-from hwoutils.grids import Image
+from hwoutils.grids import (
+    Image,
+    Measure,
+    footprint_overlap,
+    integrate_footprints,
+)
 from hwoutils.spectral import Band, Quadrature
 
 from physicaloptix.core import Field
 
 
+def entrance_energy(field):
+    """Collect the band-averaged power over the entire entrance field."""
+    intensity = field.intensity()
+    ny, nx = intensity.grid.shape
+    # Total power is translation invariant. Centre both footprints on the
+    # sample rectangle to keep their edges aligned even for fractional centres.
+    grid = replace(intensity.grid, center_x=(nx - 1) / 2, center_y=(ny - 1) / 2)
+    footprint = replace(
+        grid,
+        shape=(1, 1),
+        center_x=0,
+        center_y=0,
+        basis=tuple((xx * nx, yy * ny) for xx, yy in grid.basis),
+    )
+    total = integrate_footprints(
+        replace(intensity, grid=grid), footprint_overlap(grid, footprint)
+    )
+    return total.data[0, 0]
+
+
 def unit_energy(field):
     """Normalize to unit entrance power, weighted over the build spectrum."""
-    energy = jnp.sum(field.intensity().data) * field.grid.pixel_area
+    energy = entrance_energy(field)
     return Field(field.data / jnp.sqrt(energy), field.grid, field.plane, field.spectrum)
 
 
@@ -52,7 +79,7 @@ def uniform_sky_image(core_path, science, base, *, n_screens, seed, sky_band_nm=
         sky / (2.0 * n_screens * base.grid.pixel_area),
         science.grid_out,
         (),
-        "per_unit_area",
+        Measure.intensive(),
         "transmission",
         reconstruction="linear",
         outside="reflect",

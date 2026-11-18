@@ -13,7 +13,7 @@ import pytest
 pytest.importorskip("eyepiece")
 
 from conftest import TEST_FRAME
-from hwoutils.grids import Image, PixelGrid
+from hwoutils.grids import Image, Measure, PixelGrid
 
 from physicaloptix import Field, PlaneKind
 from physicaloptix.viz import plot_contrast_profile
@@ -155,7 +155,7 @@ def test_contrast_profile_uses_displaced_grid_and_preserves_empty_bins(as_field)
     image = (
         Field(data, grid, PlaneKind.FOCAL)
         if as_field
-        else Image(data, grid, (), "per_pixel", "field")
+        else Image(data, grid, (), Measure.density("grid"), "field")
     )
     result = plot_contrast_profile(image, nbins=10)
     r, profile = _line_xy(result)

@@ -20,7 +20,7 @@ The input field is normalized to unit pre-coronagraph energy on the
 dimensionless pupil grid, and ``stellar_intens`` / ``offax_psf`` values are
 per-pixel flux fractions (intensity density times the pixel cell area) --
 the convention shipped survey packages carry; ``sky_trans`` samples
-dimensionless transmission (``per_unit_area``) and carries no area factor. This is
+dimensionless transmission and carries no area factor. This is
 builder-tier code: a full-scale package is many propagations; freeze once and
 serve from the tables.
 """
@@ -28,7 +28,7 @@ serve from the tables.
 from dataclasses import replace
 
 import numpy as np
-from hwoutils.grids import Frame, Image
+from hwoutils.grids import Frame, Image, Measure
 from yippy import write_yip
 from yippy.writer import yip_header
 
@@ -40,19 +40,13 @@ DEFAULT_STELLAR_DIAMETERS = np.concatenate([[0.0], np.logspace(-3, 0, 11)])
 
 
 def _band_image(core_path, science, source):
-    """Quadrature-weighted band-averaged per-pixel flux fraction on the fixed grid.
+    """Area-scaled point intensity on the fixed angular science grid.
 
-    The band-averaged intensity density is multiplied by the science-grid
-    cell area, so map values are the fraction of the unit pre-coronagraph
-    energy landing in each pixel -- the convention shipped survey packages
-    carry and table readers consume. The survey pipeline's internal arrays
-    are the bare density, larger by exactly ``1 / dx**2``.
+    The YIP encodes each pointing as a centre sample times cell area,
+    before the incoherent average over a finite star's pointings.
     """
     lyot, _ = core_path.propagate(source)
-    return (
-        np.asarray(science.forward(lyot).intensity().data)
-        * float(science.grid_out.step) ** 2
-    )
+    return np.asarray(science.forward(lyot).intensity().integrated().data)
 
 
 def emit_yip(
@@ -110,7 +104,7 @@ def emit_yip(
         time_multiplier_characterization: Header metadata.
 
     Returns:
-        Native images and sample axes under the YIPPackage product names.
+        Point densities, transmission and sample axes under the YIPPackage names.
     """
     science_grid = replace(
         science_grid, frame=Frame(reference_wavelength_nm, diameter_m, "circumscribed")
@@ -203,20 +197,20 @@ def emit_yip(
             stellar,
             science_grid,
             ("stellar_diameter",),
-            "per_pixel",
+            Measure.integral(),
             "stellar_flux_fraction",
             reconstruction="band_limited",
             outside="reflect",
-        ),
+        ).density("grid"),
         "stellar_diameters_lod": stellar_diams_lod,
         "offaxis_psfs": Image(
             offax,
             science_grid,
             ("source",),
-            "per_pixel",
+            Measure.integral(),
             "stellar_flux_fraction",
             reconstruction="band_limited",
-        ),
+        ).density("grid"),
         "offsets_xy_lod": np.column_stack((offsets_lod, np.zeros_like(offsets_lod))),
         "sky_transmission": sky,
     }
@@ -240,5 +234,16 @@ def emit_yip(
 
     headers = dict.fromkeys(products, product_header(science_band_nm, nodes_nm.size))
     headers["sky_transmission"] = product_header(sky_band_nm, n_sky_screens)
-    write_yip(output_dir, {**products, "headers": headers})
+    # Keep the original area-scaled samples on disk. Re-encoding the native
+    # density after averaging resolved-star pointings can round a second time.
+    write_yip(
+        output_dir,
+        {
+            **products,
+            "stellar_intensity": stellar,
+            "offaxis_psfs": offax,
+            "headers": headers,
+            "sample_kind": "point",
+        },
+    )
     return products
