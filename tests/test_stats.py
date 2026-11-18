@@ -10,7 +10,6 @@ from conftest import TEST_FRAME, speckle_grid
 from hwoutils.constants import s2d
 from hwoutils.grids import PixelGrid
 
-from physicaloptix.core.grid import _grid_axis
 from physicaloptix.speckle import SpeckleProcess
 from physicaloptix.stats import (
     coherent_intensity,
@@ -29,12 +28,14 @@ _integrate = getattr(np, "trapezoid", None) or np.trapz
 
 class TestDarkZoneMask:
     def test_annulus_geometry(self):
-        grid = PixelGrid.focal(64, 0.5, TEST_FRAME)  # spans +-16 lambda/D
-        mask = np.asarray(dark_zone_mask(grid, iwa_lod=3.0, owa_lod=10.0))
-        coords = np.asarray(_grid_axis(grid))
-        xx, yy = np.meshgrid(coords, coords)
-        r = np.hypot(xx, yy)
-        expected = (r >= 3.0) & (r <= 10.0)
+        """Fails if the mask assumes a centered square or ignores the basis."""
+        grid = PixelGrid((3, 5), 1, 0, ((1, 0.5), (0, 2)), "lod", TEST_FRAME)
+        mask = np.asarray(dark_zone_mask(grid, iwa_lod=1.0, owa_lod=2.0))
+        expected = [
+            [True, False, True, True, False],
+            [False, False, False, False, False],
+            [False, False, False, False, False],
+        ]
         np.testing.assert_array_equal(mask, expected)
         assert mask.any() and not mask.all()
 

@@ -12,12 +12,11 @@ import pytest
 # collectible when the viz extra is present.
 pytest.importorskip("eyepiece")
 
-from hwoutils.grids import PixelGrid
-from hwoutils.radial import radial_distance, radial_profile
+from conftest import TEST_FRAME
+from hwoutils.grids import Image, PixelGrid
 
 from physicaloptix import Field, PlaneKind
 from physicaloptix.viz import plot_contrast_profile
-from physicaloptix.viz.profiles import _radial_bins, _reduce_bins
 
 # Deliberately NOT square. A radial profile is blind to an x/y conflation on a
 # square grid -- transposing maps every ring onto itself, so the ring means are
@@ -36,7 +35,8 @@ def _radius_map():
     pixels to radii (a swapped shape, an off-by-one in the bin assignment)
     shows up as a profile that wanders out of its bins.
     """
-    return np.asarray(radial_distance((_NY, _NX)), dtype=float)
+    y, x = np.ogrid[:_NY, :_NX]
+    return np.hypot(x - 35.5, y - 23.5)
 
 
 def _asymmetric_map():
@@ -51,19 +51,6 @@ def _asymmetric_map():
 def _line_xy(result):
     line = result.artists["line"]
     return np.asarray(line.get_xdata()), np.asarray(line.get_ydata())
-
-
-def test_mean_reproduces_hwoutils_radial_profile():
-    """The default statistic IS hwoutils' function, not a lookalike."""
-    values = _asymmetric_map()
-    _, ax = plt.subplots()
-    result = plot_contrast_profile(values, pixscale_lod=0.25, ax=ax)
-    r, profile = _line_xy(result)
-
-    want_r, want_profile = radial_profile(jnp.asarray(values), 0.25)
-    np.testing.assert_allclose(r, np.asarray(want_r), rtol=1e-12)
-    np.testing.assert_allclose(profile, np.asarray(want_profile), rtol=1e-10)
-    plt.close("all")
 
 
 def test_ring_means_land_inside_their_own_rings():
@@ -107,7 +94,7 @@ def test_analytic_profile_matches_an_independent_annulus_computation():
     for b in range(nbins):
         lo, hi = edges[b], edges[b + 1]
         mask = (radius >= lo) & (radius < hi) if b < nbins - 1 else radius >= lo
-        expected[b] = values[mask].mean() if mask.any() else 0.0
+        expected[b] = values[mask].mean() if mask.any() else np.nan
 
     np.testing.assert_allclose(profile, expected, rtol=1e-10)
     np.testing.assert_allclose(r, (edges[1:] + edges[:-1]) / 2.0 * 0.5, rtol=1e-12)
@@ -160,26 +147,23 @@ def test_pixscale_sets_the_abscissa():
     plt.close("all")
 
 
-def test_field_supplies_its_own_pixel_scale():
-    npix, dx = 32, 0.25
-    radius = np.asarray(radial_distance((npix, npix)), dtype=float)
-    data = jnp.asarray((1e-4 / (1.0 + radius)).astype(complex))
-    field = Field(
-        data=data,
-        grid=PixelGrid.regular((npix, npix), dx, "pupil_diameter"),
-        plane=PlaneKind.FOCAL,
+@pytest.mark.parametrize("as_field", [True, False], ids=["field", "complex-image"])
+def test_contrast_profile_uses_displaced_grid_and_preserves_empty_bins(as_field):
+    """Fails if the curve recenters, bins amplitudes, or zero-fills empty bins."""
+    grid = PixelGrid.regular((2, 5), 0.5, "lod", center=(0, 0), frame=TEST_FRAME)
+    data = jnp.ones(grid.shape, dtype=complex).at[0, 0].set(3)
+    image = (
+        Field(data, grid, PlaneKind.FOCAL)
+        if as_field
+        else Image(data, grid, (), "per_pixel", "field")
     )
-
-    _, ax = plt.subplots()
-    r_field, y_field = _line_xy(plot_contrast_profile(field, ax=ax))
-    _, ax2 = plt.subplots()
-    # Same map as a bare array, scale supplied by hand: must agree exactly.
-    r_bare, y_bare = _line_xy(
-        plot_contrast_profile(np.abs(np.asarray(data)) ** 2, pixscale_lod=dx, ax=ax2)
-    )
-    np.testing.assert_allclose(r_field, r_bare, rtol=1e-12)
-    np.testing.assert_allclose(y_field, y_bare, rtol=1e-10)
-    plt.close("all")
+    result = plot_contrast_profile(image, nbins=10)
+    r, profile = _line_xy(result)
+    assert r[0] == pytest.approx(np.hypot(2, 0.5) / 20)
+    assert profile[0] == pytest.approx(9)
+    assert np.isnan(profile[1])
+    result.fig.canvas.draw()
+    plt.close(result.fig)
 
 
 def test_bare_map_without_pixscale_raises():
@@ -236,20 +220,3 @@ def test_floors_are_forwarded_and_callables_rejected():
         plot_contrast_profile(
             values, pixscale_lod=0.25, floors=[lambda sep: 1e-11 * sep]
         )
-
-
-def test_empty_rings_return_zero_for_every_stat():
-    """A ring finer than the sample spacing is empty; it must not blow up.
-
-    The half-pixel-offset grid convention puts no sample at r = 0, so a
-    sufficiently large ``nbins`` empties the innermost ring -- the artifact
-    the binning-convention note pinned to the legacy bincount convention.
-    """
-    values = _radius_map()
-    _, inds, nbins = _radial_bins(values.shape, nbins=400)
-    counts = np.bincount(inds, minlength=nbins)
-    assert counts[0] == 0, "fixture no longer exercises the empty-ring path"
-    for stat in ("mean", "median", "max"):
-        profile = _reduce_bins(values.ravel(), inds, nbins, stat)
-        assert profile[0] == 0.0
-        assert np.all(np.isfinite(profile))

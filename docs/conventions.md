@@ -25,16 +25,16 @@ is a wavelength-aware conversion the consumer does.
 
 ## The half-pixel-offset grid
 
-Every grid is symmetric about its center; for the **even** `npix` used
+A centered grid is symmetric about the optical axis. For the **even** `npix` used
 throughout, there is no sample at the origin:
 
 $$ x_i = \left(i - \tfrac{\mathrm{npix}}{2} + \tfrac{1}{2}\right)\,\mathrm{d}x,
 \qquad i = 0, \dots, \mathrm{npix}-1. $$
 
 The center falls between the four central pixels (index $(\mathrm{npix}-1)/2$),
-which is the shared radial convention `hwoutils.radial.radial_distance` uses, so
-a {func}`~physicaloptix.stats.dark_zone_mask` annulus lines up with the PSF
-center. The missing sample at $r = 0$ is deliberate: it steps around the
+when the grid is centered. `PixelGrid.radius()` measures from the optical axis
+recorded in the grid, so a {func}`~physicaloptix.stats.dark_zone_mask` annulus
+also lines up with a displaced PSF center. The missing sample at $r = 0$ is deliberate: it steps around the
 $\mathrm{atan2}$ singularity at the core of a {term}`vortex coronagraph` mask,
 where the gradient would otherwise be undefined. Odd `npix` is legal but places
 a sample exactly at $r = 0$, forfeiting that protection -- use even grids in

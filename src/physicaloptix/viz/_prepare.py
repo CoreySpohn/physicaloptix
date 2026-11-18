@@ -47,7 +47,7 @@ from eyepiece.prepared import (
     resolve_bounds,
 )
 from hwoutils.constants import d2s, s2d
-from hwoutils.radial import radial_distance
+from hwoutils.grids import PixelGrid
 
 # Stable element IDs of a prepared speckle view. The image, its acquisition
 # clock, and the dark-zone annulus always sit on one image panel; the trace
@@ -403,27 +403,16 @@ def _time_unit(times_s):
     return next(((u, d) for u, d in _SECONDS if span >= 2.0 * d), _SECONDS[-1])
 
 
-def _image_axes(shape, pixel_scale_lod, grid=None):
-    """Pixel-edge extent: lambda/D centered on zero, or bare pixel indices."""
-    ny, nx = shape
-    if grid is not None:
-        basis = np.asarray(grid.basis)
-        if basis[0, 1] != 0 or basis[1, 0] != 0:
-            raise ValueError(
-                "boiling: resample a rotated or sheared grid before display"
-            )
-        x, y = (np.asarray(v) for v in grid.coordinates())
-        return AxisSpec(
-            *_LOD_LABELS,
-            (float(x[0, 0] - basis[0, 0] / 2), float(x[0, -1] + basis[0, 0] / 2)),
-            (float(y[0, 0] - basis[1, 1] / 2), float(y[-1, 0] + basis[1, 1] / 2)),
-        )
-    if pixel_scale_lod is None:
-        return AxisSpec("", "", (-0.5, nx - 0.5), (-0.5, ny - 0.5), show_ticks=False)
-    scale = float(pixel_scale_lod)
-    half_x = nx * scale / 2.0
-    half_y = ny * scale / 2.0
-    return AxisSpec(*_LOD_LABELS, (-half_x, half_x), (-half_y, half_y))
+def _image_axes(grid, scale, calibrated):
+    """Build display axes from the grid's outer edges."""
+    x0, x1, y0, y1 = grid.extent()
+    labels = _LOD_LABELS if calibrated else ("", "")
+    return AxisSpec(
+        *labels,
+        (x0 * scale, x1 * scale),
+        (y0 * scale, y1 * scale),
+        show_ticks=calibrated,
+    )
 
 
 def _annulus_series(cube, valid, annulus):
@@ -441,7 +430,7 @@ def _annulus_series(cube, valid, annulus):
     return series
 
 
-def _trace_series(trace, cube, valid, pixel_scale_lod, grid=None):
+def _trace_series(trace, cube, valid, grid, scale, calibrated):
     """The companion trace: a supplied series, or a dark-zone mean per frame.
 
     A TUPLE is read as ``(iwa_lod, owa_lod)`` and the series is computed as
@@ -459,18 +448,14 @@ def _trace_series(trace, cube, valid, pixel_scale_lod, grid=None):
             length does not match the frame count.
     """
     if isinstance(trace, tuple):
-        if pixel_scale_lod is None and grid is None:
+        if not calibrated:
             msg = (
                 "boiling: trace=(iwa_lod, owa_lod) needs a pixel scale to "
                 "place the annulus; pass a precomputed (n_t,) series instead"
             )
             raise ValueError(msg)
         iwa_lod, owa_lod = (float(v) for v in trace)
-        radius = (
-            np.hypot(*grid.coordinates())
-            if grid is not None
-            else np.asarray(radial_distance(cube.shape[-2:])) * float(pixel_scale_lod)
-        )
+        radius = np.asarray(grid.radius()) * scale
         annulus = (radius >= iwa_lod) & (radius <= owa_lod)
         return _annulus_series(cube, valid, annulus), (iwa_lod, owa_lod)
 
@@ -613,6 +598,13 @@ def prepare_speckles(
             data, len(times_s), floor=floor, telescope_peak=telescope_peak
         )
 
+    calibrated = grid is not None or pixscale_lod is not None
+    pixel_scale = 1.0
+    if grid is None:
+        pixel_scale = 1.0 if pixscale_lod is None else float(pixscale_lod)
+        center = None if calibrated else (0, 0)
+        grid = PixelGrid.regular(cube.shape[-2:], 1, "pixel", center=center)
+    axes = _image_axes(grid, pixel_scale, calibrated)
     scale = _scale(cube, valid, quantity, bounds)
     base_label = "contrast" if telescope_peak is not None else "flux fraction"
     label = base_label if quantity == "total" else f"{base_label} delta"
@@ -622,7 +614,7 @@ def prepare_speckles(
 
     series = radii = None
     if trace is not None:
-        series, radii = _trace_series(trace, cube, valid, pixscale_lod, grid)
+        series, radii = _trace_series(trace, cube, valid, grid, pixel_scale, calibrated)
 
     marks = [Label(CLOCK_ID, clock_text, _CLOCK_XY, space="panel")]
     if radii is not None:
@@ -638,7 +630,7 @@ def prepare_speckles(
     image = ImageView(
         IMAGE_ID,
         cube[0],
-        _image_axes(cube.shape[-2:], pixscale_lod, grid),
+        axes,
         scale,
         label,
         valid=None if valid is None else valid[0],

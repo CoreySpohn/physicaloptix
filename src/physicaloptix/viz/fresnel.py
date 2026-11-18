@@ -22,9 +22,11 @@ import math
 from typing import NamedTuple
 
 import hwostyle
+import jax
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
+from hwoutils.grids import PixelGrid
 from matplotlib.patches import Circle, Wedge
 from scipy.special import fresnel
 
@@ -318,9 +320,8 @@ def _zone_radii(z, radius):
     return np.sqrt((z + 0.5 * m) ** 2 - z**2)
 
 
-def _bowl_phase(x, z, radius):
+def _bowl_phase(rho, z, radius):
     """The path's phase ``2 pi (R - z)`` across the opening, masked outside it."""
-    rho = radius * np.hypot(*np.meshgrid(x, x))
     phase = np.angle(np.exp(2j * np.pi * (np.hypot(z, rho) - z)))
     return np.ma.masked_where(rho > radius, phase)
 
@@ -415,9 +416,9 @@ def plot_fresnel_zones(
     if ax is None:
         _, ax = plt.subplots(layout="constrained")
     base = float(matplotlib.rcParams["lines.linewidth"])
-    x = np.linspace(-1.0, 1.0, samples)
-    half = 0.5 * (x[1] - x[0])
-    extent = (x[0] - half, x[-1] + half, x[0] - half, x[-1] + half)
+    grid = PixelGrid.regular((samples, samples), 2.0 / (samples - 1), "pixel")
+    with jax.enable_x64():
+        rho = radius * np.asarray(grid.radius())
 
     artists = {}
     if screen:
@@ -436,8 +437,8 @@ def plot_fresnel_zones(
         )
         artists["fill"] = [ax.add_patch(wedge)]
     image = ax.imshow(
-        _bowl_phase(x, z, radius),
-        extent=extent,
+        _bowl_phase(rho, z, radius),
+        extent=grid.extent(),
         origin="lower",
         interpolation="nearest",
         # Outside the opening is transparent, so the hatched screen shows.
@@ -486,7 +487,7 @@ def plot_fresnel_zones(
                 f"zone boundaries; {n_rings} circles were made (pass max_rings)"
             )
             raise ValueError(msg)
-        image.set_data(_bowl_phase(x, new_z, radius))
+        image.set_data(_bowl_phase(rho, new_z, radius))
         for i, ring in enumerate(rings):
             ring.set_visible(i < len(new_bounds))
             if i < len(new_bounds):

@@ -29,7 +29,6 @@ Rician above is the ``p -> 0`` special case in raw-intensity form.
 import jax
 import jax.numpy as jnp
 import numpy as np
-from hwoutils.radial import radial_distance
 from jax.scipy.special import i0e
 from jax.scipy.special import ndtr as _jndtr
 
@@ -37,19 +36,15 @@ from jax.scipy.special import ndtr as _jndtr
 def dark_zone_mask(grid, *, iwa_lod, owa_lod):
     """Boolean annulus mask on a focal grid (radii in lambda/D).
 
-    The grid's half-pixel-offset center coincides with the shared radial
-    convention (``(n - 1) / 2`` in index space), so the radius map comes
-    from ``hwoutils.radial.radial_distance``.
-
     Args:
         grid: The focal-plane ``PixelGrid`` (coordinates in lambda/D).
         iwa_lod: Inner working angle.
         owa_lod: Outer working angle.
 
     Returns:
-        Boolean array of shape ``(npix, npix)``.
+        Boolean array of shape ``grid.shape``.
     """
-    radius = radial_distance((grid.shape[0], grid.shape[0])) * grid.step
+    radius = grid.radius()
     return (radius >= iwa_lod) & (radius <= owa_lod)
 
 

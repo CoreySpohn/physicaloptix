@@ -64,41 +64,31 @@ def _resolve(field_or_map, channel, kind):
         ValueError: A chromatic Field with ``kind != "intensity"`` is
             given no ``channel`` -- there is no single 2D array to draw.
     """
+    if not isinstance(field_or_map, (Field, Image)):
+        return np.asarray(field_or_map), None, None
+
+    grid = field_or_map.grid
+    data = field_or_map.data
     if isinstance(field_or_map, Image):
         if kind != "intensity":
             raise ValueError("an Image contains intensity, not complex phase")
-        grid = field_or_map.grid
-        data = np.asarray(field_or_map.data)
+        plane = {"lod": "focal", "pupil_diameter": "pupil"}.get(grid.unit, grid.unit)
         if channel is not None:
             data = data[channel]
         if data.ndim != 2:
             raise ValueError("an Image with leading axes requires channel=")
-        step = grid.step
-        extent = (
-            (-grid.center_x - 0.5) * step,
-            (grid.shape[1] - grid.center_x - 0.5) * step,
-            (-grid.center_y - 0.5) * step,
-            (grid.shape[0] - grid.center_y - 0.5) * step,
-        )
-        plane = {"lod": "focal", "pupil_diameter": "pupil"}.get(grid.unit, grid.unit)
-        return data, extent, plane
-    if not isinstance(field_or_map, Field):
-        return np.asarray(field_or_map), None, None
-
-    data = np.asarray(field_or_map.data)
-    half = float(field_or_map.grid.shape[0] * field_or_map.grid.step / 2)
-    extent = (-half, half, -half, half)
-    plane = field_or_map.plane.value
-
-    if data.ndim == 3:
-        if channel is not None:
-            data = data[channel]
-        elif kind == "intensity":
-            return np.asarray(field_or_map.intensity().data), extent, plane
-        else:
-            msg = f"chromatic Field with kind={kind!r} requires channel="
-            raise ValueError(msg)
-    return data, extent, plane
+    else:
+        plane = field_or_map.plane.value
+        if data.ndim == 3:
+            if channel is not None:
+                data = data[channel]
+            elif kind == "intensity":
+                data = field_or_map.intensity().data
+            else:
+                raise ValueError(
+                    f"chromatic Field with kind={kind!r} requires channel="
+                )
+    return np.asarray(data), grid.extent(), plane
 
 
 def _label_plane(ep, ax, plane):

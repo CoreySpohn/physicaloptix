@@ -40,10 +40,12 @@ def _chromatic(npix=16, nlam=3, weights=None):
 
 
 def test_intensity_from_mono_field_labels_and_extent():
-    field = _mono()
+    """Fails if an off-center rectangular Field gets a centered square extent."""
+    grid = PixelGrid.regular((3, 6), 0.5, "lod", frame=TEST_FRAME, center=(1, 0.5))
+    field = Field(jnp.ones(grid.shape), grid, PlaneKind.FOCAL)
     res = plot_field(field)
-    e = field.grid.shape[0] * field.grid.step / 2
-    assert tuple(res.artists["image"].get_extent()) == (-e, e, -e, e)
+    assert tuple(res.artists["image"].get_extent()) == (-0.75, 2.25, -0.5, 1.0)
+    res.fig.canvas.draw()
     assert "lambda" in res.ax.get_xlabel() or r"\lambda" in res.ax.get_xlabel()
     plt.close(res.fig)
 

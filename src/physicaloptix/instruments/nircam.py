@@ -708,14 +708,10 @@ def build_nircam(
     amplitude = inputs.pupil_amplitude
     npup = amplitude.shape[0]
     pupil_grid = PixelGrid.pupil(npup)
-    sample_lod = arcsec_to_lambda_d(
-        config.pixel_scale_arcsec / config.oversample, wavelength_nm, diameter_m
-    )
-    focal_grid = PixelGrid.focal(
-        config.detector_npix * config.oversample,
-        sample_lod,
-        Frame(wavelength_nm, diameter_m, "circumscribed"),
-    )
+    n_focal = config.detector_npix * config.oversample
+    focal_grid = PixelGrid.regular(
+        (n_focal, n_focal), config.pixel_scale_arcsec / config.oversample, "arcsec"
+    ).to_lod(wavelength_nm, Frame(wavelength_nm, diameter_m, "circumscribed"))
 
     stages = [
         Stage(

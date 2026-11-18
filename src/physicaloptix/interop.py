@@ -224,9 +224,8 @@ class PathCoronagraph(AbstractCoronagraph):
 
     def background_transmission(self, wavelength_nm, *, grid):
         """Sample sky transmission with linear reconstruction of the radial table."""
-        x, y = self.grid.coordinates()
         native = Image(
-            self.occulter_transmission(jnp.hypot(x, y)),
+            self.occulter_transmission(self.grid.radius()),
             self.grid,
             (),
             "per_unit_area",
