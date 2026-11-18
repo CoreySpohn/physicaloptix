@@ -27,27 +27,16 @@ serve from the tables.
 
 from dataclasses import replace
 
-import jax.numpy as jnp
 import numpy as np
 from hwoutils.grids import Frame, Image
 from yippy import write_yip
 from yippy.writer import yip_header
 
-from physicaloptix.core import Field, Spectrum
+from physicaloptix._sky import uniform_sky_image, unit_energy
 from physicaloptix.sources import point_source
 from physicaloptix.transforms import Fraunhofer
 
 DEFAULT_STELLAR_DIAMETERS = np.concatenate([[0.0], np.logspace(-3, 0, 11)])
-
-
-def _unit_energy(field):
-    energy = jnp.sum(field.data.real**2 + field.data.imag**2) * field.grid.pixel_area
-    return Field(
-        data=field.data / jnp.sqrt(energy),
-        grid=field.grid,
-        plane=field.plane,
-        spectrum=field.spectrum,
-    )
 
 
 def _band_image(core_path, science, source):
@@ -129,7 +118,7 @@ def emit_yip(
     stellar_diams_lod = np.asarray(stellar_diams_lod, dtype=float)
     offsets_lod = np.asarray(offsets_lod, dtype=float)
 
-    base = _unit_energy(input_field)
+    base = unit_energy(input_field)
     science = Fraunhofer(
         grid_in=base.grid,
         grid_out=science_grid,
@@ -189,7 +178,6 @@ def emit_yip(
     stellar = np.stack(stellar)
 
     # -- stochastic sky transmission ----------------------------------------
-    rng = np.random.default_rng(seed)
     nodes_nm = np.asarray(spectrum.nodes_nm, dtype=float)
     science_band_nm = (
         (spectrum.band.lo_nm, spectrum.band.hi_nm)
@@ -197,25 +185,14 @@ def emit_yip(
         else (nodes_nm.min(), nodes_nm.max())
     )
     sky_band_nm = science_band_nm if sky_band_nm is None else sky_band_nm
-    npix = base.grid.shape[0]
-    sky = 0.0
-    for _ in range(n_sky_screens):
-        screen = rng.standard_normal((npix, npix)) + 1j * rng.standard_normal(
-            (npix, npix)
-        )
-        wavelength = rng.uniform(*sky_band_nm)
-        single = Spectrum(nodes_nm=jnp.array([wavelength]), weights=jnp.array([1.0]))
-        data = base.data * jnp.asarray(screen) * (wavelength / reference_wavelength_nm)
-        source = Field(
-            data=data[None, ...],
-            grid=base.grid,
-            plane=base.plane,
-            spectrum=single,
-        )
-        lyot, _ = core_path.propagate(source)
-        out = science.forward(lyot).data[0]
-        sky = sky + np.asarray(out.real**2 + out.imag**2)
-    sky = sky * (npix**2 / n_sky_screens / 2.0)
+    sky = uniform_sky_image(
+        core_path,
+        science,
+        base,
+        n_screens=n_sky_screens,
+        seed=seed,
+        sky_band_nm=sky_band_nm,
+    )
 
     # -- write the package ---------------------------------------------------
     products = {
@@ -238,16 +215,7 @@ def emit_yip(
             reconstruction="band_limited",
         ),
         "offsets_xy_lod": np.column_stack((offsets_lod, np.zeros_like(offsets_lod))),
-        # A ratio of stochastic sky/reference intensities is not band-limited.
-        "sky_transmission": Image(
-            sky,
-            science_grid,
-            (),
-            "per_unit_area",
-            "transmission",
-            reconstruction="linear",
-            outside="reflect",
-        ),
+        "sky_transmission": sky,
     }
 
     def product_header(band_nm, n_wavelengths):

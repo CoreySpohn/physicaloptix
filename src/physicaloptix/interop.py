@@ -11,12 +11,18 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from hwoutils.grids import Image, PixelGrid, resample
+from hwoutils.grids import Image, PixelGrid
 from hwoutils.spectral import Band
 from optixstuff.apertures import DEFAULT_APERTURE_RULE, HalfMaximum
-from optixstuff.coronagraph import AbstractCoronagraph
-from optixstuff.performance import performance_curves
+from optixstuff.coronagraph import (
+    AbstractImagingCoronagraph,
+    ProductGrids,
+    SourcePSFs,
+    _on_grid,
+)
+from optixstuff.performance import SampledProfile, performance_curves
 
+from physicaloptix._sky import uniform_sky_image, unit_energy
 from physicaloptix.core import Field, PlaneKind, Spectrum
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.transforms import Fraunhofer
@@ -31,22 +37,7 @@ def _tilted_xy(field, x_lod, y_lod):
     return Field(field.data * tilt, field.grid, field.plane, field.spectrum)
 
 
-def _on_grid(image, grid):
-    """Reconcile angular frames before the shared flux-preserving resampler."""
-    if image.grid == grid:
-        return image
-    source, target = image.grid, grid
-    if source.unit != target.unit or (
-        source.unit == "lod" and source.frame != target.frame
-    ):
-        if source.unit == "lod":
-            source = source.to_arcsec(source.frame.reference_wavelength_nm)
-        if target.unit == "lod":
-            target = target.to_arcsec(target.frame.reference_wavelength_nm)
-    return replace(resample(replace(image, grid=source), target), grid=grid)
-
-
-class PathCoronagraph(AbstractCoronagraph):
+class PathCoronagraph(AbstractImagingCoronagraph):
     """Cached on-axis propagation and eagerly prepared aperture-rule records."""
 
     core_path: object
@@ -55,8 +46,8 @@ class PathCoronagraph(AbstractCoronagraph):
     input_energy: jax.Array
     grid: PixelGrid
     _records: tuple
-    curve_seps: jax.Array
-    curve_occulter_transmission: jax.Array
+    _sky: Image
+    _sky_profile: SampledProfile
     outer_working_angle_lod: float = eqx.field(static=True)
     wavelength_nm: float | None = eqx.field(static=True)
 
@@ -80,6 +71,8 @@ class PathCoronagraph(AbstractCoronagraph):
         fov_margin_lod=4.0,
         wavelength_nm=None,
         rules=(),
+        n_sky_screens=1000,
+        seed=0,
         leakage_rule="aperture_mean",
     ):
         """Compile a point-star model from an entrance-to-Lyot path.
@@ -88,6 +81,8 @@ class PathCoronagraph(AbstractCoronagraph):
         grid. wavelength_nm binds monochromatic OPD screens when supplied.
         DEFAULT_APERTURE_RULE and HalfMaximum(0.5) are always prepared; rules adds
         further immutable records. Finite stellar diameters are not modeled.
+        n_sky_screens independent complex pupil screens (drawn with seed)
+        estimate the uniform-sky map and its annular means.
         """
         if wavelength_nm is not None and input_field.spectrum is None:
             input_field = Field(
@@ -141,6 +136,14 @@ class PathCoronagraph(AbstractCoronagraph):
         )
         # Store coefficients as JAX leaves for immutable jit/vmap evaluation.
         records = jax.tree.map(jnp.asarray, records)
+        sky = uniform_sky_image(
+            core_path,
+            science,
+            unit_energy(input_field),
+            n_screens=n_sky_screens,
+            seed=seed,
+        )
+        sky_profile = jax.tree.map(jnp.asarray, SampledProfile.from_uniform_sky(sky))
         return cls(
             core_path,
             input_field,
@@ -148,8 +151,8 @@ class PathCoronagraph(AbstractCoronagraph):
             energy,
             grid,
             records,
-            jnp.asarray(seps),
-            jnp.asarray([jnp.sum(im.data) for im in images]),
+            sky,
+            sky_profile,
             float(outer_working_angle_lod),
             None if wavelength_nm is None else float(wavelength_nm),
         )
@@ -161,13 +164,20 @@ class PathCoronagraph(AbstractCoronagraph):
                 return record
         raise ValueError("No prepared record for this rule and leakage_rule")
 
-    def occulter_transmission(self, separation_lod, wavelength_nm=None, *, time_d=0.0):
-        """Total off-axis energy fraction at the build spectrum."""
-        return jnp.interp(
-            jnp.asarray(separation_lod),
-            self.curve_seps,
-            self.curve_occulter_transmission,
-        )
+    @property
+    def frame(self):
+        """Angular frame for performance separation queries."""
+        return self.grid.frame
+
+    def at_wavelength(self, wavelength_nm):
+        """Return the product grids of the build spectrum."""
+        return ProductGrids(self.grid, self.grid, self._sky.grid)
+
+    def uniform_sky_response(self, separation_lod, wavelength_nm=None, *, time_d=0.0):
+        """Annular mean of the uniform-sky map in the performance frame."""
+        if hasattr(separation_lod, "unit"):
+            raise TypeError("separation_lod must be dimensionless numeric values")
+        return self._sky_profile.evaluate(separation_lod)
 
     def _psf(self, field, grid, outside="zero"):
         direct = (
@@ -191,7 +201,7 @@ class PathCoronagraph(AbstractCoronagraph):
             reconstruction="band_limited",
             outside=outside,
         )
-        return _on_grid(native, grid)
+        return native if native.grid == grid else _on_grid(native, grid)
 
     def stellar_map(self, wavelength_nm, stellar_diam_lod, *, grid=None):
         """Point-star flux fraction; reject concrete or mark traced finite stars NaN."""
@@ -212,32 +222,25 @@ class PathCoronagraph(AbstractCoronagraph):
         )
 
     def source_psfs(self, wavelength_nm, x_lod, y_lod, *, grid=None):
-        """Per-pixel source flux fractions with leading axis 'source'."""
+        """Per-pixel source fractions and support of each sampled pupil tilt.
+
+        A tilt at or beyond the pupil Nyquist frequency on either axis is
+        ambiguous with a different source position.
+        """
         grid = self.grid if grid is None else grid
 
         def one(x, y):
             lyot, _ = self.core_path.propagate(_tilted_xy(self.input_field, x, y))
             return self._psf(lyot, grid)
 
-        images = jax.vmap(one)(jnp.atleast_1d(x_lod), jnp.atleast_1d(y_lod))
-        return replace(images, leading_axes=("source",))
-
-    def background_transmission(self, wavelength_nm, *, grid):
-        """Sample sky transmission with linear reconstruction of the radial table."""
-        native = Image(
-            self.occulter_transmission(self.grid.radius()),
-            self.grid,
-            (),
-            "per_unit_area",
-            "transmission",
-            reconstruction="linear",
-            outside="reflect",
+        x, y = jnp.broadcast_arrays(
+            jnp.atleast_1d(jnp.asarray(x_lod)), jnp.atleast_1d(jnp.asarray(y_lod))
         )
-        return _on_grid(native, grid)
+        nyquist_lod = 0.5 / self.input_field.grid.step
+        valid = (jnp.abs(x) < nyquist_lod) & (jnp.abs(y) < nyquist_lod)
+        images = jax.vmap(one)(jnp.where(valid, x, 0), jnp.where(valid, y, 0))
+        return SourcePSFs(replace(images, leading_axes=("source",)), valid)
 
-    def extended_scene(self, scene_map, wavelength_nm, *, grid, rotation_deg=0.0):
-        """Require a table model for per-scene-pixel propagation."""
-        raise NotImplementedError(
-            "PathCoronagraph does not render extended scenes; "
-            "use a table-backed coronagraph"
-        )
+    def uniform_sky_map(self, wavelength_nm, *, grid):
+        """Dimensionless extended-illumination transmission on the requested grid."""
+        return self._sky if self._sky.grid == grid else _on_grid(self._sky, grid)

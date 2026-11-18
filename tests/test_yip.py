@@ -231,11 +231,12 @@ class TestYippyRoundTrip:
         native = open_yip(out_dir)
         np.testing.assert_array_equal(native.offsets_xy_lod, package["offsets_xy_lod"])
         coro = native.prepare()
-        assert coro.grid.shape == package["offaxis_psfs"].grid.shape
-        assert coro.grid.basis == package["offaxis_psfs"].grid.basis
-        assert coro.grid.center_x == package["offaxis_psfs"].grid.center_x
-        assert coro.grid.center_y == package["offaxis_psfs"].grid.center_y
-        assert coro.grid.frame == package["offaxis_psfs"].grid.frame
+        source_grid = coro.at_wavelength(REF_NM).source_grid
+        assert source_grid.shape == package["offaxis_psfs"].grid.shape
+        assert source_grid.basis == package["offaxis_psfs"].grid.basis
+        assert source_grid.center_x == package["offaxis_psfs"].grid.center_x
+        assert source_grid.center_y == package["offaxis_psfs"].grid.center_y
+        assert source_grid.frame == package["offaxis_psfs"].grid.frame
         stellar = np.asarray(coro.stellar_map(REF_NM, 0.0).data)
         # The reader interpolates the diameter axis in log space; node
         # reproduction is at the interpolant's precision, not exact.

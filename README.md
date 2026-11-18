@@ -29,8 +29,8 @@ sampling gates, validated against the HWO Coronagraph Design Survey
 reference; the acceptance gates live in `tests/validation/`).
 
 The key piece is `PathCoronagraph`, which implements optixstuff's
-`AbstractCoronagraph`: build an `OpticalPath` (entrance pupil to Lyot plane),
-wrap it, and hand it to any downstream tool. Its IWA and scalar performance
+`AbstractImagingCoronagraph`: build an `OpticalPath` (entrance pupil to Lyot plane),
+wrap it, and use it in a diskless observation. Its IWA and scalar performance
 curves are derived from the propagated PSFs at construction, never declared.
 Aperture rules and performance reduction come from `optixstuff.apertures` and
 `optixstuff.performance`; the sampled counterpart is `yippy.Coronagraph`, which
@@ -66,7 +66,7 @@ eta = coro.throughput(6.0, 600.0)  # derived, not declared
   consumes it.
 - **Not a PSF interpolator.** That is [yippy](https://github.com/CoreySpohn/yippy)'s
   job (a sampled YIP table). physicaloptix is its functional sibling -- live
-  propagation -- and both back the same `AbstractCoronagraph` slot.
+  propagation -- and both back the same `AbstractImagingCoronagraph` slot.
 - **Not a scene model.** Stars, planets, disks, and zodi live in
   [skyscapes](https://github.com/CoreySpohn/skyscapes).
 
@@ -90,9 +90,9 @@ Built on [JAX](https://github.com/google/jax) and
 - **The speckle layer** -- `SpeckleProcess` / `AnalyticSpeckleField`, the
   linear speckle generator (E_nom, G) behind optixstuff's `AbstractSpeckleField`.
 - **Interop** (`physicaloptix.interop`) -- `PathCoronagraph`, the
-  optixstuff `AbstractCoronagraph` adapter: cached-Lyot image interface and
-  rule-specific curves (throughput, core area, leakage density, occulter transmission)
-  derived from a build-time separation sweep.
+  optixstuff `AbstractImagingCoronagraph` adapter: cached-Lyot image interface and
+  rule-specific throughput, core area and leakage density from a separation sweep.
+  The uniform-sky image and its annular means come from incoherent illumination.
 
 ### Ecosystem position
 
@@ -106,9 +106,9 @@ flowchart TB
 
     optix --> physopt
     optix --> yippy
-    physopt -- AbstractCoronagraph --> corono
+    physopt -- AbstractImagingCoronagraph --> corono
     physopt -- AbstractCoronagraph --> jaxedith
-    yippy -- AbstractCoronagraph --> corono
+    yippy -- AbstractImagingCoronagraph --> corono
 ```
 
 ## Installation

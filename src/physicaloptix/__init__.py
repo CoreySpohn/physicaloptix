@@ -14,7 +14,7 @@ layer and ``physicaloptix.stats``) -- validated against the cds_pipeline
 EAC-1 AAVC (acceptance gates in ``tests/validation/``).
 
 ``PathCoronagraph`` wraps an ``OpticalPath`` behind optixstuff's
-``AbstractCoronagraph`` with performance curves derived from the propagated
+``AbstractImagingCoronagraph`` with performance curves derived from the propagated
 PSFs. The speckle layer (``SpeckleProcess`` / ``AnalyticSpeckleField``) is
 the linear speckle generator (E_nom, G) and is backend-free.
 """

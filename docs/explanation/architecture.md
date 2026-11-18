@@ -89,7 +89,7 @@ this through, alongside the detector readout and the integral-field
 spectrograph.
 
 {class}`~physicaloptix.PathCoronagraph` is the interoperability layer. It wraps
-an `OpticalPath` and presents the `AbstractCoronagraph` interface that the rest
+an `OpticalPath` and presents the `AbstractImagingCoronagraph` interface that the rest
 of the simulation suite consumes: an on-axis PSF, a throughput curve, an inner
 working angle. The defining property is that these are **derived from the
 propagated PSFs at construction, never declared** -- the inner working angle is
@@ -102,7 +102,10 @@ Aperture rules and performance reduction live in `optixstuff.apertures` and
 `yippy.Coronagraph` directly implements the sampled `AbstractTableCoronagraph`
 contract. Both expose `source_psfs(wavelength_nm, x_lod, y_lod, grid=...)`,
 `stellar_map(wavelength_nm, stellar_diam_lod, grid=...)`, and `curves(rule)`.
-Omitting an image grid selects the model's native grid. `PathCoronagraph.bandpass`
+`at_wavelength(wavelength_nm)` identifies the native grid of each product.
+`source_psfs` returns an image stack and a validity flag for each source.
+The live model estimates `uniform_sky_map` from independent complex pupil
+screens and `uniform_sky_response` from annular means of that map. `PathCoronagraph.bandpass`
 is the recorded `Spectrum.band`, or `None` if no integration band was specified.
 It supports only point stars: a concrete nonzero stellar diameter raises
 `ValueError`, and a traced nonzero diameter produces a NaN image.
@@ -163,7 +166,7 @@ physicaloptix is deliberately narrow. It does the diffraction and nothing else:
   [optixstuff](https://optixstuff.readthedocs.io/). physicaloptix consumes it.
 - **Sampled PSF tables** are [yippy](https://yippy.readthedocs.io/)'s job.
   physicaloptix is the live-propagation sibling; both back the same
-  `AbstractCoronagraph` slot, and downstream tools cannot tell them apart.
+  `AbstractImagingCoronagraph` slot, and downstream tools cannot tell them apart.
 - **Image simulation** (assembling a scene onto a detector) is
   [coronagraphoto](https://coronagraphoto.readthedocs.io/), and
   **exposure-time and yield** calculations are

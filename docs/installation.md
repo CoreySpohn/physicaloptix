@@ -65,7 +65,7 @@ uv run sphinx-build docs docs/.build/html
 ## Where physicaloptix sits in the stack
 
 physicaloptix is a downstream consumer of `optixstuff` and a functional
-sibling of `yippy`; both back the same optixstuff `AbstractCoronagraph`
+sibling of `yippy`; both back the same optixstuff `AbstractImagingCoronagraph`
 slot.
 
 | Package | Role |

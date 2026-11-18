@@ -8,11 +8,12 @@ import numpy as np
 import pytest
 from conftest import TEST_FRAME
 from hwoutils.constants import s2d
-from hwoutils.grids import Image, PixelGrid, resample
+from hwoutils.grids import PixelGrid, resample
+from hwoutils.radial import radial_profile
 from optixstuff import SimplePrimary
-from optixstuff.coronagraph import AbstractCoronagraph
+from optixstuff.coronagraph import AbstractImagingCoronagraph, AbstractSceneCoronagraph
 
-from physicaloptix.core import Field, PlaneKind
+from physicaloptix.core import Field, PlaneKind, Spectrum
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import MultiScaleVortex, SampledOptic
 from physicaloptix.interop import PathCoronagraph
@@ -72,6 +73,7 @@ def vortex_coronagraph():
         reference_wavelength_nm=600.0,
         outer_working_angle_lod=OWA,
         pixel_scale_lod=0.5,
+        n_sky_screens=32,
     )
 
 
@@ -104,6 +106,7 @@ def bare_telescope():
         reference_wavelength_nm=600.0,
         outer_working_angle_lod=OWA,
         pixel_scale_lod=0.5,
+        n_sky_screens=32,
     )
 
 
@@ -112,17 +115,25 @@ def _lod_rad(wavelength_nm):
 
 
 class TestConformance:
-    def test_is_an_abstract_coronagraph(self, vortex_coronagraph):
-        assert isinstance(vortex_coronagraph, AbstractCoronagraph)
+    def test_imaging_capabilities(self, vortex_coronagraph):
+        """Fails if the live path advertises disk rendering or hides native frames."""
+        c = vortex_coronagraph
+        assert isinstance(c, AbstractImagingCoronagraph)
+        assert not isinstance(c, AbstractSceneCoronagraph)
+        products = c.at_wavelength(600.0)
+        assert (
+            products.source_grid == products.stellar_grid == products.sky_grid == c.grid
+        )
+        assert c.stellar_frame(600.0) == c.frame == products.stellar_grid.frame
 
     def test_consumable_through_the_abstract_interface(self, vortex_coronagraph):
-        def consumer(coro: AbstractCoronagraph):
+        def consumer(coro: AbstractImagingCoronagraph):
             sep, wl = 6.0, 600.0
             return (
                 coro.throughput(sep, wl),
                 coro.core_area(sep, wl),
                 coro.leakage_density_lod2(sep, wl),
-                coro.occulter_transmission(sep, wl),
+                coro.uniform_sky_response(sep, wl),
                 coro.on_axis_psf(
                     wl, _grid((32, 32), (_lod_rad(wl) * 0.5) / _lod_rad(wl))
                 ).data,
@@ -226,8 +237,8 @@ class TestDerivedCurves:
         cmi = float(vortex_coronagraph.leakage_density_lod2(0.8 * OWA, 600.0))
         assert 0.0 <= cmi < 1e-3
 
-    def test_occulter_transmission_is_a_fraction(self, vortex_coronagraph):
-        occ = float(vortex_coronagraph.occulter_transmission(0.8 * OWA, 600.0))
+    def test_point_energy_is_a_fraction(self, vortex_coronagraph):
+        occ = float(vortex_coronagraph.point_energy_fraction(0.0, 0.8 * OWA))
         assert 0.0 <= occ <= 1.0 + 1e-9
 
     def test_time_and_wavelength_arguments_accepted(self, vortex_coronagraph):
@@ -299,31 +310,57 @@ class TestSamplingExplicitContract:
         c = vortex_coronagraph
         scale, npix = 0.25, 112
         detector = _grid((npix, npix), scale).to_arcsec(600.0)
-        xs, ys = jnp.asarray([4.0, 0.0]), jnp.asarray([0.0, -6.0])
-        psfs = np.asarray(c.source_psfs(self.WL, xs, ys, grid=detector).data)
-        assert psfs.shape == (2, npix, npix)
+        xs, ys = (
+            jnp.asarray([4.0, 0.0, jnp.nan, NPUP]),
+            jnp.asarray([0.0, -6.0, 0.0, 0.0]),
+        )
+        sources = c.source_psfs(self.WL, xs, ys, grid=detector)
+        np.testing.assert_array_equal(sources.valid, [True, True, False, False])
+        psfs = np.asarray(sources.image.data)
         coords = (np.arange(npix) - npix / 2 + 0.5) * scale
         for k in range(2):
             iy, ix = np.unravel_index(np.argmax(psfs[k]), psfs[k].shape)
             assert abs(coords[ix] - float(xs[k])) < scale
             assert abs(coords[iy] - float(ys[k])) < scale
-        total = float(psfs[0].sum())
-        expected = float(c.occulter_transmission(4.0, self.WL))
-        np.testing.assert_allclose(total, expected, rtol=5e-5)
+        energy = c.point_energy_fraction(xs, ys)
+        assert np.isnan(energy[2:]).all()
+        np.testing.assert_allclose(psfs[:2].sum(axis=(-2, -1)), energy[:2], rtol=5e-5)
 
-    def test_background_transmission_matches_occulter_curve(self, vortex_coronagraph):
+    def test_uniform_sky_matches_extended_illumination(
+        self, vortex_coronagraph, tmp_path
+    ):
+        """Fails if a radial point-energy curve is painted onto the target.
+
+        Identical monochromatic illumination and seed give the same sky as
+        the fixed-angle YIP emitter to floating-point propagation roundoff.
+        """
+        from physicaloptix.yip import emit_yip
+
         c = vortex_coronagraph
-        scale, npix = 0.5, 40
-        served = np.asarray(
-            c.background_transmission(self.WL, grid=_grid((npix, npix), scale)).data
+        wl = c.frame.reference_wavelength_nm
+        sky = c.uniform_sky_map(wl, grid=c.grid)
+        package = emit_yip(
+            tmp_path,
+            c.core_path,
+            c.input_field,
+            science_grid=c.grid,
+            reference_wavelength_nm=wl,
+            spectrum=Spectrum([wl], [1.0]),
+            offsets_lod=[4.0],
+            stellar_diams_lod=[0.0],
+            n_sky_screens=32,
+            diameter_m=DIAMETER_M,
         )
-        assert np.all(served >= 0.0)
-        coords = (np.arange(npix) - npix / 2 + 0.5) * scale
-        ix = int(np.argmin(np.abs(coords - 7.0)))
-        iy = int(np.argmin(np.abs(coords)))
-        r = float(np.hypot(coords[ix], coords[iy]))
         np.testing.assert_allclose(
-            served[iy, ix], float(c.occulter_transmission(r, self.WL)), rtol=1e-6
+            sky.data, package["sky_transmission"].data, rtol=1e-12
+        )
+        radii, means, counts = radial_profile(sky)
+        populated = np.asarray(counts) > 0
+        # The central vortex null rejects an axial point but admits sky
+        # photons diffracted by off-axis illumination.
+        assert c.uniform_sky_response(radii[0], wl) > c.point_energy_fraction(0.0, 0.0)
+        np.testing.assert_allclose(
+            c.uniform_sky_response(radii[populated], wl), means[populated], rtol=1e-12
         )
 
     def test_non_square_shape_center_crops(self, vortex_coronagraph):
@@ -337,20 +374,6 @@ class TestSamplingExplicitContract:
         padded = np.asarray(c.stellar_map(self.WL, 0.0, grid=_grid((42, 58), 0.5)).data)
         assert wide.shape == (40, 56)
         np.testing.assert_allclose(wide, padded[1:41, 1:57], rtol=1e-12)
-
-    def test_extended_scene_raises(self, vortex_coronagraph):
-        with pytest.raises(NotImplementedError, match="extended scenes"):
-            vortex_coronagraph.extended_scene(
-                Image(
-                    jnp.ones((16, 16)),
-                    _grid((16, 16), 0.5),
-                    (),
-                    "per_pixel",
-                    "stellar_flux_fraction",
-                ),
-                self.WL,
-                grid=_grid((32, 32), 0.5),
-            )
 
 
 class TestChromaticBuild:
@@ -396,6 +419,7 @@ class TestChromaticBuild:
             reference_wavelength_nm=600.0,
             outer_working_angle_lod=OWA,
             pixel_scale_lod=0.5,
+            n_sky_screens=32,
             wavelength_nm=build_wavelength_nm,
         )
 
@@ -539,7 +563,7 @@ def test_rule_records_and_absolute_leakage(bare_telescope):
 
     rule = HalfMaximum(0.5)
     expected = performance_curves(
-        off, star, rule, separations_lod=c.curve_seps, stellar_diameter=0.0
+        off, star, rule, separations_lod=c.curves().separation_lod, stellar_diameter=0.0
     )
     record = c.curves(rule)
     for name in (
@@ -608,13 +632,13 @@ def test_public_coronagraph_reconstruction(vortex_coronagraph):
             c.on_axis_psf(600.0, grid),
             c.off_axis_psf(600.0, 6.0, grid),
             c.stellar_map(600.0, 0.0, grid=grid),
-            c.source_psfs(600.0, jnp.array([6.0]), jnp.array([0.0]), grid=grid),
+            c.source_psfs(600.0, jnp.array([6.0]), jnp.array([0.0]), grid=grid).image,
         ):
             assert image.reconstruction == expected
-        assert c.background_transmission(600.0, grid=grid).reconstruction == "linear"
+        assert c.uniform_sky_map(600.0, grid=grid).reconstruction == "linear"
         # Halo and transmission continue past the field; source cores do not.
         assert c.stellar_map(600.0, 0.0, grid=grid).outside == "reflect"
-        assert c.background_transmission(600.0, grid=grid).outside == "reflect"
+        assert c.uniform_sky_map(600.0, grid=grid).outside == "reflect"
         assert c.off_axis_psf(600.0, 6.0, grid).outside == "zero"
 
 

@@ -163,9 +163,9 @@ Yield Input Package
   transmission maps. The [yippy](https://yippy.readthedocs.io/) library
   interpolates a YIP; physicaloptix is its live-propagation sibling.
 
-AbstractCoronagraph
-  The interface (defined in optixstuff) that a coronagraph presents to the rest
-  of the simulation suite: an on-axis PSF, a {term}`throughput` curve, an
+AbstractImagingCoronagraph
+  The optixstuff interface for stellar, point-source and uniform-sky images,
+  together with scalar performance such as {term}`throughput` and
   {term}`inner working angle`. Both a live-propagation `PathCoronagraph` and a
   sampled {term}`Yield Input Package` fill the same slot interchangeably.
 ```

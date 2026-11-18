@@ -215,7 +215,7 @@ Deep results are quoted as {term}`contrast`, but three normalizations
 coexist in the stack and must not be mixed:
 
 - **Per-pixel flux fraction** (the seam convention: the
-  `AbstractCoronagraph` maps {class}`~physicaloptix.PathCoronagraph` serves,
+  `AbstractImagingCoronagraph` maps {class}`~physicaloptix.PathCoronagraph` serves,
   the YIP packages table readers consume, and -- since the 2026-07 seam fix
   -- what every `AbstractSpeckleField.realize` returns): the fraction of
   pre-coronagraph stellar flux landing in each pixel,

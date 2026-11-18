@@ -14,8 +14,8 @@ differentiable and JIT-compilable, so you can `vmap` a propagation over
 wavelength or field angle and take gradients through it.
 
 The central type, {class}`~physicaloptix.PathCoronagraph`, implements
-optixstuff's `AbstractCoronagraph`: build an {class}`~physicaloptix.OpticalPath`
-from entrance pupil to Lyot plane, wrap it, and hand it to any downstream tool.
+optixstuff's `AbstractImagingCoronagraph`: build an {class}`~physicaloptix.OpticalPath`
+from entrance pupil to Lyot plane, wrap it, and use it in a diskless observation.
 Its inner working angle and scalar performance curves are **derived from the
 propagated PSFs at construction, never declared**. The core is
 [verified and validated](validation) at two tiers: analytic anchors that run
@@ -32,7 +32,7 @@ reference.
   trusted at runtime.
 - **A coronagraph backend.** {class}`~physicaloptix.PathCoronagraph` is the
   live-propagation counterpart to {mod}`yippy`'s sampled tables; both fill the
-  same optixstuff `AbstractCoronagraph` slot.
+  same optixstuff `AbstractImagingCoronagraph` slot.
 - **A speckle model.** {func}`~physicaloptix.linearize.linearize` reduces any path to the
   linear `(E_nom, G)` speckle generator that feeds
   {class}`~physicaloptix.SpeckleProcess` and `physicaloptix.stats`. The same
@@ -52,7 +52,7 @@ reference.
   lives in {mod}`optixstuff`; physicaloptix consumes it.
 - **Not a PSF interpolator.** That is {mod}`yippy`'s job (a sampled YIP table).
   physicaloptix is its functional sibling -- live propagation -- and both back
-  the same `AbstractCoronagraph` slot.
+  the same `AbstractImagingCoronagraph` slot.
 - **Not a scene model.** Stars, planets, disks, and zodi live in
   {mod}`skyscapes`.
 
@@ -69,8 +69,8 @@ flowchart LR
 
     opt --> po
     opt --> yip
-    po -.AbstractCoronagraph.-> cor
-    yip -.AbstractCoronagraph.-> cor
+    po -.AbstractImagingCoronagraph.-> cor
+    yip -.AbstractImagingCoronagraph.-> cor
     po -.AbstractCoronagraph.-> jed
     po -."(E_nom, G)".-> tip
     tip -.AbstractSpeckleField.-> cor
@@ -78,7 +78,7 @@ flowchart LR
 
 `physicaloptix` and `yippy` are interchangeable coronagraph backends: one
 propagates on demand, the other interpolates a precomputed table. Downstream
-tools consume either as an `AbstractCoronagraph`. The sampled backend is
+tools consume either as an `AbstractImagingCoronagraph`. The sampled backend is
 `yippy.Coronagraph`, which directly implements `AbstractTableCoronagraph`.
 Aperture rules and performance records are defined by `optixstuff`.
 
