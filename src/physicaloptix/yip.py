@@ -25,27 +25,19 @@ builder-tier code: a full-scale package is many propagations; freeze once and
 serve from the tables.
 """
 
-from pathlib import Path
+from dataclasses import replace
 
 import jax.numpy as jnp
 import numpy as np
-from hwoutils.grids import Image
+from hwoutils.grids import Frame, Image
+from yippy import write_yip
+from yippy.writer import yip_header
 
 from physicaloptix.core import Field, Spectrum
 from physicaloptix.sources import point_source
 from physicaloptix.transforms import Fraunhofer
 
 DEFAULT_STELLAR_DIAMETERS = np.concatenate([[0.0], np.logspace(-3, 0, 11)])
-
-
-def _fits():
-    try:
-        from astropy.io import fits
-    except ImportError as err:
-        raise ImportError(
-            "the YIP emitter writes FITS files and needs astropy (pip install astropy)"
-        ) from err
-    return fits
 
 
 def _unit_energy(field):
@@ -72,76 +64,6 @@ def _band_image(core_path, science, source):
         np.asarray(science.forward(lyot).intensity().data)
         * float(science.grid_out.step) ** 2
     )
-
-
-def _make_header(
-    fits,
-    *,
-    science_grid,
-    spectrum,
-    reference_wavelength_nm,
-    n_pointings,
-    diameter_m,
-    inscribed_diameter_m,
-    obscured,
-    design_name,
-    time_multiplier_detection,
-    time_multiplier_characterization,
-):
-    def tidy(value):
-        # Full-precision float noise (0.9500000000000001) overflows the
-        # 80-char card and truncates the comment the readers parse units
-        # from; nine decimals is far beyond any physical meaning here.
-        return float(np.round(value, 9))
-
-    center_x = science_grid.center_x + 0.5  # FITS corner-count coordinate
-    center_y = science_grid.center_y + 0.5
-    lambda_um = tidy(reference_wavelength_nm * 1e-3)
-    wavelengths = np.asarray(spectrum.nodes_nm)
-    header = fits.Header()
-    header["DESIGN"] = design_name
-    header["PIXSCALE"] = (tidy(science_grid.step), "pixel scale in units of lambda0/D")
-    header["LAMBDA"] = (lambda_um, "central wavelength of the bandpass in microns")
-    header["MINLAM"] = (
-        tidy(
-            (spectrum.band.lo_nm if spectrum.band is not None else wavelengths.min())
-            * 1e-3
-        ),
-        "shortest wavelength of the bandpass in microns",
-    )
-    header["MAXLAM"] = (
-        tidy(
-            (spectrum.band.hi_nm if spectrum.band is not None else wavelengths.max())
-            * 1e-3
-        ),
-        "longest wavelength of the bandpass in microns",
-    )
-    header["XCENTER"] = (center_x, "image x center in corner counts")
-    header["YCENTER"] = (center_y, "image y center in corner counts")
-    header["OBSCURED"] = (
-        obscured,
-        "obscured aperture-area fraction vs circular",
-    )
-    header["JITTER"] = (0, "RMS jitter per axis in mas")
-    header["N_LAM"] = (
-        len(spectrum),
-        "number of wavelength samples",
-    )
-    header["N_STAR"] = (n_pointings, "number of points across stellar diameter")
-    header["D"] = (diameter_m, "circumscribed telescope diameter in meters")
-    header["D_INSC"] = (
-        diameter_m if inscribed_diameter_m is None else inscribed_diameter_m,
-        "inscribed diameter of the telescope in meters",
-    )
-    header["TMULDET"] = (
-        time_multiplier_detection,
-        "time multiplier for detection observations",
-    )
-    header["TMULCHAR"] = (
-        time_multiplier_characterization,
-        "time multiplier for characterization obs",
-    )
-    return header
 
 
 def emit_yip(
@@ -196,13 +118,11 @@ def emit_yip(
         time_multiplier_characterization: Header metadata.
 
     Returns:
-        Dict with the emitted Image maps and array axes (``stellar_intens``,
-        ``stellar_intens_diam_list``, ``offax_psf``,
-        ``offax_psf_offset_list``, ``sky_trans``).
+        Native images and sample axes under the YIPPackage product names.
     """
-    fits = _fits()
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    science_grid = replace(
+        science_grid, frame=Frame(reference_wavelength_nm, diameter_m, "circumscribed")
+    )
 
     if stellar_diams_lod is None:
         stellar_diams_lod = DEFAULT_STELLAR_DIAMETERS
@@ -270,22 +190,20 @@ def emit_yip(
 
     # -- stochastic sky transmission ----------------------------------------
     rng = np.random.default_rng(seed)
-    if sky_band_nm is None:
-        wavelengths = np.asarray(spectrum.nodes_nm, dtype=float)
-        min_wl, max_wl = (
-            (spectrum.band.lo_nm, spectrum.band.hi_nm)
-            if spectrum.band is not None
-            else (wavelengths.min(), wavelengths.max())
-        )
-    else:
-        min_wl, max_wl = float(sky_band_nm[0]), float(sky_band_nm[1])
+    nodes_nm = np.asarray(spectrum.nodes_nm, dtype=float)
+    science_band_nm = (
+        (spectrum.band.lo_nm, spectrum.band.hi_nm)
+        if spectrum.band is not None
+        else (nodes_nm.min(), nodes_nm.max())
+    )
+    sky_band_nm = science_band_nm if sky_band_nm is None else sky_band_nm
     npix = base.grid.shape[0]
     sky = 0.0
     for _ in range(n_sky_screens):
         screen = rng.standard_normal((npix, npix)) + 1j * rng.standard_normal(
             (npix, npix)
         )
-        wavelength = rng.uniform(min_wl, max_wl)
+        wavelength = rng.uniform(*sky_band_nm)
         single = Spectrum(nodes_nm=jnp.array([wavelength]), weights=jnp.array([1.0]))
         data = base.data * jnp.asarray(screen) * (wavelength / reference_wavelength_nm)
         source = Field(
@@ -300,37 +218,8 @@ def emit_yip(
     sky = sky * (npix**2 / n_sky_screens / 2.0)
 
     # -- write the package ---------------------------------------------------
-    header = _make_header(
-        fits,
-        science_grid=science_grid,
-        spectrum=spectrum,
-        reference_wavelength_nm=reference_wavelength_nm,
-        n_pointings=n_pointings,
-        diameter_m=diameter_m,
-        inscribed_diameter_m=inscribed_diameter_m,
-        obscured=obscured,
-        design_name=design_name,
-        time_multiplier_detection=time_multiplier_detection,
-        time_multiplier_characterization=time_multiplier_characterization,
-    )
-    fits.writeto(output_dir / "stellar_intens.fits", stellar, header, overwrite=True)
-    fits.writeto(
-        output_dir / "stellar_intens_diam_list.fits",
-        stellar_diams_lod,
-        header,
-        overwrite=True,
-    )
-    fits.writeto(output_dir / "offax_psf.fits", offax, header, overwrite=True)
-    fits.writeto(
-        output_dir / "offax_psf_offset_list.fits",
-        offsets_lod,
-        header,
-        overwrite=True,
-    )
-    fits.writeto(output_dir / "sky_trans.fits", sky, header, overwrite=True)
-
-    return {
-        "stellar_intens": Image(
+    products = {
+        "stellar_intensity": Image(
             stellar,
             science_grid,
             ("stellar_diameter",),
@@ -339,8 +228,8 @@ def emit_yip(
             reconstruction="band_limited",
             outside="reflect",
         ),
-        "stellar_intens_diam_list": stellar_diams_lod,
-        "offax_psf": Image(
+        "stellar_diameters_lod": stellar_diams_lod,
+        "offaxis_psfs": Image(
             offax,
             science_grid,
             ("source",),
@@ -348,9 +237,9 @@ def emit_yip(
             "stellar_flux_fraction",
             reconstruction="band_limited",
         ),
-        "offax_psf_offset_list": offsets_lod,
+        "offsets_xy_lod": np.column_stack((offsets_lod, np.zeros_like(offsets_lod))),
         # A ratio of stochastic sky/reference intensities is not band-limited.
-        "sky_trans": Image(
+        "sky_transmission": Image(
             sky,
             science_grid,
             (),
@@ -360,3 +249,25 @@ def emit_yip(
             outside="reflect",
         ),
     }
+
+    def product_header(band_nm, n_wavelengths):
+        return yip_header(
+            science_grid,
+            design=design_name,
+            inscribed_diameter_m=diameter_m
+            if inscribed_diameter_m is None
+            else inscribed_diameter_m,
+            min_wavelength_nm=band_nm[0],
+            max_wavelength_nm=band_nm[1],
+            obscured=obscured,
+            jitter_mas=0.0,
+            n_wavelengths=n_wavelengths,
+            n_pointings=n_pointings,
+            time_multiplier_detection=time_multiplier_detection,
+            time_multiplier_characterization=time_multiplier_characterization,
+        )
+
+    headers = dict.fromkeys(products, product_header(science_band_nm, len(spectrum)))
+    headers["sky_transmission"] = product_header(sky_band_nm, n_sky_screens)
+    write_yip(output_dir, {**products, "headers": headers})
+    return products

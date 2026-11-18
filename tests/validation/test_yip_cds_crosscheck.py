@@ -144,7 +144,7 @@ class TestCrossCheck:
         """Bright transmitted fields: the ~1e-4 engine floor (measured 4e-5)."""
         for i in range(reference["offax_psf"].shape[0]):
             _, resid = scale_and_residual(
-                emitted["offax_psf"].data[i], reference["offax_psf"][i]
+                emitted["offaxis_psfs"].data[i], reference["offax_psf"][i]
             )
             assert resid < 2e-4, f"offset index {i}: residual {resid:.3e}"
 
@@ -154,7 +154,7 @@ class TestCrossCheck:
         d=0 and 9.2e-2 at d=0.1; a mono control reproduces the same 9e-2)."""
         for i in range(reference["stellar_intens"].shape[0]):
             _, resid = scale_and_residual(
-                emitted["stellar_intens"].data[i], reference["stellar_intens"][i]
+                emitted["stellar_intensity"].data[i], reference["stellar_intens"][i]
             )
             assert resid < 0.15, f"diameter index {i}: residual {resid:.3e}"
 
@@ -166,7 +166,7 @@ class TestCrossCheck:
         # convention; emitted maps are per-pixel fractions (density * du^2).
         du2 = float(reference["meta"][5]) ** 2
         ratio = float(
-            np.asarray(emitted["stellar_intens"].data[0]).max()
+            np.asarray(emitted["stellar_intensity"].data[0]).max()
             / (np.asarray(reference["stellar_intens"][0]).max() * du2)
         )
         assert abs(ratio - 1.0) < 0.01, f"floor ratio {ratio:.6f}"
@@ -174,7 +174,9 @@ class TestCrossCheck:
     @pytest.mark.xfail(reason=_HCIPY_TAPER_XFAIL_REASON, strict=False)
     def test_sky_trans_matches(self, emitted, reference):
         """Matched screens and band edges: engine floor (measured 4.5e-5)."""
-        _, resid = scale_and_residual(emitted["sky_trans"].data, reference["sky_trans"])
+        _, resid = scale_and_residual(
+            emitted["sky_transmission"].data, reference["sky_trans"]
+        )
         assert resid < 5e-4, f"sky residual {resid:.3e}"
 
     def test_absolute_normalization_matches(self, emitted, reference):
@@ -187,11 +189,13 @@ class TestCrossCheck:
         du2 = float(reference["meta"][5]) ** 2
         scales = [
             scale_and_residual(
-                emitted["offax_psf"].data[i] / du2, reference["offax_psf"][i]
+                emitted["offaxis_psfs"].data[i] / du2, reference["offax_psf"][i]
             )[0]
             for i in range(reference["offax_psf"].shape[0])
         ]
         scales.append(
-            scale_and_residual(emitted["sky_trans"].data, reference["sky_trans"])[0]
+            scale_and_residual(
+                emitted["sky_transmission"].data, reference["sky_trans"]
+            )[0]
         )
         np.testing.assert_allclose(scales, 1.0, rtol=1e-3)

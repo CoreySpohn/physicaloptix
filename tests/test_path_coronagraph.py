@@ -436,6 +436,92 @@ class TestChromaticBuild:
         assert self._aberrated(None).wavelength_nm is None
 
 
+def _reference_leakage(star, planet, separation_lod, rule):
+    """Integrate the reconstructed star on an independently clipped fine grid."""
+    from optixstuff.apertures import Circular
+    from scipy.integrate import quad
+    from scipy.optimize import root
+
+    grid = star.grid
+    center = grid.unit_to_pixel(separation_lod, 0.0)
+    # Three native pixels on either side enclose both cores of this telescope.
+    factor = 10
+    dy = (np.arange(-3 * factor, 3 * factor) + 0.5) / factor
+    subpixels = (jnp.arange(6 * factor) + 0.5) / factor
+    y = int(np.floor(center.y)) - 2 + subpixels - 0.5
+    x = int(np.floor(center.x)) - 2 + subpixels - 0.5
+    fy, fx = (jnp.fft.fftfreq(n) for n in grid.shape)
+
+    def reconstruct(spectrum, ys, xs):
+        # Keep the native JAX FFT precision in the faint halo. Different FFT
+        # backends lose different low bits to cancellation six lambda/D out.
+        by = jnp.exp(2j * jnp.pi * jnp.asarray(ys)[:, None] * fy) / len(fy)
+        bx = jnp.exp(2j * jnp.pi * jnp.asarray(xs)[:, None] * fx) / len(fx)
+        return np.asarray((by @ spectrum @ bx.T).real)
+
+    spectrum = jnp.fft.fft2(planet.data)
+    halo = reconstruct(jnp.fft.fft2(star.data), y, x)
+    if isinstance(rule, Circular):
+        radius = rule.radius_lod / grid.step * factor
+        yy, xx = np.meshgrid(dy * factor, dy * factor, indexing="ij")
+        weights = np.zeros_like(xx)
+        inside = (np.abs(yy) + 0.5) ** 2 + (np.abs(xx) + 0.5) ** 2 <= radius**2
+        outside = (
+            np.maximum(np.abs(yy) - 0.5, 0) ** 2 + np.maximum(np.abs(xx) - 0.5, 0) ** 2
+            >= radius**2
+        )
+        weights[inside] = 1
+        for iy, ix in zip(*np.nonzero(~(inside | outside)), strict=True):
+            # Integrate the vertical chord clipped to this unit subpixel.
+            yc, xc = yy[iy, ix], xx[iy, ix]
+            lo, hi = max(-radius, xc - 0.5), min(radius, xc + 0.5)
+            crossings = []
+            for edge in (yc - 0.5, yc + 0.5):
+                if abs(edge) < radius:
+                    r = np.sqrt(radius**2 - edge**2)
+                    crossings.extend(v for v in (-r, r) if lo < v < hi)
+
+            def chord(xp, yc=yc):
+                h = np.sqrt(max(0.0, radius**2 - xp**2))
+                return max(0.0, min(yc + 0.5, h) - max(yc - 0.5, -h))
+
+            weights[iy, ix] = quad(chord, lo, hi, points=crossings, epsabs=1e-13)[0]
+    else:
+        # For the open pupil, the only half-maximum component is the core.
+        grad_y = 2j * jnp.pi * fy[:, None] * spectrum
+        grad_x = 2j * jnp.pi * fx * spectrum
+
+        def gradient(yx):
+            return [reconstruct(g, [yx[0]], [yx[1]]).item() for g in (grad_y, grad_x)]
+
+        peak = root(gradient, (center.y, center.x))
+        assert peak.success
+        threshold = (
+            rule.fraction * reconstruct(spectrum, [peak.x[0]], [peak.x[1]]).item()
+        )
+        level = reconstruct(spectrum, y, x) - threshold
+        gy, gx = (reconstruct(g, y, x) / factor for g in (grad_y, grad_x))
+        # The local contour clips a square with one straight line. Integrate
+        # its bright-side height in x, splitting at the two edge crossings.
+        extent = (np.abs(gy) + np.abs(gx)) / 2
+        weights = (level >= extent).astype(float)
+        for iy, ix in zip(*np.nonzero(np.abs(level) < extent), strict=True):
+            a, b = abs(gy[iy, ix]), abs(gx[iy, ix])
+            a, b = max(a, b), min(a, b)
+            c = level[iy, ix]
+            crossings = [
+                (edge * a - c) / b
+                for edge in (-0.5, 0.5)
+                if b > 0 and abs(edge * a - c) < b / 2
+            ]
+
+            def height(xp, a=a, b=b, c=c):
+                return max(0.0, min(1.0, 0.5 + (c + b * xp) / a))
+
+            weights[iy, ix] = quad(height, -0.5, 0.5, points=crossings)[0]
+    return np.sum(halo * weights) / factor**2
+
+
 def test_rule_records_and_absolute_leakage(bare_telescope):
     """Fails for per-pixel/density confusion or duplicated half-maximum masks.
 
@@ -470,8 +556,7 @@ def test_rule_records_and_absolute_leakage(bare_telescope):
             atol=0,
         )
     for rule in (HalfMaximum(0.5), Circular(0.7)):
-        weights = rule.weights(off(6.0), (6.0, 0.0))
-        absolute_sum = float(jnp.sum(star.data * weights))
+        absolute_sum = _reference_leakage(star, off(6.0), 6.0, rule)
         measured = c.curves(rule).evaluate("leakage_fraction", 6.0)
         np.testing.assert_allclose(
             measured, absolute_sum, rtol=16 * np.finfo(float).eps, atol=0

@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 from hwoutils.grids import Frame, PixelGrid
 from hwoutils.spectral import Band
+from yippy import open_yip
 
 from physicaloptix.core import Field, PlaneKind, Spectrum
 from physicaloptix.core.grid import _grid_axis
@@ -93,22 +94,22 @@ class TestEmittedPackage:
 
     def test_array_shapes(self, emitted):
         _, package = emitted
-        assert package["stellar_intens"].data.shape == (2, 64, 64)
-        assert package["offax_psf"].data.shape == (3, 64, 64)
-        assert package["sky_trans"].data.shape == (64, 64)
-        assert package["stellar_intens"].reconstruction == "band_limited"
-        assert package["offax_psf"].reconstruction == "band_limited"
-        assert package["sky_trans"].reconstruction == "linear"
-        assert package["stellar_intens"].outside == "reflect"
-        assert package["sky_trans"].outside == "reflect"
-        assert package["offax_psf"].outside == "zero"
-        np.testing.assert_array_equal(package["stellar_intens_diam_list"], [0.0, 0.1])
+        assert package["stellar_intensity"].data.shape == (2, 64, 64)
+        assert package["offaxis_psfs"].data.shape == (3, 64, 64)
+        assert package["sky_transmission"].data.shape == (64, 64)
+        assert package["stellar_intensity"].reconstruction == "band_limited"
+        assert package["offaxis_psfs"].reconstruction == "band_limited"
+        assert package["sky_transmission"].reconstruction == "linear"
+        assert package["stellar_intensity"].outside == "reflect"
+        assert package["sky_transmission"].outside == "reflect"
+        assert package["offaxis_psfs"].outside == "zero"
+        np.testing.assert_array_equal(package["stellar_diameters_lod"], [0.0, 0.1])
 
     def test_offax_peaks_track_offsets(self, emitted):
         _, package = emitted
         coords = np.asarray(_grid_axis(PixelGrid.focal(64, 0.5, YIP_FRAME)))
         for offset, image in zip(
-            (2.0, 6.0, 10.0), package["offax_psf"].data, strict=True
+            (2.0, 6.0, 10.0), package["offaxis_psfs"].data, strict=True
         ):
             iy, ix = np.unravel_index(int(np.argmax(image)), image.shape)
             assert abs(coords[ix] - offset) <= 0.5
@@ -139,15 +140,15 @@ class TestEmittedPackage:
         # Emitted maps are per-pixel flux fractions: density times cell area.
         expected = np.asarray(out.intensity().data) * 0.5**2
         np.testing.assert_allclose(
-            package["stellar_intens"].data[0], expected, rtol=1e-10
+            package["stellar_intensity"].data[0], expected, rtol=1e-10
         )
 
     def test_finite_stellar_diameter_fills_the_null(self, emitted):
         """A resolved star leaks more light through the vortex core."""
         _, package = emitted
         center = np.s_[28:36, 28:36]
-        point = package["stellar_intens"].data[0][center].sum()
-        resolved = package["stellar_intens"].data[1][center].sum()
+        point = package["stellar_intensity"].data[0][center].sum()
+        resolved = package["stellar_intensity"].data[1][center].sum()
         assert resolved > point
 
     def test_deterministic_given_seed(self, vortex_setup, tmp_path):
@@ -162,11 +163,22 @@ class TestEmittedPackage:
             stellar_diams_lod=np.array([0.05]),
             n_pointings=4,
             n_sky_screens=8,
+            sky_band_nm=(965.0, 1030.0),
             diameter_m=DIAMETER_M,
         )
         a = emit_yip(tmp_path / "a", core, field, **kwargs)
         b = emit_yip(tmp_path / "b", core, field, **kwargs)
-        for key in ("stellar_intens", "offax_psf", "sky_trans"):
+        headers = open_yip(tmp_path / "a").header
+        for image in (headers.offaxis_psfs, headers.stellar_intensity):
+            assert (image.minlam.to_value("nm"), image.maxlam.to_value("nm")) == (
+                950,
+                1050,
+            )
+            assert image.n_lam == 2
+        sky = headers.sky_transmission
+        assert (sky.minlam.to_value("nm"), sky.maxlam.to_value("nm")) == (965, 1030)
+        assert sky.n_lam == 8
+        for key in ("stellar_intensity", "offaxis_psfs", "sky_transmission"):
             np.testing.assert_array_equal(a[key].data, b[key].data)
 
     def test_default_diameter_list(self):
@@ -208,30 +220,25 @@ class TestSkyNormalization:
             n_sky_screens=400,
             diameter_m=DIAMETER_M,
         )
-        sky = package["sky_trans"].data
+        sky = package["sky_transmission"].data
         interior = sky[13:35, 13:35]
         np.testing.assert_allclose(interior.mean(), 1.0, rtol=0.08)
 
 
 class TestYippyRoundTrip:
     def test_yippy_reads_the_package(self, emitted):
-        from yippy import Coronagraph
-
         out_dir, package = emitted
-        coro = Coronagraph(str(out_dir))
-        assert coro.grid.shape == package["offax_psf"].grid.shape
-        assert coro.grid.basis == package["offax_psf"].grid.basis
-        assert coro.grid.center_x == package["offax_psf"].grid.center_x
-        assert coro.grid.center_y == package["offax_psf"].grid.center_y
-        # FITS microns -> nm conversion incurs one floating-point rounding.
-        np.testing.assert_allclose(
-            coro.grid.frame.reference_wavelength_nm,
-            package["offax_psf"].grid.frame.reference_wavelength_nm,
-            rtol=2 * np.finfo(float).eps,
-        )
+        native = open_yip(out_dir)
+        np.testing.assert_array_equal(native.offsets_xy_lod, package["offsets_xy_lod"])
+        coro = native.prepare()
+        assert coro.grid.shape == package["offaxis_psfs"].grid.shape
+        assert coro.grid.basis == package["offaxis_psfs"].grid.basis
+        assert coro.grid.center_x == package["offaxis_psfs"].grid.center_x
+        assert coro.grid.center_y == package["offaxis_psfs"].grid.center_y
+        assert coro.grid.frame == package["offaxis_psfs"].grid.frame
         stellar = np.asarray(coro.stellar_map(REF_NM, 0.0).data)
         # The reader interpolates the diameter axis in log space; node
         # reproduction is at the interpolant's precision, not exact.
         np.testing.assert_allclose(
-            stellar, package["stellar_intens"].data[0], rtol=1e-4
+            stellar, package["stellar_intensity"].data[0], rtol=1e-4
         )
