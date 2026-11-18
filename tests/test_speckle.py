@@ -7,8 +7,8 @@ import optixstuff as ox
 import pytest
 from conftest import TEST_FRAME, analytic_from_density, speckle_grid
 from hwoutils.constants import s2d
-from hwoutils.grids import Measure
 from optixstuff import FocalResponse
+from optixstuff.grids import Measure
 
 from physicaloptix import AnalyticSpeckleField
 from physicaloptix.core.grid import _grid_axis
@@ -27,7 +27,7 @@ def _e_in(norm, du=0.25):
 
 
 def _mock_coro():
-    from hwoutils.grids import PixelGrid
+    from optixstuff.grids import PixelGrid
 
     return ox.ScalarCoronagraph(
         grid=PixelGrid.focal(32, 0.25, TEST_FRAME),
@@ -787,7 +787,7 @@ class TestTelescopePeak:
     """Anchor against an independent numpy DFT (sign- and scale-visible)."""
 
     def test_matches_brute_force_dft(self):
-        from hwoutils.grids import PixelGrid
+        from optixstuff.grids import PixelGrid
 
         from physicaloptix import telescope_peak
         from physicaloptix.core import Field, PlaneKind
@@ -1705,7 +1705,7 @@ def test_broadened_equals_explicit_node_sum():
     Basis: explicit weighted intensity sum, 32 float64 eps. Both mono phase
     scaling and propagated node tables must use the same inherited integrator.
     """
-    from hwoutils.spectral import Band, Quadrature
+    from optixstuff.spectral import Band, Quadrature
 
     fields = (
         _field(coherent=True),

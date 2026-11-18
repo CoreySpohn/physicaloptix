@@ -9,10 +9,10 @@ import numpy as np
 import pytest
 from hwoutils import enable_x64, set_platform
 from hwoutils.constants import d2s
-from hwoutils.grids import Frame, PixelGrid
-from hwoutils.spectral import Band, Quadrature
 from hypothesis import settings
 from optixstuff import FocalResponse
+from optixstuff.grids import Frame, PixelGrid
+from optixstuff.spectral import Band, Quadrature
 
 from physicaloptix.core import Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis
@@ -159,7 +159,7 @@ class ProtocolFake:
         # conflation from a correct one.
         self.calls += 1
         y, x = np.ogrid[:SPECKLE_NPIX, :SPECKLE_NPIX]
-        from hwoutils.grids import Image, Measure
+        from optixstuff.grids import Image, Measure
 
         return Image(
             jnp.asarray(
@@ -209,7 +209,7 @@ def analytic_speckle_field():
 
 def as_image(data):
     """Per-pixel energy fixture on a declared unit arcsecond grid."""
-    from hwoutils.grids import Image, Measure
+    from optixstuff.grids import Image, Measure
 
     data = jnp.asarray(data)
     return Image(

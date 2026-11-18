@@ -94,7 +94,7 @@ TELESCOPE_PEAK = float(np.max(np.abs(focal(pupil)) ** 2))
 class DriftingSpeckles:
     """A synthetic speckle field that follows the speckle-field protocol."""
 
-    from hwoutils.grids import Frame, PixelGrid
+    from optixstuff.grids import Frame, PixelGrid
     grid = PixelGrid.focal(N_PIX, PIXSCALE_LOD, Frame(500.0, 1.0, "circumscribed"))
 
     def __init__(self, n_ripples=12, seed=0):
@@ -143,7 +143,7 @@ class DriftingSpeckles:
         )
         phase = self.static_rad + np.tensordot(drift, self.ripples, axes=1)
         total = np.abs(self._field(phase)) ** 2
-        from hwoutils.grids import Image, Measure
+        from optixstuff.grids import Image, Measure
         nominal = np.abs(np.asarray(self.response.e_nom)) ** 2
         delta = (total - nominal) / self.response.input_energy
         return Image(

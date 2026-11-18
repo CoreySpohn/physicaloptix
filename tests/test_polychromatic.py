@@ -25,8 +25,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TEST_FRAME
-from hwoutils.grids import PixelGrid
 from jax.test_util import check_grads
+from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import ChromaticTable, Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis

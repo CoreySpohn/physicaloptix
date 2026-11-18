@@ -15,8 +15,8 @@ import hwostyle
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
-from hwoutils.grids import Image
 from matplotlib.patches import Circle
+from optixstuff.grids import Image
 
 from physicaloptix.core import Field
 from physicaloptix.viz import _require

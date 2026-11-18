@@ -11,8 +11,6 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from hwoutils.grids import Image, Measure, PixelGrid
-from hwoutils.spectral import Band, Quadrature
 from optixstuff.apertures import DEFAULT_APERTURE_RULE, HalfMaximum
 from optixstuff.coronagraph import (
     AbstractImagingCoronagraph,
@@ -20,7 +18,9 @@ from optixstuff.coronagraph import (
     SourcePSFs,
     _on_grid,
 )
+from optixstuff.grids import Image, Measure, PixelGrid
 from optixstuff.performance import SampledProfile, performance_curves
+from optixstuff.spectral import Band, Quadrature
 
 from physicaloptix._sky import entrance_energy, uniform_sky_image, unit_energy
 from physicaloptix.core import Field, PlaneKind

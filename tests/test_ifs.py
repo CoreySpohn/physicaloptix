@@ -5,9 +5,9 @@ import json
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from hwoutils.grids import PixelGrid
 from jax.scipy.special import erf
 from optixstuff import PsfletPack, load_psflet_pack, save_psflet_pack
+from optixstuff.grids import PixelGrid
 
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.ifs import (

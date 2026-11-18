@@ -4,8 +4,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from hwoutils.grids import PixelGrid
-from hwoutils.spectral import Band, Quadrature
+from optixstuff.grids import PixelGrid
+from optixstuff.spectral import Band, Quadrature
 
 from physicaloptix.core import Field, PlaneKind
 from physicaloptix.elements import DispersiveScreen, ModeBasis, PhaseScreen

@@ -13,8 +13,8 @@ import pytest
 pytest.importorskip("eyepiece")
 
 from conftest import TEST_FRAME
-from hwoutils.grids import PixelGrid
-from hwoutils.spectral import Band, Quadrature
+from optixstuff.grids import PixelGrid
+from optixstuff.spectral import Band, Quadrature
 
 from physicaloptix import Field, PlaneKind
 from physicaloptix.viz import plot_field

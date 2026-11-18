@@ -18,8 +18,8 @@ linearizes this forward and inverts it.
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
-from hwoutils.grids import PixelGrid
 from jaxtyping import Array
+from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind, validate_field
 from physicaloptix.transforms.cmft import cmft_bwd, cmft_fwd

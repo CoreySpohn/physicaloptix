@@ -5,8 +5,8 @@ from enum import Enum
 
 import jax
 import jax.numpy as jnp
-from hwoutils.grids import GridArray, Image, Measure
-from hwoutils.spectral import Quadrature
+from optixstuff.grids import GridArray, Image, Measure
+from optixstuff.spectral import Quadrature
 
 
 class PlaneKind(Enum):

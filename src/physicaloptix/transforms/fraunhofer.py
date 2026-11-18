@@ -32,7 +32,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from hwoutils.grids import PixelGrid
+from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind, validate_field
 from physicaloptix.core.grid import _grid_axis

@@ -5,13 +5,13 @@ from dataclasses import replace
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
-from hwoutils.grids import (
+from optixstuff.grids import (
     Image,
     Measure,
     footprint_overlap,
     integrate_footprints,
 )
-from hwoutils.spectral import Band, Quadrature
+from optixstuff.spectral import Band, Quadrature
 
 from physicaloptix.core import Field
 

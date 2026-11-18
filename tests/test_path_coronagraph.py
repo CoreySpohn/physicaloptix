@@ -8,11 +8,11 @@ import numpy as np
 import pytest
 from conftest import TEST_FRAME
 from hwoutils.constants import s2d
-from hwoutils.grids import Measure, PixelGrid, resample
-from hwoutils.radial import radial_profile
-from hwoutils.spectral import Band, Quadrature
 from optixstuff import SimplePrimary
 from optixstuff.coronagraph import AbstractImagingCoronagraph, AbstractSceneCoronagraph
+from optixstuff.grids import Measure, PixelGrid, resample
+from optixstuff.radial import radial_profile
+from optixstuff.spectral import Band, Quadrature
 
 from physicaloptix.core import Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis

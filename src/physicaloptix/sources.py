@@ -22,7 +22,7 @@ def broadcast_to_spectrum(field, spectrum):
 
     Args:
         field: A mono ``Field`` (2D data).
-        spectrum: The one-row ``hwoutils.spectral.Quadrature`` to broadcast over.
+        spectrum: The one-row ``optixstuff.spectral.Quadrature`` to broadcast over.
 
     Returns:
         A chromatic ``Field`` with ``(nlam, y, x)`` data.

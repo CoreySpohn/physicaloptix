@@ -18,7 +18,7 @@ edges converge at ~first order, which the convergence pin would catch.
 import jax.numpy as jnp
 import numpy as np
 from conftest import TEST_FRAME
-from hwoutils.grids import PixelGrid
+from optixstuff.grids import PixelGrid
 from scipy.special import j0, j1
 
 from physicaloptix.core.grid import _grid_axis

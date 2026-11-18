@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 from conftest import TEST_FRAME
 from hwoutils.constants import m2nm
-from hwoutils.grids import PixelGrid
-from hwoutils.spectral import Band, Quadrature
+from optixstuff.grids import PixelGrid
+from optixstuff.spectral import Band, Quadrature
 
 from physicaloptix.core import Field, PlaneKind
 from physicaloptix.diagnostics import fresnel_pad_factor, fresnel_sampling_parameter

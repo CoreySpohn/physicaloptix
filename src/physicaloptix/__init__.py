@@ -4,7 +4,7 @@ A downstream consumer of optixstuff, parallel to coronagraphoto (image sim)
 and jaxedith (ETC): optixstuff stays free of physical optics; diffraction
 lives here.
 
-The propagation core uses shared ``hwoutils.grids.PixelGrid`` geometry,
+The propagation core uses shared ``optixstuff.grids.PixelGrid`` geometry,
 with its own ``PlaneKind`` / ``Field`` data model, the continuous-FT MFT pair
 (``cmft_fwd`` / ``cmft_bwd``) with the plane-aware ``Fraunhofer`` wrapper and
 construction-time sampling gates, ``SampledOptic`` / ``ModeBasis`` and the

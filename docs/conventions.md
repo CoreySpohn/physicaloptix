@@ -6,7 +6,7 @@ in this page are defined in the [glossary](glossary).
 
 ## Coordinates and units
 
-Each plane has its own natural unit, and a {class}`~hwoutils.grids.PixelGrid` carries
+Each plane has its own natural unit, and a {class}`~optixstuff.grids.PixelGrid` carries
 its coordinates in that unit -- never in meters or pixels.
 
 - A **pupil** grid, `PixelGrid.pupil(npix)`, spans one aperture diameter: its
@@ -151,7 +151,7 @@ $\exp(\sum_k c_k D_k(\lambda) B_k)$) that a
 {class}`~physicaloptix.DispersiveScreen` supplies for non-OPD chromatic
 responses such as coatings. A chromatic
 {class}`~physicaloptix.Field` carries `data` of shape `(nlam, y, x)` with a
-one-row `hwoutils.spectral.Quadrature`; elements and propagators act on the
+one-row `optixstuff.spectral.Quadrature`; elements and propagators act on the
 wavelength axis slice by slice (nothing couples wavelength channels), and the
 quadrature weights enter only at incoherent summation (`Field.intensity`).
 Speckle sensitivity stacks keep the mode axis third from the end -- `G` is

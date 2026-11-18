@@ -4,8 +4,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from astropy.io import fits
-from hwoutils.grids import Frame, Measure, PixelGrid
-from hwoutils.spectral import Band, Quadrature
+from optixstuff.grids import Frame, Measure, PixelGrid
+from optixstuff.spectral import Band, Quadrature
 from yippy import open_yip
 
 from physicaloptix.core import Field, PlaneKind

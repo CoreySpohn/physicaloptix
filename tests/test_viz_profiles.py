@@ -13,7 +13,7 @@ import pytest
 pytest.importorskip("eyepiece")
 
 from conftest import TEST_FRAME
-from hwoutils.grids import Image, Measure, PixelGrid
+from optixstuff.grids import Image, Measure, PixelGrid
 
 from physicaloptix import Field, PlaneKind
 from physicaloptix.viz import plot_contrast_profile

@@ -108,7 +108,9 @@ import jax.numpy as jnp
 import numpy as np
 from hwoutils.constants import m2nm
 from hwoutils.conversions import arcsec_to_lambda_d, lambda_d_to_arcsec
-from hwoutils.grids import (
+from hwoutils.radial import get_center
+from jaxtyping import Array
+from optixstuff.grids import (
     Frame,
     Image,
     Measure,
@@ -116,8 +118,6 @@ from hwoutils.grids import (
     footprint_overlap,
     integrate_footprints,
 )
-from hwoutils.radial import get_center
-from jaxtyping import Array
 
 from physicaloptix.core import ChromaticTable, Field, PlaneKind, validate_field
 from physicaloptix.core.grid import _grid_axis

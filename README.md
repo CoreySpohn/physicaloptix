@@ -22,7 +22,7 @@ simulation) and [jaxEDITH](https://github.com/CoreySpohn/jaxedith)
 diffraction code.
 
 The propagation core combines a plane-aware `Field` subclass of
-`hwoutils.grids.GridArray` with shared `PixelGrid` geometry, the continuous-FT MFT pair, the
+`optixstuff.grids.GridArray` with shared `PixelGrid` geometry, the continuous-FT MFT pair, the
 multi-scale vortex, and the `OpticalPath` fold with construction-time
 sampling gates, validated against the HWO Coronagraph Design Survey
 (cds_pipeline) EAC-1 AAVC to an on-axis null of 3.05e-11 (0.2 percent of the
@@ -42,7 +42,7 @@ Requires a configured optical path, pupil field, and output sampling.
 
 ```python notest
 import physicaloptix as po
-from hwoutils.grids import PixelGrid
+from optixstuff.grids import PixelGrid
 from optixstuff import SimplePrimary
 
 primary = SimplePrimary(circumscribed_diameter_m=6.0, collecting_area_m2=28.0)
@@ -75,9 +75,9 @@ eta = coro.throughput(6.0, 600.0)  # derived, not declared
 Built on [JAX](https://github.com/google/jax) and
 [Equinox](https://github.com/patrick-kidger/equinox), `physicaloptix` provides:
 
-- **The field core** (`physicaloptix.core`) -- shared `hwoutils.grids.PixelGrid` (all-static, half-pixel
+- **The field core** (`physicaloptix.core`) -- shared `optixstuff.grids.PixelGrid` (all-static, half-pixel
   offset, continuous-FT weights), `PlaneKind`-tagged `Field` pytrees, and
-  one-row `hwoutils.spectral.Quadrature` rules for chromatic fields.
+  one-row `optixstuff.spectral.Quadrature` rules for chromatic fields.
 - **Propagators** (`physicaloptix.transforms`) -- the validated `cmft_fwd` /
   `cmft_bwd` continuous-FT MFT pair and the plane-aware `Fraunhofer` wrapper
   (plus `FullBandFraunhofer`, its zero-padded FFT form on the full band),

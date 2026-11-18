@@ -15,7 +15,7 @@ renderer consumes them directly).
 
 import equinox as eqx
 import numpy as np
-from hwoutils.spectral import spectral_breaks
+from optixstuff.spectral import spectral_breaks
 
 from physicaloptix.core.chromatic import AbstractChromaticOp
 from physicaloptix.transforms import Fraunhofer, Fresnel, FullBandFraunhofer

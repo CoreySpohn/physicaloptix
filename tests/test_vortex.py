@@ -3,7 +3,7 @@
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from hwoutils.grids import PixelGrid
+from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis

@@ -10,8 +10,8 @@ MFT (``Fraunhofer``) on any other window.
 
 import equinox as eqx
 import numpy as np
-from hwoutils.grids import PixelGrid
 from jaxtyping import Array
+from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind
 from physicaloptix.transforms import Fraunhofer, FullBandFraunhofer

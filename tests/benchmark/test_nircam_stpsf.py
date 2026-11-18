@@ -50,7 +50,7 @@ import math
 import equinox as eqx
 import numpy as np
 import pytest
-from hwoutils.grids import Image, Measure, PixelGrid
+from optixstuff.grids import Image, Measure, PixelGrid
 
 from physicaloptix.instruments import (
     NIRCamBand,

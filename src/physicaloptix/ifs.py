@@ -42,16 +42,16 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from hwoutils.grids import (
+from jax import lax
+from jaxtyping import Array
+from optixstuff import PsfletPack
+from optixstuff.grids import (
     Image,
     Measure,
     PixelGrid,
     footprint_overlap,
     integrate_footprints,
 )
-from jax import lax
-from jaxtyping import Array
-from optixstuff import PsfletPack
 
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.transforms.cmft import cmft_fwd

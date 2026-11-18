@@ -24,7 +24,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from hwoutils.constants import m2nm, nm2m
-from hwoutils.grids import PixelGrid
+from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind, validate_field
 from physicaloptix.diagnostics import fresnel_sampling_parameter

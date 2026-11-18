@@ -5,8 +5,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from hwoutils.grids import GridArray, Image, Measure, PixelGrid
-from hwoutils.spectral import Band, Quadrature
+from optixstuff.grids import GridArray, Image, Measure, PixelGrid
+from optixstuff.spectral import Band, Quadrature
 
 from physicaloptix._sky import entrance_energy
 from physicaloptix.core import Field, PlaneKind

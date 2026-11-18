@@ -26,8 +26,8 @@ import jax
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
-from hwoutils.grids import PixelGrid
 from matplotlib.patches import Circle, Wedge
+from optixstuff.grids import PixelGrid
 from scipy.special import fresnel
 
 from physicaloptix.viz import _require

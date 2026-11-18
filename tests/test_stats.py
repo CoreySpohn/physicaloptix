@@ -8,8 +8,8 @@ import numpy as np
 import pytest
 from conftest import TEST_FRAME, speckle_grid
 from hwoutils.constants import s2d
-from hwoutils.grids import PixelGrid
 from optixstuff import FocalResponse
+from optixstuff.grids import PixelGrid
 
 from physicaloptix.speckle import SpeckleProcess
 from physicaloptix.stats import (

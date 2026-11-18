@@ -15,8 +15,8 @@ for a broadband model.
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from hwoutils.grids import PixelGrid
 from jaxtyping import Array
+from optixstuff.grids import PixelGrid
 
 from physicaloptix.command import command_response
 from physicaloptix.elements import PhaseScreen

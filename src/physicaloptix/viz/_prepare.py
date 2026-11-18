@@ -47,7 +47,7 @@ from eyepiece.prepared import (
     resolve_bounds,
 )
 from hwoutils.constants import d2s, s2d
-from hwoutils.grids import PixelGrid
+from optixstuff.grids import PixelGrid
 
 # Stable element IDs of a prepared speckle view. The image, its acquisition
 # clock, and the dark-zone annulus always sit on one image panel; the trace

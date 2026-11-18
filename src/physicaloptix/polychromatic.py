@@ -16,7 +16,7 @@ from dataclasses import replace
 
 import equinox as eqx
 import numpy as np
-from hwoutils.grids import Image, Measure
+from optixstuff.grids import Image, Measure
 
 from physicaloptix.core import Field
 from physicaloptix.path import OpticalPath

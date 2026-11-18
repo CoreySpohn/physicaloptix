@@ -28,7 +28,7 @@ serve from the tables.
 from dataclasses import replace
 
 import numpy as np
-from hwoutils.grids import Frame, Image, Measure
+from optixstuff.grids import Frame, Image, Measure
 from yippy import write_yip
 from yippy.writer import yip_header
 

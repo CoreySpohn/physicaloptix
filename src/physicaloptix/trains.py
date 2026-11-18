@@ -7,11 +7,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import yaml
-from hwoutils.random_fields import StationaryGaussianField
 
 from physicaloptix.core import PlaneKind
 from physicaloptix.elements import ModeBasis, PhaseScreen
 from physicaloptix.path import OpticalPath, Stage
+from physicaloptix.random_fields import StationaryGaussianField
 from physicaloptix.transforms.fresnel import Fresnel
 
 REFLECTION_OPD_FACTOR = 2.0

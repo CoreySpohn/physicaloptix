@@ -4,8 +4,8 @@ from dataclasses import replace
 
 import matplotlib.pyplot as plt
 import numpy as np
-from hwoutils.grids import Image, Measure, PixelGrid
-from hwoutils.radial import radial_profile
+from optixstuff.grids import Image, Measure, PixelGrid
+from optixstuff.radial import radial_profile
 
 from physicaloptix.core import Field
 from physicaloptix.viz import _require

@@ -39,9 +39,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from hwoutils.constants import two_pi
-from hwoutils.grids import PixelGrid
 from jaxtyping import Array
 from optixstuff import FocalResponse
+from optixstuff.grids import PixelGrid
 
 from physicaloptix.command import command_response
 from physicaloptix.core import Field

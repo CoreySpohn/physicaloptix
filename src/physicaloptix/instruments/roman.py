@@ -29,10 +29,10 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from hwoutils.grids import Frame, PixelGrid
 from hwoutils.map_coordinates import map_coordinates
 from jax.scipy.signal import fftconvolve
 from jaxtyping import Array
+from optixstuff.grids import Frame, PixelGrid
 
 from physicaloptix.core import Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis

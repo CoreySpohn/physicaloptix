@@ -3,8 +3,8 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
-from hwoutils.spectral import Band
 from optixstuff import ElectronRates, FramePlan
+from optixstuff.spectral import Band
 
 from physicaloptix.detector import ReparameterizedDetector
 

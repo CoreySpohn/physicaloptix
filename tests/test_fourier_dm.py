@@ -2,7 +2,7 @@
 
 import numpy as np
 import pytest
-from hwoutils.grids import PixelGrid
+from optixstuff.grids import PixelGrid
 
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements.modes import fourier_dm_basis

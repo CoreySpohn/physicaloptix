@@ -91,7 +91,7 @@ jax.config.update("jax_enable_x64", True)
 
 import jax.numpy as jnp
 import numpy as np
-from hwoutils.grids import PixelGrid
+from optixstuff.grids import PixelGrid
 from optixstuff import SimplePrimary
 
 primary = SimplePrimary(

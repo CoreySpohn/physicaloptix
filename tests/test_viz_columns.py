@@ -13,8 +13,8 @@ from matplotlib.colors import to_rgba
 # collectible when the viz extra is present.
 pytest.importorskip("eyepiece")
 
-from hwoutils.grids import PixelGrid
-from hwoutils.spectral import Band, Quadrature
+from optixstuff.grids import PixelGrid
+from optixstuff.spectral import Band, Quadrature
 
 from physicaloptix import Field, PlaneKind
 from physicaloptix.viz import field_columns

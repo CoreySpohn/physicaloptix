@@ -13,10 +13,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from hwoutils.constants import d2s
-from hwoutils.grids import PixelGrid
-from hwoutils.spectral import trapezoid_weights
 from jaxtyping import Array
 from optixstuff import FocalResponse, LinearSpeckleField
+from optixstuff.grids import PixelGrid
+from optixstuff.spectral import trapezoid_weights
 
 from physicaloptix.transforms.fraunhofer import Fraunhofer
 

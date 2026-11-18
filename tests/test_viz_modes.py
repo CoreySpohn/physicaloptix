@@ -217,7 +217,7 @@ def test_mismatched_mode_and_response_counts_raise():
 
 
 def test_zernike_pyramid_places_modes_by_radial_and_azimuthal_order():
-    from hwoutils.grids import PixelGrid
+    from optixstuff.grids import PixelGrid
 
     from physicaloptix.elements.modes import zernike_basis
     from physicaloptix.viz import plot_zernike_pyramid
@@ -242,7 +242,7 @@ def test_zernike_pyramid_places_modes_by_radial_and_azimuthal_order():
 
 
 def test_zernike_pyramid_masks_outside_the_pupil():
-    from hwoutils.grids import PixelGrid
+    from optixstuff.grids import PixelGrid
 
     from physicaloptix.elements.modes import zernike_basis
     from physicaloptix.viz import plot_zernike_pyramid

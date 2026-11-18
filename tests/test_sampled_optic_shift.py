@@ -12,8 +12,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from hwoutils.grids import PixelGrid
 from jax.test_util import check_grads
+from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind
 from physicaloptix.elements import SampledOptic

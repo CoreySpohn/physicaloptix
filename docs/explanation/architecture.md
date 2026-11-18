@@ -11,7 +11,7 @@ library compares to hcipy, dLux, poppy, prysm, and chromatix, see
 
 A physicaloptix simulation is a **field pushed through a path**. A
 {class}`~physicaloptix.Field` is a complex wavefront living on a
-{class}`~hwoutils.grids.PixelGrid`; an {class}`~physicaloptix.OpticalPath` is a
+{class}`~optixstuff.grids.PixelGrid`; an {class}`~physicaloptix.OpticalPath` is a
 sequence of {class}`~physicaloptix.Stage` operations. Calling
 `path.propagate(field)` folds the field through every stage and returns the
 field at the end. Everything else is a kind of stage, a kind of grid, or a way
@@ -36,7 +36,7 @@ lives on and a `PlaneKind` tag -- `PUPIL`, `INTERMEDIATE`, or `FOCAL`. The tag
 is not decoration: propagators declare which plane they consume and which they
 produce, so a mis-wired train (a focal-plane mask handed a pupil field, say)
 fails when the path is built rather than producing a quietly wrong number at
-runtime. For chromatic work, a one-row `hwoutils.spectral.Quadrature` carries the
+runtime. For chromatic work, a one-row `optixstuff.spectral.Quadrature` carries the
 wavelengths so one path can be propagated polychromatically.
 
 ## Propagation: the continuous-Fourier MFT pair

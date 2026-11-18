@@ -7,9 +7,9 @@ import numpy as np
 import pytest
 from conftest import TEST_FRAME
 from hwoutils.constants import s2d
-from hwoutils.grids import PixelGrid
-from hwoutils.spectral import Band, Quadrature
 from jax.test_util import check_grads
+from optixstuff.grids import PixelGrid
+from optixstuff.spectral import Band, Quadrature
 
 from physicaloptix import command_response
 from physicaloptix.core import Field, PlaneKind

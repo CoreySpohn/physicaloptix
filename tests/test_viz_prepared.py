@@ -146,7 +146,7 @@ class _FakeCube:
 
     def realize(self, *, wavelength_nm, time_d=0.0):
         y, x = np.ogrid[:SPECKLE_NPIX, :SPECKLE_NPIX]
-        from hwoutils.grids import Image, Measure
+        from optixstuff.grids import Image, Measure
 
         return Image(
             1e-9 * (1.0 + 0.5 * np.sin(time_d * d2s)) * (1.0 + x + 3.0 * y),
@@ -723,7 +723,7 @@ def test_preparation_uses_returned_image_coordinates(protocol_fake, monkeypatch)
     from dataclasses import replace
 
     from conftest import TEST_FRAME
-    from hwoutils.grids import PixelGrid
+    from optixstuff.grids import PixelGrid
 
     grid = PixelGrid(
         (SPECKLE_NPIX, SPECKLE_NPIX),
