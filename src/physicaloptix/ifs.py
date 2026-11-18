@@ -51,6 +51,7 @@ from hwoutils.grids import (
 )
 from jax import lax
 from jaxtyping import Array
+from optixstuff import PsfletPack
 
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.transforms.cmft import cmft_fwd
@@ -467,10 +468,9 @@ def psflet_template(chain, wavelength_nm, offsets, pupil=None, n_quad=8):
 
 
 def psflet_pack(chain, wavelengths_nm, *, half_extent=6.0, step=0.125, n_quad=8):
-    """Tabulate the chain into a PSFlet template pack payload.
+    """Tabulate the chain into a PSFlet template pack.
 
-    Write the payload with
-    ``coronachrome.save_psflet_pack(path, coronachrome.PsfletPack(**payload))``.
+    Write the pack with ``optixstuff.save_psflet_pack(path, pack)``.
 
     One field anchor at the lenslet-grid origin (field dependence enters by
     emitting packs per field region as upstream fields become available).
@@ -484,10 +484,8 @@ def psflet_pack(chain, wavelengths_nm, *, half_extent=6.0, step=0.125, n_quad=8)
         n_quad: Midpoint sub-samples per pixel per axis.
 
     Returns:
-        Dict with the pack arrays (``templates``, ``offsets``,
-        ``wavelengths_nm``, ``field_xy``, ``centroids``) and ``meta_json``
-        provenance carrying the chain configuration and per-wavelength
-        capture fractions.
+        An :class:`optixstuff.PsfletPack` whose ``meta_json`` provenance
+        carries the chain configuration and per-wavelength capture fractions.
     """
     lams = np.atleast_1d(np.asarray(wavelengths_nm, dtype=float))
     if lams.ndim != 1 or (len(lams) > 1 and not np.all(np.diff(lams) > 0)):
@@ -543,14 +541,14 @@ def psflet_pack(chain, wavelengths_nm, *, half_extent=6.0, step=0.125, n_quad=8)
         "n_quad": n_quad,
         "capture": capture,
     }
-    return {
-        "templates": np.stack(planes)[None],
-        "offsets": offsets,
-        "wavelengths_nm": lams,
-        "field_xy": np.zeros((1, 2)),
-        "centroids": np.asarray(cents, dtype=float)[None],
-        "meta_json": json.dumps(meta),
-    }
+    return PsfletPack(
+        templates=np.stack(planes)[None],
+        offsets=offsets,
+        wavelengths_nm=lams,
+        field_xy=np.zeros((1, 2)),
+        centroids=np.asarray(cents, dtype=float)[None],
+        meta_json=json.dumps(meta),
+    )
 
 
 def detector_scene(

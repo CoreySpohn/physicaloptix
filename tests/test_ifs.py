@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 from hwoutils.grids import PixelGrid
 from jax.scipy.special import erf
+from optixstuff import PsfletPack, load_psflet_pack, save_psflet_pack
 
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.ifs import (
@@ -211,10 +212,10 @@ class TestShiftTheoremAndWavecal:
         opd = jnp.asarray(np.broadcast_to(grad_nm * x_s[None, :], (128, 128)))
         tilted = make_chain(illumination="flat", pinhole_radius=1.5, stop_opd_nm=opd)
         pack = psflet_pack(tilted, [LAM_REF], half_extent=6.0, step=0.25)
-        cx, cy = pack["centroids"][0, 0]
+        cx, cy = pack.centroids[0, 0]
         assert 0.2 < cx < 0.4
         assert abs(cy) < 0.02
-        assert json.loads(pack["meta_json"])["aberrated"] is True
+        assert json.loads(pack.meta_json)["aberrated"] is True
 
 
 class TestPixelIntegrate:
@@ -281,26 +282,31 @@ class TestPixelIntegrate:
 
 
 class TestPack:
-    def test_payload_schema(self):
+    def test_save_load_roundtrip(self, tmp_path):
+        """Serialization performs no arithmetic, so every field is lossless."""
+        pack = psflet_pack(
+            make_chain(), [900.0, 1100.0], half_extent=1.0, step=0.5, n_quad=2
+        )
+        path = tmp_path / "physical.npz"
+        save_psflet_pack(path, pack)
+        loaded = load_psflet_pack(path)
+        for name in ("templates", "offsets", "wavelengths_nm", "field_xy", "centroids"):
+            np.testing.assert_array_equal(getattr(loaded, name), getattr(pack, name))
+        assert loaded.meta_json == pack.meta_json
+
+    def test_pack_schema(self):
         chain = make_chain()
         lams = [900.0, 1000.0, 1100.0]
         pack = psflet_pack(chain, lams, half_extent=4.0, step=0.25, n_quad=4)
-        assert set(pack) == {
-            "templates",
-            "offsets",
-            "wavelengths_nm",
-            "field_xy",
-            "centroids",
-            "meta_json",
-        }
-        assert pack["templates"].shape == (1, 3, 33, 33)
-        assert pack["offsets"].shape == (33,)
-        np.testing.assert_array_equal(pack["wavelengths_nm"], lams)
-        np.testing.assert_array_equal(pack["field_xy"], np.zeros((1, 2)))
-        assert pack["centroids"].shape == (1, 3, 2)
-        steps = np.diff(pack["offsets"])
+        assert isinstance(pack, PsfletPack)
+        assert pack.templates.shape == (1, 3, 33, 33)
+        assert pack.offsets.shape == (33,)
+        np.testing.assert_array_equal(pack.wavelengths_nm, lams)
+        np.testing.assert_array_equal(pack.field_xy, np.zeros((1, 2)))
+        assert pack.centroids.shape == (1, 3, 2)
+        steps = np.diff(pack.offsets)
         assert np.all(steps > 0) and np.allclose(steps, steps[0])
-        meta = json.loads(pack["meta_json"])
+        meta = json.loads(pack.meta_json)
         assert meta["generator"] == "physicaloptix.ifs.LensletChain"
         assert len(meta["capture"]) == 3
         assert all(0.0 < c["stop_capture"] <= 1.001 for c in meta["capture"])
@@ -308,11 +314,11 @@ class TestPack:
     def test_templates_are_nonnegative_and_centered(self):
         chain = make_chain()
         pack = psflet_pack(chain, [1000.0], half_extent=4.0, step=0.25, n_quad=4)
-        plane = pack["templates"][0, 0]
+        plane = pack.templates[0, 0]
         assert plane.min() >= 0.0
         peak = np.unravel_index(plane.argmax(), plane.shape)
         assert peak == (16, 16)
-        np.testing.assert_allclose(pack["centroids"][0, 0], 0.0, atol=1e-6)
+        np.testing.assert_allclose(pack.centroids[0, 0], 0.0, atol=1e-6)
 
     def test_chromatic_pupil_slices(self):
         pupil, grid = disk_pupil()
@@ -328,7 +334,7 @@ class TestPack:
         pack = psflet_pack(
             chain, [900.0, 1000.0, 1100.0], half_extent=3.0, step=0.25, n_quad=4
         )
-        assert pack["templates"].shape[1] == 3
+        assert pack.templates.shape[1] == 3
         with pytest.raises(ValueError, match="slices"):
             psflet_pack(chain, [900.0, 1100.0], half_extent=3.0, step=0.25, n_quad=4)
 
@@ -351,10 +357,10 @@ class TestPack:
         (diffraction scales with lambda) while the pack never width-scales."""
         chain = make_chain(illumination="flat")
         pack = psflet_pack(chain, [900.0, 1100.0], half_extent=6.0, step=0.25)
-        offs = pack["offsets"]
+        offs = pack.offsets
         wings = np.abs(offs) > 4.0
         far = np.ix_(wings, wings)
-        blue, red = pack["templates"][0, 0], pack["templates"][0, 1]
+        blue, red = pack.templates[0, 0], pack.templates[0, 1]
         assert red[far].sum() / red.sum() > blue[far].sum() / blue.sum()
 
 
