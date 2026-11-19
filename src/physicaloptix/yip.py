@@ -222,8 +222,8 @@ def emit_yip(
             inscribed_diameter_m=diameter_m
             if inscribed_diameter_m is None
             else inscribed_diameter_m,
-            min_wavelength_nm=band_nm[0],
-            max_wavelength_nm=band_nm[1],
+            low_nm=band_nm[0],
+            high_nm=band_nm[1],
             obscured=obscured,
             jitter_mas=0.0,
             n_wavelengths=n_wavelengths,
