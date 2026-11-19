@@ -38,7 +38,7 @@ class TestBandMean:
         band = Band(950.0, 1050.0)
         n = 5
         cell_nm = band.width_nm / n
-        nodes_nm = band.lo_nm + (jnp.arange(n) + 0.5) * cell_nm
+        nodes_nm = band.low_nm + (jnp.arange(n) + 0.5) * cell_nm
         rule = Quadrature((band,), nodes_nm[None], jnp.full((1, n), cell_nm))
         amplitude = 2 * (nodes_nm - band.center_nm) / band.width_nm
         grid = PixelGrid.pupil(8)

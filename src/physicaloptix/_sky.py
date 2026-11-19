@@ -69,7 +69,7 @@ def uniform_sky_image(core_path, science, base, *, n_screens, seed, sky_band_nm=
         data = base.data * jnp.asarray(screen)
         spectrum = base.spectrum
         if band is not None:
-            wavelength = band.lo_nm + band.width_nm * fraction
+            wavelength = band.low_nm + band.width_nm * fraction
             # Each Monte Carlo draw estimates the mean over the same static band.
             spectrum = Quadrature((band,), [[wavelength]], [[band.width_nm or 1.0]])
             data = data[None] * (wavelength / science.reference_wavelength_nm)

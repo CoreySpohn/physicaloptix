@@ -158,7 +158,7 @@ Speckle sensitivity stacks keep the mode axis third from the end -- `G` is
 `(m, y, x)` monochromatic or `(w, m, y, x)` chromatic -- so a mode count is
 always `G.shape[-3]`, never `G.shape[0]`.
 
-`Quadrature.build((Band(lo_nm, hi_nm),), path, order=4)` splits the
+`Quadrature.build((Band(low_nm, high_nm),), path, order=4)` splits the
 Gauss-Legendre rule at the breaks declared by the optical path. Wavelengths
 are in `nodes_nm[0]`. Dimensional weights in `weights()[0]` sum to the band
 width. Dividing the integrated intensity by the weight sum gives the same

@@ -180,7 +180,7 @@ def emit_yip(
 
     # -- stochastic sky transmission ----------------------------------------
     band = spectrum.bands[0]
-    science_band_nm = (band.lo_nm, band.hi_nm)
+    science_band_nm = (band.low_nm, band.high_nm)
     sky_band_nm = science_band_nm if sky_band_nm is None else sky_band_nm
     sky = uniform_sky_image(
         core_path,
