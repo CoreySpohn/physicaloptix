@@ -214,7 +214,7 @@ class TestFraunhofer:
             grid_in=pupil_grid,
             grid_out=focal_grid,
             reference_wavelength_nm=500.0,
-            min_wavelength_nm=250.0,
+            low_nm=250.0,
             on_undersampled="record",
         ).sampling_parameter
         np.testing.assert_allclose(p_blue, p_ref / 2.0, rtol=1e-12)
@@ -265,7 +265,7 @@ class TestChromaticFixedGridAdjoint:
             pupil,
             focal,
             reference_wavelength_nm=REF_NM,
-            min_wavelength_nm=wavelength_nm,
+            low_nm=wavelength_nm,
             on_undersampled="record",
         )
         lhs = complex(jnp.vdot(prop.forward(x).data, b) * focal.pixel_area)
@@ -290,7 +290,7 @@ class TestChromaticFixedGridAdjoint:
             pupil,
             focal,
             reference_wavelength_nm=REF_NM,
-            min_wavelength_nm=450.0,
+            low_nm=450.0,
             on_undersampled="record",
         )
         fa = prop.forward(
@@ -324,7 +324,7 @@ class TestChromaticFixedGridAdjoint:
             pupil,
             focal,
             reference_wavelength_nm=REF_NM,
-            min_wavelength_nm=wavelength_nm,
+            low_nm=wavelength_nm,
             on_undersampled="raise",
         )
         disk = _disk(pupil)

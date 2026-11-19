@@ -135,9 +135,9 @@ first coordinate difference.
 Sampling gates run once, at construction, against declared wavelengths, and
 are never re-evaluated against a propagated field's spectrum. A chromatic
 chain must declare its band edges: the red edge to
-{class}`~physicaloptix.Fresnel` (`max_wavelength_nm`; the chirp worsens with
+{class}`~physicaloptix.Fresnel` (`high_nm`; the chirp worsens with
 $\lambda$) and the blue edge to a fixed-grid `Fraunhofer`
-(`min_wavelength_nm`; the scaled kernel is densest there). Omitting them
+(`low_nm`; the scaled kernel is densest there). Omitting them
 gates only the design wavelength.
 
 ## Wavelength binding and chromatic layout

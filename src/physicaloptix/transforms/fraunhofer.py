@@ -70,7 +70,7 @@ class Fraunhofer(eqx.Module):
         plane_out=PlaneKind.FOCAL,
         on_undersampled="warn",
         reference_wavelength_nm=None,
-        min_wavelength_nm=None,
+        low_nm=None,
     ):
         """Build the propagator and evaluate its sampling gate.
 
@@ -85,7 +85,7 @@ class Fraunhofer(eqx.Module):
             reference_wavelength_nm: When set, ``grid_out`` is a FIXED
                 angular grid in reference-wavelength lambda/D and chromatic
                 fields propagate per wavelength with scaled coordinates.
-            min_wavelength_nm: Optional blue end of the band for the
+            low_nm: Optional blue end of the band for the
                 construction-time sampling gate (the scaled kernel is
                 densest there); defaults to the reference wavelength.
         """
@@ -102,10 +102,8 @@ class Fraunhofer(eqx.Module):
             None if reference_wavelength_nm is None else float(reference_wavelength_nm)
         )
         gate_coords = _grid_axis(grid_out)
-        if self.reference_wavelength_nm is not None and min_wavelength_nm:
-            gate_coords = gate_coords * (
-                self.reference_wavelength_nm / float(min_wavelength_nm)
-            )
+        if self.reference_wavelength_nm is not None and low_nm:
+            gate_coords = gate_coords * (self.reference_wavelength_nm / float(low_nm))
         self.sampling_parameter = mft_sampling_parameter(
             _grid_axis(grid_in), gate_coords
         )

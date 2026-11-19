@@ -266,7 +266,7 @@ class TestFixedGridEnergyConservation:
             grid_in=pupil_field.grid,
             grid_out=focal,
             reference_wavelength_nm=REF_NM,
-            min_wavelength_nm=REF_NM * 0.9,
+            low_nm=REF_NM * 0.9,
             on_undersampled="record",
         )
         out = prop.forward(broadcast_to_spectrum(pupil_field, band))

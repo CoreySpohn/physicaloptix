@@ -124,7 +124,7 @@ def emit_yip(
         grid_in=base.grid,
         grid_out=science_grid,
         reference_wavelength_nm=reference_wavelength_nm,
-        min_wavelength_nm=float(nodes_nm.min()),
+        low_nm=float(nodes_nm.min()),
     )
 
     # -- off-axis PSFs ------------------------------------------------------

@@ -62,7 +62,7 @@ class Fresnel(eqx.Module):
         method="fresnel",
         npad=1,
         on_undersampled="warn",
-        max_wavelength_nm=None,
+        high_nm=None,
     ):
         """Build the propagator and evaluate its sampling gate.
 
@@ -84,7 +84,7 @@ class Fresnel(eqx.Module):
             npad: Real-domain zero-pad factor to suppress FFT wrap-around; the
                 field is embedded in an ``npad * npix`` grid and cropped back
                 (see :func:`physicaloptix.diagnostics.fresnel_pad_factor`).
-            max_wavelength_nm: Red end of a chromatic band for the gate (alpha
+            high_nm: Red end of a chromatic band for the gate (alpha
                 grows with lambda, so the reddest slice is worst-sampled);
                 defaults to ``wavelength_nm``.
         """
@@ -105,7 +105,7 @@ class Fresnel(eqx.Module):
         self.beam_diameter_m = float(beam_diameter_m)
         self.wavelength_nm = float(wavelength_nm)
         self.on_undersampled = on_undersampled
-        gate_wavelength = max_wavelength_nm if max_wavelength_nm else wavelength_nm
+        gate_wavelength = high_nm if high_nm else wavelength_nm
         alpha = abs(self._alpha(gate_wavelength))
         self.sampling_parameter = fresnel_sampling_parameter(grid, alpha)
         if self.sampling_parameter < 1.0:

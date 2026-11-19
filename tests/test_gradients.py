@@ -331,7 +331,7 @@ class TestChromaticAdjointGradient:
             pupil,
             focal,
             reference_wavelength_nm=ref_nm,
-            min_wavelength_nm=500.0,
+            low_nm=500.0,
             on_undersampled="record",
         )
         mask = _focal_mask(nfoc, 0.3, r_in=1.0, r_out=5.0)

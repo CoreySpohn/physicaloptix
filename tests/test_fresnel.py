@@ -406,7 +406,7 @@ class TestFresnelChromatic:
         )
 
     def test_gate_uses_reddest_wavelength(self):
-        """The construction gate keys on max_wavelength_nm (alpha grows with lambda)."""
+        """The construction gate keys on high_nm (alpha grows with lambda)."""
         grid = PixelGrid.pupil(256)
         distance_m = _distance_for_alpha(2e-2, wavelength_nm=550.0)
         common = dict(
@@ -418,8 +418,8 @@ class TestFresnelChromatic:
             plane_out=PlaneKind.INTERMEDIATE,
             on_undersampled="record",
         )
-        p_red = Fresnel(**common, max_wavelength_nm=700.0).sampling_parameter
-        p_blue = Fresnel(**common, max_wavelength_nm=400.0).sampling_parameter
+        p_red = Fresnel(**common, high_nm=700.0).sampling_parameter
+        p_blue = Fresnel(**common, high_nm=400.0).sampling_parameter
         assert p_red < p_blue
 
 

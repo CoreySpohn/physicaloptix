@@ -61,7 +61,7 @@ def aavc_core(eac1_cache):
         grid_in=pupil_grid,
         grid_out=PixelGrid.focal(dims, ps_lod, TEST_FRAME),
         reference_wavelength_nm=REF_NM,
-        min_wavelength_nm=0.9 * REF_NM,
+        low_nm=0.9 * REF_NM,
     )
     return core, field, science
 
