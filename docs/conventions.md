@@ -246,9 +246,9 @@ coexist in the stack and must not be mixed:
   Check which convention a package uses before serving it to a table reader.
 
 Detectors consume named rates. Construct `optixstuff.Detector` or
-`IdealDetector`, form `PhotonRates` on a dimensional `Quadrature`, call
+`IdealDetector`, form photon `Rates` on a dimensional `Quadrature`, call
 `detector.electrons(rates)` once, and then `detector.draw(key,
-electron_rates, FramePlan(frame_time_s, n_frames))`. For a differentiable
+rates, FramePlan(frame_time_s, n_frames))`. For a differentiable
 Gaussian approximation use `physicaloptix.ReparameterizedDetector`, whose
 moments equal the shared detector moments. It is approximate at low counts.
 A peak-normalized sensor map must first be multiplied by its explicitly

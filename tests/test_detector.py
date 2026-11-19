@@ -3,7 +3,7 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
-from optixstuff import ElectronRates, FramePlan
+from optixstuff import FramePlan, Rates
 from optixstuff.spectral import Band
 
 from physicaloptix.detector import ReparameterizedDetector
@@ -25,8 +25,8 @@ def test_draw_moments():
         read_noise_e_rms=2.0,
         excess_noise_factor_sq=1.7,
     )
-    rates = ElectronRates(
-        (Band(500, 500),), star_leakage=jnp.array([[[0.1, 10.0, 1000.0]]])
+    rates = Rates(
+        (Band(500, 500),), "electron", star_leakage=jnp.array([[[0.1, 10.0, 1000.0]]])
     )
     plan = FramePlan(2.0, 3)
     mean, variance = detector.mean_and_variance(rates, plan)
@@ -56,7 +56,11 @@ def test_draw_rate_gradient():
     def loss(scale):
         return detector.draw(
             key,
-            ElectronRates((Band(500, 500),), planet=scale * jnp.full((1, 2, 2), 100.0)),
+            Rates(
+                (Band(500, 500),),
+                "electron",
+                planet=scale * jnp.full((1, 2, 2), 100.0),
+            ),
             plan,
         ).sum()
 
