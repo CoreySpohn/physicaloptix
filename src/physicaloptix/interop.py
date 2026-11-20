@@ -1,4 +1,4 @@
-"""Live propagation behind the shared coronagraph image and photometry contract.
+"""Live propagation behind the shared coronagraph image contract.
 
 Each adapter is built at one spectrum. Serving wavelengths select no new
 propagation; use one adapter per band in MultiBandCoronagraph for that purpose.
@@ -16,7 +16,7 @@ from optixstuff.coronagraph import (
     AbstractImagingCoronagraph,
     ProductGrids,
     SourcePSFs,
-    _on_grid,
+    on_grid,
 )
 from optixstuff.grids import Image, Measure, PixelGrid
 from optixstuff.performance import SampledProfile, performance_curves
@@ -66,7 +66,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         max_separation_lod,
         reference_wavelength_nm,
         pixel_scale_lod=0.25,
-        sep_step_lod=0.5,
+        separation_step_lod=0.5,
         fov_margin_lod=4.0,
         wavelength_nm=None,
         rules=(),
@@ -116,7 +116,9 @@ class PathCoronagraph(AbstractImagingCoronagraph):
 
         # The stellar halo continues past the field; off-axis cores do not.
         stellar = psf(lyot, "reflect")
-        seps = np.arange(0.0, max_separation_lod + 2 * sep_step_lod, sep_step_lod)
+        seps = np.arange(
+            0.0, max_separation_lod + 2 * separation_step_lod, separation_step_lod
+        )
         images = tuple(
             psf(core_path.propagate(_tilted_xy(input_field, s, 0.0))[0]) for s in seps
         )
@@ -128,7 +130,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
                 rule,
                 separations_lod=seps,
                 leakage_rule=leakage_rule,
-                stellar_diameter=0.0,
+                stellar_diameter_lod=0.0,
             )
             for rule in dict.fromkeys((DEFAULT_APERTURE_RULE, HalfMaximum(0.5), *rules))
         )
@@ -197,22 +199,22 @@ class PathCoronagraph(AbstractImagingCoronagraph):
             quantity="stellar_flux_fraction",
             outside=outside,
         )
-        return native if grid is None or native.grid == grid else _on_grid(native, grid)
+        return native if grid is None or native.grid == grid else on_grid(native, grid)
 
-    def stellar_map(self, wavelength_nm, stellar_diam_lod, *, grid=None):
+    def stellar_map(self, wavelength_nm, stellar_diameter_lod, *, grid=None):
         """Point-star flux fraction; reject concrete or mark traced finite stars NaN."""
         if (
-            not isinstance(stellar_diam_lod, jax.core.Tracer)
-            and float(stellar_diam_lod) != 0
+            not isinstance(stellar_diameter_lod, jax.core.Tracer)
+            and float(stellar_diameter_lod) != 0
         ):
             raise ValueError("finite stellar diameter requires a prepared stellar map")
         # The stellar halo continues past the field.
         image = self._psf(self.lyot_field, grid, outside="reflect")
-        if not isinstance(stellar_diam_lod, jax.core.Tracer):
+        if not isinstance(stellar_diameter_lod, jax.core.Tracer):
             return image
         return replace(
             image,
-            data=jnp.where(jnp.asarray(stellar_diam_lod) == 0, image.data, jnp.nan),
+            data=jnp.where(jnp.asarray(stellar_diameter_lod) == 0, image.data, jnp.nan),
         )
 
     def source_psfs(self, wavelength_nm, x_lod, y_lod, *, grid=None):
@@ -236,4 +238,4 @@ class PathCoronagraph(AbstractImagingCoronagraph):
 
     def uniform_sky_map(self, wavelength_nm, *, grid):
         """Dimensionless extended-illumination transmission on the requested grid."""
-        return self._sky if self._sky.grid == grid else _on_grid(self._sky, grid)
+        return self._sky if self._sky.grid == grid else on_grid(self._sky, grid)

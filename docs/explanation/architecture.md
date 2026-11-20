@@ -101,7 +101,7 @@ Aperture rules and performance reduction live in `optixstuff.apertures` and
 `optixstuff.performance`. `PathCoronagraph` uses those shared definitions;
 `yippy.Coronagraph` directly implements the sampled `AbstractTableCoronagraph`
 contract. Both expose `source_psfs(wavelength_nm, x_lod, y_lod, grid=...)`,
-`stellar_map(wavelength_nm, stellar_diam_lod, grid=...)`, and `curves(rule)`.
+`stellar_map(wavelength_nm, stellar_diameter_lod, grid=...)`, and `curves(rule)`.
 `at_wavelength(wavelength_nm)` identifies the native grid of each product.
 `source_psfs` returns an image stack and a validity flag for each source.
 The live model estimates `uniform_sky_map` from independent complex pupil

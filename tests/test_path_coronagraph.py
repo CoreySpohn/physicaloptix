@@ -110,6 +110,14 @@ def bare_telescope():
     )
 
 
+def _point_energy(coro, x_lod, y_lod):
+    """Sum each point source's native PSF, NaN outside the admitted support."""
+    x, y = jnp.broadcast_arrays(jnp.asarray(x_lod), jnp.asarray(y_lod))
+    psfs = coro.source_psfs(coro.frame.reference_wavelength_nm, x.ravel(), y.ravel())
+    energy = jnp.sum(psfs.image.integrated().data, axis=(-2, -1))
+    return jnp.where(psfs.valid, energy, jnp.nan).reshape(x.shape)
+
+
 def _lod_rad(wavelength_nm):
     return wavelength_nm * 1e-9 / DIAMETER_M
 
@@ -124,7 +132,7 @@ class TestConformance:
         assert (
             products.source_grid == products.stellar_grid == products.sky_grid == c.grid
         )
-        assert c.stellar_frame(600.0) == c.frame == products.stellar_grid.frame
+        assert products.stellar_grid.frame == c.frame == products.stellar_grid.frame
         star = c.stellar_map(600.0, 0.0)
         assert star.measure == Measure.density("grid")
         assert c.source_psfs(600.0, 0.0, 0.0).image.measure == Measure.density("grid")
@@ -136,10 +144,10 @@ class TestConformance:
         def consumer(coro: AbstractImagingCoronagraph):
             sep, wl = 6.0, 600.0
             return (
-                coro.point_energy_fraction(sep, 0.0),
+                _point_energy(coro, sep, 0.0),
                 coro.source_psfs(wl, jnp.array([sep]), jnp.array([0.0])).valid[0],
-                coro.stellar_frame(wl).diameter_m,
-                coro.separation_map().max(),
+                coro.at_wavelength(wl).stellar_grid.frame.diameter_m,
+                coro.grid.radius().max(),
                 coro.on_axis_psf(
                     wl, _grid((32, 32), (_lod_rad(wl) * 0.5) / _lod_rad(wl))
                 ).data,
@@ -249,7 +257,7 @@ class TestDerivedCurves:
         assert 0.0 <= cmi < 1e-3
 
     def test_point_energy_is_a_fraction(self, vortex_coronagraph):
-        occ = float(vortex_coronagraph.point_energy_fraction(0.0, 0.8 * OWA))
+        occ = float(_point_energy(vortex_coronagraph, 0.0, 0.8 * OWA))
         assert 0.0 <= occ <= 1.0 + 1e-9
 
 
@@ -329,7 +337,7 @@ class TestSamplingExplicitContract:
             iy, ix = np.unravel_index(np.argmax(psfs[k]), psfs[k].shape)
             assert abs(coords[ix] - float(xs[k])) < scale
             assert abs(coords[iy] - float(ys[k])) < scale
-        energy = c.point_energy_fraction(xs, ys)
+        energy = _point_energy(c, xs, ys)
         assert np.isnan(energy[2:]).all()
         np.testing.assert_allclose(psfs[:2].sum(axis=(-2, -1)), energy[:2], rtol=5e-5)
 
@@ -365,7 +373,7 @@ class TestSamplingExplicitContract:
         populated = np.asarray(counts) > 0
         # The central vortex null rejects an axial point but admits sky
         # photons diffracted by off-axis illumination.
-        assert c.uniform_sky_response(radii[0]) > c.point_energy_fraction(0.0, 0.0)
+        assert c.uniform_sky_response(radii[0]) > _point_energy(c, 0.0, 0.0)
         np.testing.assert_allclose(
             c.uniform_sky_response(radii[populated]), means[populated], rtol=1e-12
         )
@@ -576,7 +584,11 @@ def test_rule_records_and_absolute_leakage(bare_telescope):
 
     rule = HalfMaximum(0.5)
     expected = performance_curves(
-        off, star, rule, separations_lod=c.curves().separation_lod, stellar_diameter=0.0
+        off,
+        star,
+        rule,
+        separations_lod=c.curves().separation_lod,
+        stellar_diameter_lod=0.0,
     )
     record = c.curves(rule)
     for name in (
