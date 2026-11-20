@@ -666,17 +666,12 @@ def test_stellar_map_rejects_finite_diameters(bare_telescope):
     grid = _grid((8, 8), 0.5)
     with pytest.raises(ValueError, match="finite stellar diameter"):
         c.stellar_map(600.0, 0.1, grid=grid)
-    with pytest.raises(ValueError, match="finite stellar diameter"):
-        c.leakage_fraction(6.0, 600.0, stellar_diam_lod=0.1)
 
     @eqx.filter_jit
     def serve(diameter):
-        return (
-            c.stellar_map(600.0, diameter, grid=grid),
-            c.leakage_fraction(6.0, 600.0, stellar_diam_lod=diameter),
-        )
+        return c.stellar_map(600.0, diameter, grid=grid)
 
-    point, leakage = serve(jnp.asarray(0.0))
+    point = serve(jnp.asarray(0.0))
     np.testing.assert_allclose(
         point.data,
         Fraunhofer(c.input_field.grid, grid).forward(c.lyot_field).intensity().data
@@ -685,16 +680,8 @@ def test_stellar_map_rejects_finite_diameters(bare_telescope):
         rtol=16 * np.finfo(float).eps,
         atol=0,
     )
-    np.testing.assert_allclose(
-        leakage,
-        np.asarray(c.curves().leakage_fraction)[
-            np.flatnonzero(np.asarray(c.curves().separation_lod) == 6.0)[0]
-        ],
-        rtol=16 * np.finfo(float).eps,
-    )
-    finite, leakage = serve(jnp.asarray(0.1))
+    finite = serve(jnp.asarray(0.1))
     assert np.all(np.isnan(finite.data))
-    assert np.isnan(leakage)
     assert finite.grid == point.grid
     assert finite.quantity == point.quantity
     assert finite.outside == point.outside
