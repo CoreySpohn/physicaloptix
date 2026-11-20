@@ -377,7 +377,8 @@ use `measure=Measure.intensive()`, `quantity="transmission"`, and no area factor
 its quantity. `plot_field` accepts these Images directly.
 
 Construct `PathCoronagraph.from_path` with `primary`,
-`reference_wavelength_nm`, and `outer_working_angle_lod`. The adapter exposes
+`reference_wavelength_nm`, and `max_separation_lod`, the largest separation at which
+the records are sampled. The adapter exposes
 its native `grid` and prepares `curves(Circular(0.7))` and
 `curves(HalfMaximum(0.5))`; request additional aperture rules with `rules=`.
 All coronagraph image methods take a target `PixelGrid`. Scalar performance

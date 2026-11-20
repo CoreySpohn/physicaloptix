@@ -52,11 +52,11 @@ coro = po.PathCoronagraph.from_path(
     pupil_field,
     primary=primary,
     reference_wavelength_nm=600.0,
-    outer_working_angle_lod=32.0,
+    max_separation_lod=32.0,
 )
 target = PixelGrid.focal(npix, 0.25, primary.frame(600.0))
 psf = coro.on_axis_psf(600.0, target)  # per-pixel flux-fraction Image
-eta = coro.throughput(6.0, 600.0)  # derived, not declared
+eta = coro.curves().evaluate("throughput", 6.0)  # derived, not declared
 ```
 
 ## What physicaloptix is *not*

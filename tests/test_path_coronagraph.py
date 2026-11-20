@@ -7,7 +7,6 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TEST_FRAME
-from hwoutils.constants import s2d
 from optixstuff import SimplePrimary
 from optixstuff.coronagraph import AbstractImagingCoronagraph, AbstractSceneCoronagraph
 from optixstuff.grids import Measure, PixelGrid, resample
@@ -72,7 +71,7 @@ def vortex_coronagraph():
         field,
         primary=PRIMARY,
         reference_wavelength_nm=600.0,
-        outer_working_angle_lod=OWA,
+        max_separation_lod=OWA,
         pixel_scale_lod=0.5,
         n_sky_screens=32,
     )
@@ -105,7 +104,7 @@ def bare_telescope():
         field,
         primary=PRIMARY,
         reference_wavelength_nm=600.0,
-        outer_working_angle_lod=OWA,
+        max_separation_lod=OWA,
         pixel_scale_lod=0.5,
         n_sky_screens=32,
     )
@@ -137,10 +136,10 @@ class TestConformance:
         def consumer(coro: AbstractImagingCoronagraph):
             sep, wl = 6.0, 600.0
             return (
-                coro.throughput(sep, wl),
-                coro.core_area(sep, wl),
-                coro.leakage_density_lod2(sep, wl),
-                coro.uniform_sky_response(sep, wl),
+                coro.point_energy_fraction(sep, 0.0),
+                coro.source_psfs(wl, jnp.array([sep]), jnp.array([0.0])).valid[0],
+                coro.stellar_frame(wl).diameter_m,
+                coro.separation_map().max(),
                 coro.on_axis_psf(
                     wl, _grid((32, 32), (_lod_rad(wl) * 0.5) / _lod_rad(wl))
                 ).data,
@@ -155,9 +154,10 @@ class TestConformance:
         assert results[4].shape == (32, 32)
         assert results[5].shape == (32, 32)
 
-    def test_scalar_methods_broadcast_over_arrays(self, vortex_coronagraph):
+    def test_curves_broadcast_over_arrays(self, vortex_coronagraph):
         seps = jnp.array([2.0, 4.0, 8.0])
-        assert vortex_coronagraph.throughput(seps, 600.0).shape == (3,)
+        record = vortex_coronagraph.curves()
+        assert record.evaluate("throughput", seps).shape == (3,)
 
 
 class TestNormalization:
@@ -227,30 +227,30 @@ class TestDerivedCurves:
     def test_iwa_is_derived_and_inside_the_field(self, vortex_coronagraph):
         assert 0.0 < vortex_coronagraph.curves().iwa_lod < OWA
 
-    def test_owa_is_design_metadata(self, vortex_coronagraph):
-        assert vortex_coronagraph.outer_working_angle_lod == OWA
+    def test_records_are_sampled_out_to_the_requested_separation(
+        self, vortex_coronagraph
+    ):
+        assert vortex_coronagraph.curves().data_extent_lod >= OWA
 
     def test_throughput_rises_from_the_null(self, vortex_coronagraph):
-        near = float(vortex_coronagraph.throughput(0.5, 600.0))
-        far = float(vortex_coronagraph.throughput(0.8 * OWA, 600.0))
+        near = float(vortex_coronagraph.curves().evaluate("throughput", 0.5))
+        far = float(vortex_coronagraph.curves().evaluate("throughput", 0.8 * OWA))
         assert far > 5.0 * near
         assert 0.0 <= far <= 1.0
 
     def test_core_area_is_positive_beyond_iwa(self, vortex_coronagraph):
-        area = float(vortex_coronagraph.core_area(0.8 * OWA, 600.0))
+        area = float(vortex_coronagraph.curves().evaluate("core_area_lod2", 0.8 * OWA))
         assert area > 0.0
 
     def test_leakage_density_lod2_is_deep(self, vortex_coronagraph):
-        cmi = float(vortex_coronagraph.leakage_density_lod2(0.8 * OWA, 600.0))
+        cmi = float(
+            vortex_coronagraph.curves().evaluate("leakage_density_lod2", 0.8 * OWA)
+        )
         assert 0.0 <= cmi < 1e-3
 
     def test_point_energy_is_a_fraction(self, vortex_coronagraph):
         occ = float(vortex_coronagraph.point_energy_fraction(0.0, 0.8 * OWA))
         assert 0.0 <= occ <= 1.0 + 1e-9
-
-    def test_time_and_wavelength_arguments_accepted(self, vortex_coronagraph):
-        value = vortex_coronagraph.throughput(5.0, 750.0, time_d=3600.0 * s2d)
-        assert np.isfinite(float(value))
 
 
 class TestConstruction:
@@ -280,7 +280,7 @@ class TestConstruction:
                 field,
                 primary=PRIMARY,
                 reference_wavelength_nm=600.0,
-                outer_working_angle_lod=OWA,
+                max_separation_lod=OWA,
             )
 
 
@@ -365,9 +365,9 @@ class TestSamplingExplicitContract:
         populated = np.asarray(counts) > 0
         # The central vortex null rejects an axial point but admits sky
         # photons diffracted by off-axis illumination.
-        assert c.uniform_sky_response(radii[0], wl) > c.point_energy_fraction(0.0, 0.0)
+        assert c.uniform_sky_response(radii[0]) > c.point_energy_fraction(0.0, 0.0)
         np.testing.assert_allclose(
-            c.uniform_sky_response(radii[populated], wl), means[populated], rtol=1e-12
+            c.uniform_sky_response(radii[populated]), means[populated], rtol=1e-12
         )
 
     def test_non_square_shape_center_crops(self, vortex_coronagraph):
@@ -424,7 +424,7 @@ class TestChromaticBuild:
             field,
             primary=PRIMARY,
             reference_wavelength_nm=600.0,
-            outer_working_angle_lod=OWA,
+            max_separation_lod=OWA,
             pixel_scale_lod=0.5,
             n_sky_screens=32,
             wavelength_nm=build_wavelength_nm,

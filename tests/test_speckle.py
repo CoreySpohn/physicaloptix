@@ -26,16 +26,15 @@ def _e_in(norm, du=0.25):
     return norm * du * du
 
 
-def _mock_coro():
-    from optixstuff.grids import PixelGrid
+class _MockCoronagraph(ox.AbstractCoronagraph):
+    """A slot occupant that declares only a frame."""
 
-    return ox.ScalarCoronagraph(
-        grid=PixelGrid.focal(32, 0.25, TEST_FRAME),
-        throughput_fraction=0.5,
-        aperture_area_lod2=1.0,
-        stellar_leakage_density_lod2=1e-10,
-        outer_working_angle_lod=30.0,
-    )
+    frame: object
+    bandpass: object = None
+
+
+def _mock_coro():
+    return _MockCoronagraph(frame=TEST_FRAME)
 
 
 def _field(coherent=False):
@@ -181,8 +180,15 @@ class TestInterface:
 
     def test_attaches_to_instrument(self):
         sp = _field()
-        op = ox.Instrument.from_default_setup(
-            _mock_coro(), detector_shape=(16, 16), speckle=sp
+        op = ox.Instrument(
+            primary=ox.SimplePrimary(
+                circumscribed_diameter_m=TEST_FRAME.diameter_m,
+                collecting_area_m2=28.0,
+            ),
+            attenuating_elements=(),
+            coronagraph=_mock_coro(),
+            detector=ox.IdealDetector(pixel_scale_arcsec=0.01, shape=(16, 16)),
+            speckle=sp,
         )
         assert op.speckle is sp
         assert op.speckle.grid.step == 0.25

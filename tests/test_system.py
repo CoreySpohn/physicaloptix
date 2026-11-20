@@ -426,7 +426,7 @@ class TestOptixstuffSeam:
                 circumscribed_diameter_m=6.0, collecting_area_m2=9 * np.pi
             ),
             reference_wavelength_nm=600.0,
-            outer_working_angle_lod=6.0,
+            max_separation_lod=6.0,
             pixel_scale_lod=0.5,
         )
         assert isinstance(coronagraph, AbstractCoronagraph)

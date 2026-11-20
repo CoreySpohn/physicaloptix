@@ -48,7 +48,6 @@ class PathCoronagraph(AbstractImagingCoronagraph):
     _records: tuple
     _sky: Image
     _sky_profile: SampledProfile
-    outer_working_angle_lod: float = eqx.field(static=True)
     wavelength_nm: float | None = eqx.field(static=True)
 
     @property
@@ -64,7 +63,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         input_field,
         *,
         primary,
-        outer_working_angle_lod,
+        max_separation_lod,
         reference_wavelength_nm,
         pixel_scale_lod=0.25,
         sep_step_lod=0.5,
@@ -78,7 +77,8 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         """Compile a point-star model from an entrance-to-Lyot path.
 
         primary.frame(reference_wavelength_nm) defines the native angular
-        grid. wavelength_nm binds monochromatic OPD screens when supplied.
+        grid, and max_separation_lod sets how far out the records are sampled.
+        wavelength_nm binds monochromatic OPD screens when supplied.
         DEFAULT_APERTURE_RULE and HalfMaximum(0.5) are always prepared; rules adds
         further immutable records. Finite stellar diameters are not modeled.
         n_sky_screens independent complex pupil screens (drawn with seed)
@@ -95,9 +95,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         plane = getattr(last, "plane_out", None) or getattr(last, "plane", None)
         if plane is not PlaneKind.PUPIL:
             raise ValueError("core_path must end in the pupil (Lyot) plane")
-        npix = 2 * int(
-            np.ceil((outer_working_angle_lod + fov_margin_lod) / pixel_scale_lod)
-        )
+        npix = 2 * int(np.ceil((max_separation_lod + fov_margin_lod) / pixel_scale_lod))
         grid = PixelGrid.focal(
             npix, pixel_scale_lod, primary.frame(reference_wavelength_nm)
         )
@@ -118,7 +116,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
 
         # The stellar halo continues past the field; off-axis cores do not.
         stellar = psf(lyot, "reflect")
-        seps = np.arange(0.0, outer_working_angle_lod + 2 * sep_step_lod, sep_step_lod)
+        seps = np.arange(0.0, max_separation_lod + 2 * sep_step_lod, sep_step_lod)
         images = tuple(
             psf(core_path.propagate(_tilted_xy(input_field, s, 0.0))[0]) for s in seps
         )
@@ -153,7 +151,6 @@ class PathCoronagraph(AbstractImagingCoronagraph):
             records,
             sky,
             sky_profile,
-            float(outer_working_angle_lod),
             None if wavelength_nm is None else float(wavelength_nm),
         )
 
@@ -173,7 +170,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         """Return the product grids of the build spectrum."""
         return ProductGrids(self.grid, self.grid, self._sky.grid)
 
-    def uniform_sky_response(self, separation_lod, wavelength_nm=None, *, time_d=0.0):
+    def uniform_sky_response(self, separation_lod):
         """Annular mean of the uniform-sky map in the performance frame."""
         if hasattr(separation_lod, "unit"):
             raise TypeError("separation_lod must be dimensionless numeric values")
