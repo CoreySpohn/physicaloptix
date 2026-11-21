@@ -107,7 +107,7 @@ flowchart TB
     optix --> physopt
     optix --> yippy
     physopt -- AbstractImagingCoronagraph --> corono
-    physopt -- AbstractCoronagraph --> jaxedith
+    physopt -- PerformanceCurves --> jaxedith
     yippy -- AbstractImagingCoronagraph --> corono
 ```
 

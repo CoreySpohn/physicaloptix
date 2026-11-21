@@ -71,7 +71,7 @@ flowchart LR
     opt --> yip
     po -.AbstractImagingCoronagraph.-> cor
     yip -.AbstractImagingCoronagraph.-> cor
-    po -.AbstractCoronagraph.-> jed
+    po -.PerformanceCurves.-> jed
     po -."(E_nom, G)".-> tip
     tip -.AbstractSpeckleField.-> cor
 ```

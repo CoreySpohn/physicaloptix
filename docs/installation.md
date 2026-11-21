@@ -75,7 +75,7 @@ slot.
 | `yippy` | Sampled-YIP PSF synthesis (the interpolated sibling of live propagation) |
 | `tiptilt` | Wavefront-error generation and wavefront control, built on the `(E_nom, G)` linearization |
 | `coronagraphoto` | 2D coronagraphic image simulation |
-| `jaxedith` | Exposure-time and yield calculations |
+| `jaxedith` | Exposure-time and yield calculations from performance curves |
 | `skyscapes` | Scene model: stars, planets, disks, zodi |
 
 `pip install physicaloptix` pulls `optixstuff` and `hwoutils` as transitive
