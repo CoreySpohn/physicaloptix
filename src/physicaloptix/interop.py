@@ -47,7 +47,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
     grid: PixelGrid
     _records: tuple
     _sky: Image
-    _sky_profile: SampledProfile
+    uniform_sky_profile: SampledProfile
     wavelength_nm: float | None = eqx.field(static=True)
 
     @property
@@ -176,7 +176,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         """Annular mean of the uniform-sky map in the performance frame."""
         if hasattr(separation_lod, "unit"):
             raise TypeError("separation_lod must be dimensionless numeric values")
-        return self._sky_profile.evaluate(separation_lod)
+        return self.uniform_sky_profile.evaluate(separation_lod)
 
     def _psf(self, field, grid, outside="zero"):
         direct = (
