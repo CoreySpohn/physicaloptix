@@ -70,8 +70,8 @@ def emitted(vortex_setup, tmp_path_factory):
             (Band(REF_NM * (1 - 0.1 / 2), REF_NM * (1 + 0.1 / 2)),), core, order=3
         ),
         reference_wavelength_nm=REF_NM,
-        offsets_lod=np.array([2.0, 6.0, 10.0]),
-        stellar_diams_lod=np.array([0.0, 0.1]),
+        offsets_x_lod=np.array([2.0, 6.0, 10.0]),
+        stellar_diameters_lod=np.array([0.0, 0.1]),
         n_pointings=8,
         n_sky_screens=60,
         diameter_m=DIAMETER_M,
@@ -176,8 +176,8 @@ class TestEmittedPackage:
                 (Band(950, 1050), Band(1050, 1250)), core, order=2, breaks_nm=[1150]
             ).band(0),
             reference_wavelength_nm=REF_NM,
-            offsets_lod=np.array([4.0]),
-            stellar_diams_lod=np.array([0.05]),
+            offsets_x_lod=np.array([4.0]),
+            stellar_diameters_lod=np.array([0.05]),
             n_pointings=4,
             n_sky_screens=8,
             sky_band_nm=(965.0, 1030.0),
@@ -231,8 +231,8 @@ class TestSkyNormalization:
                 (Band(REF_NM * (1 - 0.1 / 2), REF_NM * (1 + 0.1 / 2)),), core, order=2
             ),
             reference_wavelength_nm=REF_NM,
-            offsets_lod=np.array([4.0]),
-            stellar_diams_lod=np.array([0.0]),
+            offsets_x_lod=np.array([4.0]),
+            stellar_diameters_lod=np.array([0.0]),
             n_pointings=2,
             n_sky_screens=400,
             diameter_m=DIAMETER_M,

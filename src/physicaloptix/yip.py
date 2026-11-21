@@ -57,9 +57,9 @@ def emit_yip(
     science_grid,
     spectrum,
     reference_wavelength_nm,
-    offsets_lod,
+    offsets_x_lod,
     diameter_m,
-    stellar_diams_lod=None,
+    stellar_diameters_lod=None,
     n_pointings=50,
     n_sky_screens=1000,
     sky_band_nm=None,
@@ -84,10 +84,10 @@ def emit_yip(
             weights define the mean; an explicit midpoint rule reproduces the
             survey sampling.
         reference_wavelength_nm: Band-center wavelength defining the grid.
-        offsets_lod: 1D array of off-axis source offsets along +x, in
+        offsets_x_lod: 1D array of off-axis source offsets along +x, in
             reference lambda/D.
         diameter_m: Circumscribed telescope diameter (header metadata).
-        stellar_diams_lod: Stellar angular diameters; defaults to the survey
+        stellar_diameters_lod: Stellar angular diameters; defaults to the survey
             list ``[0] + logspace(-3, 0, 11)``.
         n_pointings: Point sources per resolved stellar diameter.
         n_sky_screens: Stochastic screens for the sky transmission map.
@@ -110,10 +110,10 @@ def emit_yip(
         science_grid, frame=Frame(reference_wavelength_nm, diameter_m, "circumscribed")
     )
 
-    if stellar_diams_lod is None:
-        stellar_diams_lod = DEFAULT_STELLAR_DIAMETERS
-    stellar_diams_lod = np.asarray(stellar_diams_lod, dtype=float)
-    offsets_lod = np.asarray(offsets_lod, dtype=float)
+    if stellar_diameters_lod is None:
+        stellar_diameters_lod = DEFAULT_STELLAR_DIAMETERS
+    stellar_diameters_lod = np.asarray(stellar_diameters_lod, dtype=float)
+    offsets_x_lod = np.asarray(offsets_x_lod, dtype=float)
 
     if len(spectrum.bands) != 1:
         raise ValueError("a yield package requires a one-band quadrature")
@@ -140,13 +140,13 @@ def emit_yip(
                     reference_wavelength_nm=reference_wavelength_nm,
                 ),
             )
-            for offset in offsets_lod
+            for offset in offsets_x_lod
         ]
     )
 
     # -- stellar intensity vs angular diameter ------------------------------
     stellar = []
-    for diameter in stellar_diams_lod:
+    for diameter in stellar_diameters_lod:
         if diameter == 0.0:
             stellar.append(
                 _band_image(
@@ -202,7 +202,7 @@ def emit_yip(
             reconstruction="band_limited",
             outside="reflect",
         ).density("grid"),
-        "stellar_diameters_lod": stellar_diams_lod,
+        "stellar_diameters_lod": stellar_diameters_lod,
         "offaxis_psfs": Image(
             offax,
             science_grid,
@@ -211,7 +211,9 @@ def emit_yip(
             "stellar_flux_fraction",
             reconstruction="band_limited",
         ).density("grid"),
-        "offsets_xy_lod": np.column_stack((offsets_lod, np.zeros_like(offsets_lod))),
+        "offsets_xy_lod": np.column_stack(
+            (offsets_x_lod, np.zeros_like(offsets_x_lod))
+        ),
         "sky_transmission": sky,
     }
 

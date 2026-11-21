@@ -33,19 +33,19 @@ from jax.scipy.special import i0e
 from jax.scipy.special import ndtr as _jndtr
 
 
-def dark_zone_mask(grid, *, iwa_lod, owa_lod):
+def dark_zone_mask(grid, *, inner_working_angle_lod, outer_working_angle_lod):
     """Boolean annulus mask on a focal grid (radii in lambda/D).
 
     Args:
         grid: The focal-plane ``PixelGrid`` (coordinates in lambda/D).
-        iwa_lod: Inner working angle.
-        owa_lod: Outer working angle.
+        inner_working_angle_lod: Inner working angle.
+        outer_working_angle_lod: Outer working angle.
 
     Returns:
         Boolean array of shape ``grid.shape``.
     """
     radius = grid.radius()
-    return (radius >= iwa_lod) & (radius <= owa_lod)
+    return (radius >= inner_working_angle_lod) & (radius <= outer_working_angle_lod)
 
 
 def coherent_intensity(e_nom):

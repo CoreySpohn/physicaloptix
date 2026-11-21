@@ -121,8 +121,8 @@ def emitted(reference, eac1_cache, tmp_path_factory):
             (band,), nodes_nm[None], jnp.full((1, n_lam), band.width_nm / n_lam)
         ),
         reference_wavelength_nm=reference_nm,
-        offsets_lod=np.asarray(reference["offax_psf_offset_list"]),
-        stellar_diams_lod=np.asarray(reference["stellar_intens_diam_list"]),
+        offsets_x_lod=np.asarray(reference["offax_psf_offset_list"]),
+        stellar_diameters_lod=np.asarray(reference["stellar_intens_diam_list"]),
         n_pointings=n_pointings,
         n_sky_screens=n_sky,
         sky_band_nm=(reference_nm * (1 - half), reference_nm * (1 + half)),

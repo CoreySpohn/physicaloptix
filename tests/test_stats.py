@@ -31,7 +31,11 @@ class TestDarkZoneMask:
     def test_annulus_geometry(self):
         """Fails if the mask assumes a centered square or ignores the basis."""
         grid = PixelGrid((3, 5), 1, 0, ((1, 0.5), (0, 2)), "lod", TEST_FRAME)
-        mask = np.asarray(dark_zone_mask(grid, iwa_lod=1.0, owa_lod=2.0))
+        mask = np.asarray(
+            dark_zone_mask(
+                grid, inner_working_angle_lod=1.0, outer_working_angle_lod=2.0
+            )
+        )
         expected = [
             [True, False, True, True, False],
             [False, False, False, False, False],

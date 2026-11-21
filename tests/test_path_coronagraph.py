@@ -361,8 +361,8 @@ class TestSamplingExplicitContract:
             science_grid=c.grid,
             reference_wavelength_nm=wl,
             spectrum=Quadrature.monochromatic(wl),
-            offsets_lod=[4.0],
-            stellar_diams_lod=[0.0],
+            offsets_x_lod=[4.0],
+            stellar_diameters_lod=[0.0],
             n_sky_screens=32,
             diameter_m=DIAMETER_M,
         )
