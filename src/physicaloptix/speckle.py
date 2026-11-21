@@ -121,7 +121,7 @@ class AnalyticSpeckleField(LinearSpeckleField):
     phases: Array
 
     def coefficients(self, time_d):
-        """Synthesize (*time_shape, n_modes) coefficients at absolute days."""
+        """Synthesize ``(*time_shape, n_modes)`` coefficients at absolute days."""
         t = (jnp.asarray(time_d, dtype=float) - self.epoch_d) * d2s
         phase = 2.0 * jnp.pi * self.frequencies_hz * t[..., None, None] + self.phases
         return jnp.sum(self.amplitudes * jnp.cos(phase), axis=-1)
