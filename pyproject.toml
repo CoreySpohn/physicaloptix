@@ -22,15 +22,15 @@ classifiers = [
 dependencies = [
     "astropy>=6.1",
     "equinox>=0.13.2",
-    "hwoutils[jax]>=1.10.0",
+    "hwoutils[jax]>=2.0.0",
     "pyyaml>=6.0.1",
     "jax>=0.8.1",
     "jaxlib>=0.8.1",
     "jaxtyping>=0.3.3",
     "numpy>=2.0",
-    "optixstuff>=4.0.0",
+    "optixstuff>=7.0.0",  # unreleased: next release, see .github/sibling-pins.txt
     "scipy>=1.13",
-    "yippy>=2.10.6",
+    "yippy>=4.0.0",  # unreleased: next release
 ]
 
 [project.optional-dependencies]
@@ -44,7 +44,7 @@ docs = [
     "sphinxcontrib-mermaid>=1.0.0",
     "ipython>=8.24.0",
     "matplotlib>=3.11.0",
-    "eyepiece>=0.7.0",
+    "eyepiece>=0.16.0",
     "imageio-ffmpeg>=0.5.1",
 ]
 test = [
@@ -70,7 +70,7 @@ test = [
 # which viz/fresnel.py calls; eyepiece.prepared (viz/_prepare.py,
 # viz/boiling.py) arrived in 0.5.0.
 # Visualization modules import matplotlib directly as well as through eyepiece.
-viz = ["eyepiece>=0.7.0", "hwostyle>=1.4.0", "matplotlib>=3.11.0"]
+viz = ["eyepiece>=0.16.0", "hwostyle>=1.4.0", "matplotlib>=3.11.0"]
 
 [project.urls]
 Homepage = "https://github.com/CoreySpohn/physicaloptix"
