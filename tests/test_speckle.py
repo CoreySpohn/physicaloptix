@@ -1754,20 +1754,39 @@ def test_broadened_equals_explicit_node_sum():
 
 
 def test_ou_exposure_neff_integrates_the_exponential_kernel():
-    """Exact-algebra integral checked with float64 quadrature (2e-12 relative).
+    """Exact-algebra integral checked with float64 quadrature.
 
     On v=t/T in [0,1], variance reduction is 2*int((1-v)*exp(-T*v/tau)).
-    A 128-node Gauss rule resolves the exponential through T/tau=1000;
-    roundoff and small-u cancellation set the relative tolerance.
+    A 128-node Gauss rule resolves the exponential through T/tau=1000.
+
+    The reference weights are recomputed from the closed form
+    ``2 / ((1 - x^2) P_n'(x)^2)`` at the nodes. ``leggauss`` weights carry
+    about 1e-11 relative error at the edge nodes, and that error changed
+    between numpy releases (1.3e-13 then 3.6e-12 in the u=1000 result); at
+    large u the integral is dominated by the edge nodes, so it passes
+    straight through.
+
+    The tolerance is the conditioning of the function's direct branch. It
+    evaluates u + expm1(-u), which cancels to u^2/2, losing a factor 1/u in
+    relative precision, worst at the branch switch u = 1e-4: eps / 1e-4 =
+    2.2e-12. The measured worst error against a 40-digit evaluation is
+    6.7e-13 there.
     """
     tau = np.array([1.0, 2.0])
     exposures = np.array([0.0, 1e-8, 1e-4, 1.0, 10.0, 1000.0])
-    nodes, weights = np.polynomial.legendre.leggauss(128)
+    nodes, _ = np.polynomial.legendre.leggauss(128)
+    dp = np.polynomial.legendre.legval(
+        nodes, np.polynomial.legendre.legder(np.eye(129)[128])
+    )
+    weights = 2.0 / ((1.0 - nodes**2) * dp**2)
     v = (nodes + 1.0) / 2.0
     u = exposures[None, :] / tau[:, None]
     reduction = np.sum(weights * (1 - v) * np.exp(-u[..., None] * v), axis=-1)
     np.testing.assert_allclose(
-        ou_exposure_neff(tau, exposures), 1 / reduction, rtol=2e-12, atol=0
+        ou_exposure_neff(tau, exposures),
+        1 / reduction,
+        rtol=np.finfo(float).eps / 1e-4,
+        atol=0,
     )
     np.testing.assert_array_equal(ou_exposure_neff(tau, 0.0), np.ones(2))
     derivative = jax.grad(lambda t: ou_exposure_neff(2.0, t).sum())(0.0)
