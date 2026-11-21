@@ -102,7 +102,7 @@ from physicaloptix import Field, Fraunhofer, OpticalPath, PlaneKind, Stage
 # a pupil grid, a matching focal grid, and a clear circular aperture on it
 pupil = PixelGrid.pupil(48)
 focal = PixelGrid.focal(96, 0.2, primary.frame(500.0))
-x = np.asarray(_grid_axis(pupil))
+x = np.asarray(pupil.coordinates().x[0])
 xg, yg = np.meshgrid(x, x)
 aperture = (np.hypot(xg, yg) <= 0.5).astype(complex)
 flat = Field(data=jnp.asarray(aperture), grid=pupil, plane=PlaneKind.PUPIL)

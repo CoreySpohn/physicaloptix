@@ -105,7 +105,9 @@ contract. Both expose `source_psfs(wavelength_nm, x_lod, y_lod, grid=...)`,
 `at_wavelength(wavelength_nm)` identifies the native grid of each product.
 `source_psfs` returns an image stack and a validity flag for each source.
 The live model estimates `uniform_sky_map` from independent complex pupil
-screens and `uniform_sky_response` from annular means of that map. `PathCoronagraph.bandpass`
+screens and `uniform_sky_response` from annular means of that map. The annular
+profile is the public field `uniform_sky_profile`, and
+`uniform_sky_response(separation_lod)` evaluates it. `PathCoronagraph.bandpass`
 is the entrance quadrature's `Band`, or `None` for an untagged field.
 It supports only point stars: a concrete nonzero stellar diameter raises
 `ValueError`, and a traced nonzero diameter produces a NaN image.
