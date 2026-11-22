@@ -32,7 +32,11 @@ from optixstuff.grids import Frame, Image, Measure
 from yippy import write_yip
 from yippy.writer import yip_header
 
-from physicaloptix._sky import uniform_sky_image, unit_energy
+from physicaloptix._sky import (
+    _require_inside_pupil_nyquist,
+    uniform_sky_image,
+    unit_energy,
+)
 from physicaloptix.sources import point_source
 from physicaloptix.transforms import Fraunhofer
 
@@ -120,6 +124,7 @@ def emit_yip(
     active = np.asarray(spectrum.active[0])
     nodes_nm = np.asarray(spectrum.nodes_nm[0])[active]
     base = unit_energy(input_field)
+    _require_inside_pupil_nyquist(science_grid, base, low_nm=float(nodes_nm.min()))
     science = Fraunhofer(
         grid_in=base.grid,
         grid_out=science_grid,
@@ -200,7 +205,6 @@ def emit_yip(
             Measure.integral(),
             "stellar_flux_fraction",
             reconstruction="band_limited",
-            outside="reflect",
         ).density("grid"),
         "stellar_diameters_lod": stellar_diameters_lod,
         "offaxis_psfs": Image(

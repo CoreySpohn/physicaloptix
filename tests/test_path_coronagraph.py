@@ -341,6 +341,75 @@ class TestSamplingExplicitContract:
         assert np.isnan(energy[2:]).all()
         np.testing.assert_allclose(psfs[:2].sum(axis=(-2, -1)), energy[:2], rtol=5e-5)
 
+    def test_source_beyond_the_domain_is_zero_for_that_source_alone(
+        self, vortex_coronagraph
+    ):
+        """Fails if a rejected source keeps the on-axis image or moves its neighbours.
+
+        A source at 1.3 pupil Nyquist radii and a NaN source each have
+        valid False and exact zeros; the inside source in the same call equals
+        its single-source render to 1e-12.
+        """
+        c = vortex_coronagraph
+        grid = _grid((32, 32), 0.5)
+        outside = 1.3 * NPUP / 2
+        mixed = c.source_psfs(
+            self.WL,
+            jnp.asarray([4.0, outside, jnp.nan, 0.0]),
+            jnp.asarray([1.0, 0.0, 0.0, outside]),
+            grid=grid,
+        )
+        alone = c.source_psfs(
+            self.WL, jnp.asarray([4.0]), jnp.asarray([1.0]), grid=grid
+        )
+        np.testing.assert_array_equal(mixed.valid, [True, False, False, False])
+        data = np.asarray(mixed.image.data)
+        assert np.isfinite(data).all()
+        assert (data[1:] == 0.0).all()
+        assert data[0].max() > 0
+        np.testing.assert_allclose(
+            data[0], np.asarray(alone.image.data)[0], rtol=1e-12, atol=1e-12
+        )
+
+    def test_products_are_zero_beyond_their_extent(self, vortex_coronagraph):
+        """Fails if a product is reflected or extended past its grid.
+
+        Resampled to a grid of twice the extent, the stellar map and the sky
+        map are exactly zero outside; pixels within two pixels of the native
+        edge are not asserted.
+        """
+        c = vortex_coronagraph
+        half = c.grid.shape[0] * c.grid.step / 2
+        step = 0.4
+        npix = round(4 * half / step)
+        # An arcsec grid is resampled; a matching lod grid is propagated directly.
+        wide = _grid((npix, npix), step).to_arcsec(600.0)
+        coords = (np.arange(npix) - npix / 2 + 0.5) * step
+        outer = np.maximum.outer(np.abs(coords), np.abs(coords)) >= half + 2 * step
+        assert outer.any()
+        for image in (
+            c.stellar_map(self.WL, 0.0, grid=wide),
+            c.uniform_sky_map(self.WL, grid=wide),
+        ):
+            data = np.asarray(image.data)
+            assert (data[outer] == 0.0).all()
+            assert data[~outer].any()
+
+    def test_factory_refuses_a_grid_past_the_pupil_nyquist_radius(
+        self, vortex_coronagraph
+    ):
+        c = vortex_coronagraph
+        with pytest.raises(ValueError, match="Nyquist"):
+            PathCoronagraph.from_path(
+                c.core_path,
+                c.input_field,
+                primary=PRIMARY,
+                reference_wavelength_nm=600.0,
+                max_separation_lod=NPUP / 2,
+                pixel_scale_lod=0.5,
+                n_sky_screens=2,
+            )
+
     def test_uniform_sky_matches_extended_illumination(
         self, vortex_coronagraph, tmp_path
     ):
@@ -661,9 +730,9 @@ def test_public_coronagraph_reconstruction(vortex_coronagraph):
         ):
             assert image.reconstruction == expected
         assert c.uniform_sky_map(600.0, grid=grid).reconstruction == "linear"
-        # Halo and transmission continue past the field; source cores do not.
-        assert c.stellar_map(600.0, 0.0, grid=grid).outside == "reflect"
-        assert c.uniform_sky_map(600.0, grid=grid).outside == "reflect"
+        # No product continues past its grid.
+        assert c.stellar_map(600.0, 0.0, grid=grid).outside == "zero"
+        assert c.uniform_sky_map(600.0, grid=grid).outside == "zero"
         assert c.off_axis_psf(600.0, 6.0, grid).outside == "zero"
 
 

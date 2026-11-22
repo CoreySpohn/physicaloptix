@@ -22,7 +22,12 @@ from optixstuff.grids import Image, Measure, PixelGrid
 from optixstuff.performance import SampledProfile, performance_curves
 from optixstuff.spectral import Band, Quadrature
 
-from physicaloptix._sky import entrance_energy, uniform_sky_image, unit_energy
+from physicaloptix._sky import (
+    _require_inside_pupil_nyquist,
+    entrance_energy,
+    uniform_sky_image,
+    unit_energy,
+)
 from physicaloptix.core import Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.transforms import Fraunhofer
@@ -99,11 +104,12 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         grid = PixelGrid.focal(
             npix, pixel_scale_lod, primary.frame(reference_wavelength_nm)
         )
+        _require_inside_pupil_nyquist(grid, input_field)
         energy = entrance_energy(input_field)
         lyot, _ = core_path.propagate(input_field)
         science = Fraunhofer(input_field.grid, grid)
 
-        def psf(field, outside="zero"):
+        def psf(field):
             return Image(
                 science.forward(field).intensity().integrated().data / energy,
                 grid,
@@ -111,11 +117,9 @@ class PathCoronagraph(AbstractImagingCoronagraph):
                 Measure.integral(),
                 "stellar_flux_fraction",
                 reconstruction="band_limited",
-                outside=outside,
             )
 
-        # The stellar halo continues past the field; off-axis cores do not.
-        stellar = psf(lyot, "reflect")
+        stellar = psf(lyot)
         seps = np.arange(
             0.0, max_separation_lod + 2 * separation_step_lod, separation_step_lod
         )
@@ -178,7 +182,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
             raise TypeError("separation_lod must be dimensionless numeric values")
         return self.uniform_sky_profile.evaluate(separation_lod)
 
-    def _psf(self, field, grid, outside="zero"):
+    def _psf(self, field, grid):
         direct = (
             grid is not None
             and grid.unit == "lod"
@@ -197,7 +201,6 @@ class PathCoronagraph(AbstractImagingCoronagraph):
             power,
             data=power.data / self.input_energy,
             quantity="stellar_flux_fraction",
-            outside=outside,
         )
         return native if grid is None or native.grid == grid else on_grid(native, grid)
 
@@ -208,8 +211,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
             and float(stellar_diameter_lod) != 0
         ):
             raise ValueError("finite stellar diameter requires a prepared stellar map")
-        # The stellar halo continues past the field.
-        image = self._psf(self.lyot_field, grid, outside="reflect")
+        image = self._psf(self.lyot_field, grid)
         if not isinstance(stellar_diameter_lod, jax.core.Tracer):
             return image
         return replace(
@@ -221,7 +223,8 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         """Native point densities or target pixel fractions for each pupil tilt.
 
         A tilt at or beyond the pupil Nyquist frequency on either axis is
-        ambiguous with a different source position.
+        ambiguous with a different source position: that source has ``valid``
+        False and an all-zero image, and the other sources are unaffected.
         """
 
         def one(x, y):
@@ -234,7 +237,11 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         nyquist_lod = 0.5 / self.input_field.grid.step
         valid = (jnp.abs(x) < nyquist_lod) & (jnp.abs(y) < nyquist_lod)
         images = jax.vmap(one)(jnp.where(valid, x, 0), jnp.where(valid, y, 0))
-        return SourcePSFs(replace(images, leading_axes=("source",)), valid)
+        keep = valid.reshape((-1,) + (1,) * (images.data.ndim - 1))
+        images = replace(
+            images, data=jnp.where(keep, images.data, 0.0), leading_axes=("source",)
+        )
+        return SourcePSFs(images, valid)
 
     def uniform_sky_map(self, wavelength_nm, *, grid):
         """Dimensionless extended-illumination transmission on the requested grid."""

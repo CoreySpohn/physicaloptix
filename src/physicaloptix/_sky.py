@@ -48,6 +48,28 @@ def _screen_intensity(core_path, science, source):
     return science.forward(lyot).intensity().data
 
 
+def _require_inside_pupil_nyquist(grid, input_field, *, low_nm=None):
+    """Refuse a focal product grid that reaches past the pupil Nyquist radius.
+
+    The entrance sampling carries angles up to ``0.5 / step`` in lambda/D; a
+    product beyond that holds an alias of the field, not light the model
+    computes. At a wavelength below the grid reference the bound shrinks in
+    the reference lambda/D by the ratio of the wavelengths (``low_nm``).
+    """
+    nyquist = 0.5 / input_field.grid.step
+    scale = 1.0
+    if low_nm is not None and grid.frame.reference_wavelength_nm:
+        scale = grid.frame.reference_wavelength_nm / float(low_nm)
+    x0, x1, y0, y1 = grid.extent()
+    reach = scale * max(abs(x0), abs(x1), abs(y0), abs(y1))
+    if reach > nyquist:
+        raise ValueError(
+            f"product grid reaches {reach:.4g} lambda/D, past the pupil Nyquist "
+            f"radius {nyquist:.4g} lambda/D of the entrance sampling; "
+            "refine the entrance grid or shrink the product grid"
+        )
+
+
 def uniform_sky_image(core_path, science, base, *, n_screens, seed, sky_band_nm=None):
     """Propagate independent Gaussian screens through a unit-energy pupil.
 
@@ -82,5 +104,4 @@ def uniform_sky_image(core_path, science, base, *, n_screens, seed, sky_band_nm=
         Measure.intensive(),
         "transmission",
         reconstruction="linear",
-        outside="reflect",
     )

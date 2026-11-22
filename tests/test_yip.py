@@ -104,8 +104,8 @@ class TestEmittedPackage:
         assert package["stellar_intensity"].reconstruction == "band_limited"
         assert package["offaxis_psfs"].reconstruction == "band_limited"
         assert package["sky_transmission"].reconstruction == "linear"
-        assert package["stellar_intensity"].outside == "reflect"
-        assert package["sky_transmission"].outside == "reflect"
+        assert package["stellar_intensity"].outside == "zero"
+        assert package["sky_transmission"].outside == "zero"
         assert package["offaxis_psfs"].outside == "zero"
         np.testing.assert_array_equal(package["stellar_diameters_lod"], [0.0, 0.1])
 
@@ -240,6 +240,26 @@ class TestSkyNormalization:
         sky = package["sky_transmission"].data
         interior = sky[13:35, 13:35]
         np.testing.assert_allclose(interior.mean(), 1.0, rtol=0.08)
+
+
+class TestScienceGridBound:
+    def test_grid_past_the_pupil_nyquist_radius_is_refused(
+        self, vortex_setup, tmp_path
+    ):
+        """Fails if a package is written on a grid wider than the entrance sampling."""
+        core, field = vortex_setup
+        with pytest.raises(ValueError, match="Nyquist"):
+            emit_yip(
+                tmp_path,
+                core,
+                field,
+                science_grid=PixelGrid.focal(100, 0.5, YIP_FRAME),
+                spectrum=Quadrature.monochromatic(REF_NM),
+                reference_wavelength_nm=REF_NM,
+                offsets_x_lod=np.array([2.0]),
+                diameter_m=DIAMETER_M,
+            )
+        assert not list(tmp_path.iterdir())
 
 
 class TestYippyRoundTrip:
