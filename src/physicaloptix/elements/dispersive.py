@@ -38,6 +38,16 @@ class DispersiveScreen(AbstractCommandableElement, AbstractChromaticOp):
     monochromatic field evaluates at the static ``wavelength_nm``.
     ``basis.kind`` is deliberately not checked: the kernel semantics is
     kind-agnostic.
+
+    Attributes:
+        basis: Mode basis whose coefficients are the command and whose modes carry the
+            spatial maps.
+        kernel: Complex dispersion table D_k, shape (m, n_table).
+        table_wavelengths_nm: Strictly increasing table wavelengths in nanometers, shape
+            (n_table,).
+        grid: Plane grid the basis and the incoming field live on.
+        wavelength_nm: Evaluation wavelength in nanometers for monochromatic fields.
+        plane: Plane the screen acts in.
     """
 
     basis: ModeBasis
@@ -110,11 +120,23 @@ class DispersiveScreen(AbstractCommandableElement, AbstractChromaticOp):
         return self.basis.kind
 
     def with_command(self, command: Array) -> Self:
-        """Return a screen with the specified command."""
+        """Return a screen with the specified command.
+
+        Args:
+            command: Replacement basis coefficients, shape (m,).
+
+        Returns:
+            A screen whose basis coefficients are the new command.
+        """
         return eqx.tree_at(lambda screen: screen.basis.coeffs, self, command)
 
     def spectral_breaks_nm(self) -> np.ndarray:
-        """Nodes of the linearly interpolated, endpoint-clamped kernel [nm]."""
+        """Nodes of the linearly interpolated, endpoint-clamped kernel [nm].
+
+        Returns:
+            Table wavelengths in nanometers, where the interpolated kernel changes
+            slope.
+        """
         return np.asarray(self.table_wavelengths_nm)
 
     def kernel_at(self, wavelengths_nm):

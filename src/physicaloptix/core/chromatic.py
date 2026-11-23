@@ -21,12 +21,11 @@ class AbstractChromaticOp(eqx.Module):
     def at_wavelength(self, wavelength_nm):
         """The op bound to ``wavelength_nm`` (nanometers, a concrete float).
 
+        An implementation returns an op that acts at that wavelength. Dynamic
+        leaves are shared with ``self``, not copied.
+
         Args:
             wavelength_nm: Wavelength in nanometers.
-
-        Returns:
-            An op that acts at that wavelength. Dynamic leaves are shared
-            with ``self``, not copied.
         """
 
 
@@ -107,7 +106,12 @@ class ChromaticTable(AbstractChromaticOp):
         )
 
     def __call__(self, field):
-        """Refuse to act: the table must be bound to a wavelength first."""
+        """Refuse to act: the table must be bound to a wavelength first.
+
+        Args:
+            field: Field the table would act on; never used, because the call always
+                raises.
+        """
         raise ValueError(
             "a ChromaticTable is unbound; call OpticalPath.at_wavelength(...) "
             "before propagating"

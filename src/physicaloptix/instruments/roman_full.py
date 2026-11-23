@@ -238,6 +238,18 @@ def source_tilt(n, pupil_diam_pix, source_x_lod, source_y_lod, lam0_m, lam_m):
     As in the prescription, ``source_x_lod`` tilts rows and ``source_y_lod``
     columns; the detector orientation of :func:`detector_image` puts ``x`` on
     output columns. Offsets may be traced.
+
+    Args:
+        n: Pupil grid size in samples.
+        pupil_diam_pix: Pupil diameter in samples.
+        source_x_lod: Source offset along x in lambda0/D, where lambda0 is the design
+            wavelength.
+        source_y_lod: Source offset along y in lambda0/D.
+        lam0_m: Design wavelength in meters that defines the offset unit.
+        lam_m: Wavelength in meters of the field being tilted.
+
+    Returns:
+        Complex tilt phasor of shape (n, n) to multiply into the entrance field.
     """
     xt = source_y_lod * lam0_m / lam_m
     yt = source_x_lod * lam0_m / lam_m
@@ -260,6 +272,9 @@ def detector_image(field, *, dx_m, lam_m, defocus_c, output_dim, mag=None):
         defocus_c: Coefficient of the residual quadratic phase.
         output_dim: Output size.
         mag: Zoom factor (input spacing over output spacing), or ``None`` to crop.
+
+    Returns:
+        Complex detector-frame field of shape (output_dim, output_dim).
     """
     n = field.shape[-1]
     x2 = (jnp.arange(n, dtype=float) - n // 2) ** 2

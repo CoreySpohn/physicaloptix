@@ -26,6 +26,18 @@ def synthesize_psd_surface(seed, grid, *, rms_nm, k_min=1.0, k_max=None, slope=-
     exactly ``rms_nm``; the result is no longer Gaussian. Deterministic per
     ``seed``. A generic polished-surface placeholder: swap in measured maps
     when metrology exists.
+
+    Args:
+        seed: Integer seed of the JAX random key; the map is deterministic per seed.
+        grid: Pupil grid; its step sets the sample spacing in pupil diameters.
+        rms_nm: Exact RMS of the returned map in nanometers.
+        k_min: Lower edge of the power-law band in cycles per pupil; must be positive.
+        k_max: Upper edge of the band in cycles per pupil; defaults to a quarter of the
+            grid size.
+        slope: Power-law exponent of the PSD.
+
+    Returns:
+        Zero-mean surface height map in nanometers on the grid, shape (ny, nx).
     """
     if k_min <= 0:
         raise ValueError(f"k_min must be positive, got {k_min}")

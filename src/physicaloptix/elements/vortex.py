@@ -194,6 +194,14 @@ class MultiScaleVortex(eqx.Module):
     ``Element`` it carries ``plane_in``/``plane_out`` (both PUPIL) like a
     propagator. Build with :meth:`build`; the ladder arrays are constant
     leaves and the runtime is :func:`vortex_forward`.
+
+    Attributes:
+        pupil_coords: 1D pupil coordinates in pupil diameters.
+        levels: Tuple of (focal coordinates, mask) pairs, one per level of the ladder;
+            coordinates are in lambda/D.
+        grid: The pupil grid the stage acts on.
+        plane_in: Plane of the incoming field (pupil).
+        plane_out: Plane of the returned field (pupil).
     """
 
     pupil_coords: Array
@@ -203,7 +211,11 @@ class MultiScaleVortex(eqx.Module):
     plane_out: PlaneKind = eqx.field(static=True)
 
     def spectral_breaks_nm(self) -> np.ndarray:
-        """The fixed vortex mask has no wavelength breaks."""
+        """The fixed vortex mask has no wavelength breaks.
+
+        Returns:
+            Empty array: the fixed mask has no wavelength breaks.
+        """
         return np.empty(0)
 
     @classmethod
@@ -228,7 +240,14 @@ class MultiScaleVortex(eqx.Module):
         )
 
     def __call__(self, field):
-        """Apply the vortex (validates the pupil plane and grid)."""
+        """Apply the vortex (validates the pupil plane and grid).
+
+        Args:
+            field: Pupil field on the stage grid, with trailing axes (npup, npup).
+
+        Returns:
+            Lyot-input pupil field on the same grid, with the same spectrum.
+        """
         validate_field(
             field, plane=self.plane_in, grid=self.grid, context="MultiScaleVortex"
         )

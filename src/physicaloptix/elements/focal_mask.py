@@ -24,8 +24,8 @@ def mask_window(pupil_grid, oversample, *, frame, extent_lod=None):
 
     Args:
         pupil_grid: The pupil grid (``npix`` samples spanning ``npix * dx``).
-        frame: Primary frame defining the mask-plane lambda/D unit.
         oversample: Window samples per lambda/D (a pitch of ``1 / oversample``).
+        frame: Primary frame defining the mask-plane lambda/D unit.
         extent_lod: Full window width in lambda/D; ``None`` is the pupil
             raster's full Nyquist band, ``pupil_grid.shape[0]`` lambda/D.
 
@@ -96,10 +96,12 @@ class FocalPlaneMask(eqx.Module):
     stage, so it carries ``plane_in`` / ``plane_out`` like a propagator.
 
     Attributes:
-        transform: The ``Fraunhofer`` (MFT) or ``FullBandFraunhofer`` (FFT) pair,
-            pupil grid -> mask-plane window.
-        transmission: Mask amplitude transmission on the window, ``(n, n)``,
-            rows y; sampled at one wavelength, so the stage is monochromatic.
+        transform: The Fraunhofer (MFT) or FullBandFraunhofer (FFT) pair, pupil grid ->
+            mask-plane window.
+        transmission: Mask amplitude transmission on the window, (n, n), rows y; sampled
+            at one wavelength, so the stage is monochromatic.
+        plane_in: Plane of the incoming field (default pupil).
+        plane_out: Plane of the returned field (default pupil).
     """
 
     transform: Fraunhofer | FullBandFraunhofer
@@ -108,7 +110,11 @@ class FocalPlaneMask(eqx.Module):
     plane_out: PlaneKind = eqx.field(static=True, default=PlaneKind.PUPIL)
 
     def spectral_breaks_nm(self) -> np.ndarray:
-        """The sampled mask is fixed; its transform supplies any breaks."""
+        """The sampled mask is fixed; its transform supplies any breaks.
+
+        Returns:
+            Wavelength breaks in nanometers declared by the transform.
+        """
         return self.transform.spectral_breaks_nm()
 
     def __check_init__(self):
@@ -128,7 +134,15 @@ class FocalPlaneMask(eqx.Module):
             )
 
     def mask_plane(self, field):
-        """The field just after the mask, on the mask-plane window (focal)."""
+        """The field just after the mask, on the mask-plane window (focal).
+
+        Args:
+            field: Monochromatic pupil field on the pupil grid of the transform.
+
+        Returns:
+            Field on the mask-plane window, in the focal plane, multiplied by the
+            transmission.
+        """
         self._check_mono(field)
         focal = self.transform.forward(field)
         return Field(
@@ -139,7 +153,14 @@ class FocalPlaneMask(eqx.Module):
         )
 
     def __call__(self, field):
-        """Return the field arriving at the Lyot plane (same pupil grid)."""
+        """Return the field arriving at the Lyot plane (same pupil grid).
+
+        Args:
+            field: Monochromatic pupil field on the pupil grid of the transform.
+
+        Returns:
+            Field at the Lyot plane on the same pupil grid, in the plane_out plane.
+        """
         self._check_mono(field)
         focal = self.transform.forward(field)
         perturbation = Field(

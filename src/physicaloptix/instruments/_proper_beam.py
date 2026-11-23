@@ -80,6 +80,9 @@ class PilotBeam:
             n: PixelGrid size; must be even.
             beam_diam_fraction: Fraction of the grid the beam diameter spans.
 
+        Returns:
+            Entrance beam state at z = 0 with a planar reference.
+
         Raises:
             ValueError: If ``n`` is not an even integer.
         """
@@ -116,6 +119,12 @@ class Op(NamedTuple):
     distance in meters (for a lens, the applied curvature in 1/m); ``dx`` is the
     sample spacing the operation's phase uses; ``forward`` selects the FFT
     direction of ``stw`` and ``wts``.
+
+    Attributes:
+        kind: Operation name: 'ptp', 'stw', 'wts' or 'lens'.
+        value: Distance in meters, or for a lens the applied curvature in 1/m.
+        dx: Sample spacing in meters that the phase of the operation uses.
+        forward: FFT direction of 'stw' and 'wts': True for forward.
     """
 
     kind: str
@@ -198,6 +207,13 @@ def plan_lens(beam, lens_fl):
     """Schedule a thin lens of focal length ``lens_fl`` meters (PROPER's prop_lens).
 
     Positive focal lengths converge. Returns the new beam and the lens operation.
+
+    Args:
+        beam: Pilot beam state before the lens.
+        lens_fl: Focal length in meters; positive converges.
+
+    Returns:
+        Pair of the pilot beam state after the lens and the scheduled lens operation.
     """
     lam = beam.lam_m
     z_rayleigh = np.pi * beam.w0**2 / lam
@@ -274,7 +290,16 @@ def _lens_array(a, lam, lens_phase, dx, n):
 
 
 def apply_op(a, op, lam_m):
-    """Execute one scheduled operation on a corner-layout field."""
+    """Execute one scheduled operation on a corner-layout field.
+
+    Args:
+        a: Complex field in corner layout, trailing axes (n, n).
+        op: Scheduled operation to execute.
+        lam_m: Wavelength in meters.
+
+    Returns:
+        The field after the operation, with the shape of the input.
+    """
     n = a.shape[-1]
     if op.kind == "ptp":
         return _ptp_array(a, lam_m, op.value, op.dx, n)
@@ -289,7 +314,16 @@ def apply_op(a, op, lam_m):
 
 
 def run_ops(a, ops, lam_m):
-    """Execute a fixed operation list; ``ops`` and ``lam_m`` are static under jit."""
+    """Execute a fixed operation list; ``ops`` and ``lam_m`` are static under jit.
+
+    Args:
+        a: Complex field in corner layout, trailing axes (n, n).
+        ops: Operations to execute in order.
+        lam_m: Wavelength in meters.
+
+    Returns:
+        The field after all operations, with the shape of the input.
+    """
     for op in ops:
         a = apply_op(a, op, lam_m)
     return a

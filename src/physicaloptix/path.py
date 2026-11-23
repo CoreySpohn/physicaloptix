@@ -22,7 +22,12 @@ from physicaloptix.transforms import Fraunhofer, Fresnel, FullBandFraunhofer
 
 
 class Stage(eqx.Module):
-    """A named step of the path: an element or propagator."""
+    """A named step of the path: an element or propagator.
+
+    Attributes:
+        name: Stage name, unique within a path.
+        op: The element or propagator the stage applies.
+    """
 
     name: str = eqx.field(static=True)
     op: eqx.Module
@@ -36,7 +41,11 @@ def _planes(op):
 
 
 class OpticalPath(eqx.Module):
-    """A linear chain of named stages with construction-time plane checking."""
+    """A linear chain of named stages with construction-time plane checking.
+
+    Attributes:
+        stages: Tuple of Stage objects applied in order.
+    """
 
     stages: tuple
 
@@ -62,7 +71,12 @@ class OpticalPath(eqx.Module):
             current = plane_out
 
     def spectral_breaks_nm(self) -> np.ndarray:
-        """Union of the wavelength breaks declared by the path's stages."""
+        """Union of the wavelength breaks declared by the path's stages.
+
+        Returns:
+            Sorted union of the wavelength breaks, in nanometers, declared by the
+            stages.
+        """
         return spectral_breaks(*(stage.op for stage in self.stages))
 
     def at_wavelength(self, wavelength_nm):
@@ -146,6 +160,16 @@ class OpticalPath(eqx.Module):
         (``wavelength_nm`` is required for a monochromatic ``field`` and
         defaults to the first band when ``wavelengths_nm`` is given for a
         chromatic one; ``method`` defaults to ``"auto"``).
+
+        Args:
+            field: Unperturbed input field.
+            basis: Mode basis injected at the input plane; None when a
+                perturbation_stage is passed in kwargs.
+            **kwargs: Forwarded to :func:`physicaloptix.linearize.linearize`.
+
+        Returns:
+            The linearization (nominal field and sensitivity stack) of this path around
+            the field.
         """
         from physicaloptix.linearize import linearize
 

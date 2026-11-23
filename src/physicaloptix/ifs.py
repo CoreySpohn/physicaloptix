@@ -125,7 +125,29 @@ class LensletChain(eqx.Module):
         illumination="psf",
         stop_opd_nm=None,
     ):
-        """Build the chain configuration (see the class docstring)."""
+        """Build the chain configuration (see the class docstring).
+
+        Args:
+            pupil_field: Complex exit-pupil field, (n, n) shared across wavelengths or
+                (n_lam, n, n) per wavelength.
+            pupil_grid: PixelGrid of pupil_field, in pupil diameters.
+            pitch_lod_ref: Lenslet pitch in lambda/D at lam_ref_nm.
+            lam_ref_nm: Wavelength in nanometers at which pitch_lod_ref is quoted.
+            micropupil_px: Geometric pupil-image diameter on the detector in pixels.
+            n_tile: Samples across the lenslet tile.
+            n_mp: Samples across the micro-pupil grid.
+            n_stop: Samples across the stop grid.
+            mp_half_extent: Micro-pupil grid half-width in diffraction units.
+            stop_halfwidth: Spectrograph stop half-width in pitch units.
+            stop_kind: Stop shape, 'square' or 'circular'.
+            pinhole_radius: Pinhole radius at the micro-pupil in diffraction units; None
+                for no pinhole.
+            fill_factor: Transmissive fraction of the lenslet pitch per axis, in (0, 1].
+            illumination: Template illumination, 'psf' (telescope PSF centered on the
+                lenslet) or 'flat' (uniform tile).
+            stop_opd_nm: Optional spectrograph aberration OPD map in nanometers on the
+                stop grid, (n_stop, n_stop); None for an ideal relay.
+        """
         self.pupil_field = pupil_field
         self.pupil_grid = pupil_grid
         self.stop_opd_nm = None if stop_opd_nm is None else jnp.asarray(stop_opd_nm)
@@ -213,11 +235,25 @@ class LensletChain(eqx.Module):
         )
 
     def pitch_lod(self, wavelength_nm):
-        """Lenslet pitch in lambda/D at ``wavelength_nm`` (fixed sky angle)."""
+        """Lenslet pitch in lambda/D at ``wavelength_nm`` (fixed sky angle).
+
+        Args:
+            wavelength_nm: Wavelength in nanometers.
+
+        Returns:
+            Lenslet pitch in lambda/D at that wavelength.
+        """
         return self.pitch_lod_ref * self.lam_ref_nm / wavelength_nm
 
     def px_per_diffraction(self, wavelength_nm):
-        """Detector pixels per lenslet diffraction unit at ``wavelength_nm``."""
+        """Detector pixels per lenslet diffraction unit at ``wavelength_nm``.
+
+        Args:
+            wavelength_nm: Wavelength in nanometers.
+
+        Returns:
+            Detector pixels per lenslet diffraction unit at that wavelength.
+        """
         return self.micropupil_px / self.pitch_lod(wavelength_nm)
 
     def _window(self):
@@ -252,7 +288,17 @@ class LensletChain(eqx.Module):
         return field * self._window()
 
     def micropupil_field(self, wavelength_nm, pupil=None):
-        """Complex field at the micro-pupil plane, pinhole applied if any."""
+        """Complex field at the micro-pupil plane, pinhole applied if any.
+
+        Args:
+            wavelength_nm: Wavelength in nanometers.
+            pupil: Exit-pupil slice to illuminate with; defaults to pupil_field, which
+                must then be 2D.
+
+        Returns:
+            Complex field on the micro-pupil grid, (n_mp, n_mp), with the pinhole
+            applied if there is one.
+        """
         windowed = self.local_field(wavelength_nm, pupil)
         u_mp = jnp.asarray(_grid_axis(self.mp_grid))
         field = cmft_fwd(windowed, jnp.asarray(_grid_axis(self.tile_grid)), u_mp)
@@ -294,6 +340,16 @@ class LensletChain(eqx.Module):
         phase in diffraction units that translates the detector image by the
         shift theorem (a disperser is exactly this, with a
         wavelength-dependent shift).
+
+        Args:
+            wavelength_nm: Wavelength in nanometers.
+            pupil: Exit-pupil slice to illuminate with; defaults to pupil_field, which
+                must then be 2D.
+            shift_diffraction: (dx, dy) tilt in diffraction units that translates the
+                detector image.
+
+        Returns:
+            Complex field just after the stop, on the stop grid, (n_stop, n_stop).
         """
         windowed = self.local_field(wavelength_nm, pupil)
         return self._relay_to_stop(windowed, wavelength_nm, shift_diffraction)
@@ -346,6 +402,18 @@ class LensletChain(eqx.Module):
         ``off_y`` / ``off_x`` are 1D offsets [px] from the lenslet's PSFlet
         centroid; fractional offsets are evaluated exactly by the MFT (no
         interpolation).
+
+        Args:
+            tile_field: Windowed complex tile field, (n_tile, n_tile), as returned by
+                local_field.
+            wavelength_nm: Wavelength in nanometers.
+            off_y: 1D row offsets in pixels from the lenslet PSFlet centroid.
+            off_x: 1D column offsets in pixels from the lenslet PSFlet centroid.
+            shift_diffraction: (dx, dy) tilt in diffraction units that translates the
+                detector image.
+
+        Returns:
+            Complex detector field of one lenslet, shape (len(off_y), len(off_x)).
         """
         stop = self._relay_to_stop(tile_field, wavelength_nm, shift_diffraction)
         ppd = self.px_per_diffraction(wavelength_nm)
@@ -359,6 +427,18 @@ class LensletChain(eqx.Module):
 
         ``px_coords`` is the 1D pixel-offset axis shared by rows (dy) and
         columns (dx); the origin is the unshifted PSFlet center.
+
+        Args:
+            wavelength_nm: Wavelength in nanometers.
+            px_coords: 1D pixel-offset axis in pixels shared by rows and columns; the
+                origin is the unshifted PSFlet center.
+            pupil: Exit-pupil slice to illuminate with; defaults to pupil_field, which
+                must then be 2D.
+            shift_diffraction: (dx, dy) tilt in diffraction units that translates the
+                detector image.
+
+        Returns:
+            Complex detector-plane field, (len(px_coords), len(px_coords)), rows y.
         """
         stop = self.stop_field(wavelength_nm, pupil, shift_diffraction)
         u_det = jnp.asarray(px_coords) / self.px_per_diffraction(wavelength_nm)
@@ -367,7 +447,20 @@ class LensletChain(eqx.Module):
     def psflet_intensity(
         self, wavelength_nm, px_coords, pupil=None, shift_diffraction=(0.0, 0.0)
     ):
-        """Detector-plane PSFlet intensity at ``px_coords`` [px], ``(y, x)``."""
+        """Detector-plane PSFlet intensity at ``px_coords`` [px], ``(y, x)``.
+
+        Args:
+            wavelength_nm: Wavelength in nanometers.
+            px_coords: 1D pixel-offset axis in pixels shared by rows and columns.
+            pupil: Exit-pupil slice to illuminate with; defaults to pupil_field, which
+                must then be 2D.
+            shift_diffraction: (dx, dy) tilt in diffraction units that translates the
+                detector image.
+
+        Returns:
+            Squared magnitude of the detector field, (y, x), in the field power units of
+            the pupil field.
+        """
         field = self.detector_field(wavelength_nm, px_coords, pupil, shift_diffraction)
         return field.real**2 + field.imag**2
 
@@ -377,6 +470,15 @@ class LensletChain(eqx.Module):
         Returns the tuple ``(tile, micropupil, stop)`` of plane energies on
         each plane's own cell measure; ratios are the capture fractions the
         sampling knobs are validated with.
+
+        Args:
+            wavelength_nm: Wavelength in nanometers.
+            pupil: Exit-pupil slice to illuminate with; defaults to pupil_field, which
+                must then be 2D.
+
+        Returns:
+            Tuple (tile, micropupil, stop) of scalar plane energies, each on its own
+            plane cell measure.
         """
         windowed = self.local_field(wavelength_nm, pupil)
         tile = jnp.sum(jnp.abs(windowed) ** 2) * self.tile_grid.pixel_area
@@ -394,6 +496,16 @@ def pixel_integrate(intensity, n_quad, stride):
     (midpoint rule); the unit-pixel integral centered on every ``stride``-th
     fine sample is the ``n_quad x n_quad`` window mean. Returns the
     ``(n_out, n_out)`` array with ``n_out = (n_fine - n_quad) // stride + 1``.
+
+    Args:
+        intensity: Fine intensity grid, 2D, sampled with n_quad points per detector
+            pixel.
+        n_quad: Fine samples per detector pixel along each axis.
+        stride: Spacing in fine samples between successive pixel centers.
+
+    Returns:
+        Pixel-integrated array of shape (n_out, n_out), in units of intensity times
+        pixel area; empty along an axis with too few fine samples.
     """
     ny, nx = (max(0, (n - n_quad) // stride + 1) for n in intensity.shape)
     if not ny or not nx:

@@ -70,7 +70,14 @@ class MultiChannelLinearization(eqx.Module):
         return tuple(channel.name for channel in self.channels)
 
     def __getitem__(self, name):
-        """The named channel's block."""
+        """The named channel's block.
+
+        Args:
+            name: Channel name.
+
+        Returns:
+            The ChannelLinearization with that name.
+        """
         for channel in self.channels:
             if channel.name == name:
                 return channel

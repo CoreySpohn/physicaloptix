@@ -54,5 +54,10 @@ class ModeBasis(eqx.Module):
         return self.B.shape[-2:]
 
     def opd(self):
-        """The coefficient-weighted map ``coeffs . B``, shape ``(y, x)``."""
+        """The coefficient-weighted map ``coeffs . B``, shape ``(y, x)``.
+
+        Returns:
+            Coefficient-weighted sum of the modes, shape (y, x), in the unit of the mode
+            stack.
+        """
         return jnp.tensordot(self.coeffs, self.B, axes=1)

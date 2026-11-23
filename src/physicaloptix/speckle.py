@@ -114,6 +114,13 @@ class AnalyticSpeckleField(LinearSpeckleField):
     A pure halo uses a zero nominal response. The inherited chromatic
     model holds e_nom fixed and scales G by reference_wavelength_nm /
     wavelength_nm.
+
+    Attributes:
+        amplitudes: Spectral-synthesis amplitudes, shape (m, f), in mode-coefficient
+            units.
+        frequencies_hz: Synthesis frequencies in Hz, shape (f,) shared by all modes or
+            (m, f) per mode.
+        phases: Spectral-synthesis phases in radians, shape (m, f).
     """
 
     amplitudes: Array
@@ -121,13 +128,32 @@ class AnalyticSpeckleField(LinearSpeckleField):
     phases: Array
 
     def coefficients(self, time_d):
-        """Synthesize ``(*time_shape, n_modes)`` coefficients at absolute days."""
+        """Synthesize ``(*time_shape, n_modes)`` coefficients at absolute days.
+
+        Args:
+            time_d: Absolute times in days; any shape.
+
+        Returns:
+            Mode coefficients of shape (*time_shape, n_modes), in the mode units of the
+            response.
+        """
         t = (jnp.asarray(time_d, dtype=float) - self.epoch_d) * d2s
         phase = 2.0 * jnp.pi * self.frequencies_hz * t[..., None, None] + self.phases
         return jnp.sum(self.amplitudes * jnp.cos(phase), axis=-1)
 
     def peak_contrast(self, *, telescope_peak, wavelength_nm, time_d=0.0):
-        """Peak-referenced delta; telescope_peak is an intensity density."""
+        """Peak-referenced delta; telescope_peak is an intensity density.
+
+        Args:
+            telescope_peak: Peak intensity density of the unocculted telescope PSF on
+                the same grid, as returned by telescope_peak.
+            wavelength_nm: Wavelength in nanometers.
+            time_d: Absolute time in days.
+
+        Returns:
+            Delta map referenced to the telescope peak (dimensionless contrast), on the
+            grid of the response.
+        """
         delta = self.realize(wavelength_nm=wavelength_nm, time_d=time_d)
         return (
             delta.data
@@ -158,6 +184,10 @@ class ChromaticAnalyticSpeckleField(AnalyticSpeckleField):
     it is an amplitude interpolation approximation, not new propagation.
     Tables share one native lod grid/frame; angular dilation remains the
     consumer's responsibility. broadened and realize_average are inherited.
+
+    Attributes:
+        wavelengths_nm: Node wavelengths in nanometers, shape (w,), matching the leading
+            axis of the response tables.
     """
 
     wavelengths_nm: Array
@@ -180,7 +210,11 @@ class ChromaticAnalyticSpeckleField(AnalyticSpeckleField):
                 )
 
     def spectral_breaks_nm(self) -> np.ndarray:
-        """Nodes of the interpolated complex-amplitude and energy tables [nm]."""
+        """Nodes of the interpolated complex-amplitude and energy tables [nm].
+
+        Returns:
+            Node wavelengths in nanometers of the interpolated tables.
+        """
         return np.asarray(self.wavelengths_nm)
 
     def at_wavelength(self, wavelength_nm):
@@ -189,6 +223,14 @@ class ChromaticAnalyticSpeckleField(AnalyticSpeckleField):
         The sensitivity is precompensated for the parent's phase scaling;
         no phase factor is applied twice. The returned e_nom is also the
         correct nominal floor for visualization at this wavelength.
+
+        Args:
+            wavelength_nm: Wavelength in nanometers at which the tables are
+                interpolated.
+
+        Returns:
+            Monochromatic AnalyticSpeckleField whose response is the interpolated node
+            response at that wavelength.
         """
         response = self.response
         e = _interpolate_nodes(wavelength_nm, self.wavelengths_nm, response.e_nom)
@@ -210,7 +252,17 @@ class ChromaticAnalyticSpeckleField(AnalyticSpeckleField):
         )
 
     def realize(self, *, wavelength_nm, time_d=0.0):
-        """Evaluate every requested node through LinearSpeckleField.realize."""
+        """Evaluate every requested node through LinearSpeckleField.realize.
+
+        Args:
+            wavelength_nm: Wavelength in nanometers: a scalar, or an array whose axes
+                become leading axes of the result.
+            time_d: Absolute time in days.
+
+        Returns:
+            Flux-fraction delta image on the response grid, with the wavelength axes
+            leading.
+        """
         wavelengths = jnp.asarray(wavelength_nm)
 
         def node(wavelength):
@@ -235,7 +287,18 @@ class ChromaticAnalyticSpeckleField(AnalyticSpeckleField):
         )
 
     def peak_contrast(self, *, telescope_peak, wavelength_nm, time_d=0.0):
-        """Peak contrast at a scalar wavelength using its interpolated energy."""
+        """Peak contrast at a scalar wavelength using its interpolated energy.
+
+        Args:
+            telescope_peak: Peak intensity density of the unocculted telescope PSF on
+                the same grid.
+            wavelength_nm: Scalar wavelength in nanometers.
+            time_d: Absolute time in days.
+
+        Returns:
+            Delta map referenced to the telescope peak (dimensionless contrast), on the
+            grid of the response.
+        """
         return self.at_wavelength(jnp.asarray(wavelength_nm)).peak_contrast(
             telescope_peak=telescope_peak, wavelength_nm=wavelength_nm, time_d=time_d
         )
@@ -250,6 +313,16 @@ class SpeckleMoments(eqx.Module):
     pseudo-covariance ``P``, and the pinning-quadrature variance ``Var(X)``,
     in energy-per-pixel units), and -- when a dark-zone mask is supplied
     -- the mask-averaged mean and variance.
+
+    Attributes:
+        grid: Focal grid of the maps.
+        mean_map: E[delta] per pixel, in flux-fraction units.
+        var_map: Var[delta] per pixel, in flux-fraction units squared.
+        gamma_pixel_map: Gamma = sum_k rms_k^2 |g_k|^2 per pixel, real and nonnegative.
+        p_pixel_map: P = sum_k rms_k^2 g_k^2 per pixel, the complex pseudo-covariance.
+        var_x_pixel_map: Var(X) per pixel, the pinning-quadrature variance.
+        annulus_mean: Mask-averaged E[delta], or None when no mask was given.
+        annulus_var: Mask-averaged Var[delta], or None when no mask was given.
     """
 
     grid: PixelGrid
@@ -288,6 +361,9 @@ class SpeckleMoments(eqx.Module):
         Pixels with no modal response (``Gamma == 0``) return ``0.0`` rather
         than NaN; the doubled ``where`` also keeps reverse-mode gradients
         finite there.
+
+        Returns:
+            Degree of impropriety per pixel, (y, x), dimensionless in [0, 1].
         """
         live = self.gamma_pixel_map > 0
         safe = jnp.where(live, self.gamma_pixel_map, 1.0)
@@ -304,6 +380,15 @@ class Photometry:
     Stores input energy and the actual grid. contrast_scale, when a telescope
     peak density is supplied, is input_energy / (peak * grid.pixel_area).
     No cached density divisor is carried into the field law.
+
+    Attributes:
+        input_energy: Input energy, a scalar or (w,) for a chromatic process.
+        grid: Focal grid of the process.
+        e_nom_flux_fraction: Energy in e_nom as a fraction of input_energy.
+        contrast_scale: input_energy divided by the peak-pixel energy, or None when no
+            telescope peak was supplied.
+        warnings: Messages describing photometric inconsistencies; empty when there are
+            none.
     """
 
     input_energy: Array  # scalar, or (w,) for a chromatic process
@@ -313,7 +398,11 @@ class Photometry:
     warnings: tuple[str, ...]
 
     def __str__(self) -> str:
-        """One field per line, with any warnings appended."""
+        """One field per line, with any warnings appended.
+
+        Returns:
+            One line per field, with any warnings appended.
+        """
         lines = [
             f"input_energy        {np.asarray(self.input_energy)}",
             f"grid                {self.grid}",
@@ -350,6 +439,18 @@ class CrossBandMoments(eqx.Module):
     (``rho_k`` is the synthesis autocorrelation); the equal-time container has
     ``tau_s = 0.0`` and its band-diagonal reproduces the per-channel
     :meth:`SpeckleProcess.moments` exactly. ``mean_map`` is time-independent.
+
+    Attributes:
+        grid: Focal grid of the maps.
+        mean_map: E[delta] per channel, (w, y, x), in flux-fraction units.
+        cov_map: Cov[delta_i(t), delta_j(t + tau_s)], (w, w, y, x), in flux-fraction
+            units squared.
+        gamma_pixel_map: Complex Gamma_ij, (w, w, y, x).
+        p_pixel_map: Complex pseudo-covariance P_ij, (w, w, y, x).
+        tau_s: Lag in seconds by which both kernels are damped; zero for the equal-time
+            container.
+        annulus_mean: Mask-averaged mean, (w,), or None when no mask was given.
+        annulus_cov: Mask-averaged covariance, (w, w), or None when no mask was given.
     """
 
     grid: PixelGrid
@@ -374,6 +475,9 @@ class CrossBandMoments(eqx.Module):
         ``cov_map`` normalized by the per-band standard deviations; the
         diagonal is exactly 1. Equal-time only (a lagged container's diagonal
         is not the variance).
+
+        Returns:
+            Band-pair intensity correlation, (w, w, y, x), dimensionless.
         """
         self._require_equal_time("correlation")
         d = jnp.sqrt(jnp.einsum("iiyx->iyx", self.cov_map))
@@ -388,6 +492,9 @@ class CrossBandMoments(eqx.Module):
         independent. Bounded by the covariance rank, which the shared mode
         vector caps at ``m (m + 3) / 2`` regardless of how finely the band is
         sampled. Equal-time only.
+
+        Returns:
+            Effective number of independent spectral channels per pixel, (y, x).
         """
         self._require_equal_time("n_eff")
         trace = jnp.einsum("iiyx->yx", self.cov_map)
@@ -401,6 +508,9 @@ class CrossBandMoments(eqx.Module):
         homogeneous (translation-invariant) residuals, whose quadrature pairing
         cancels the pseudo-covariance at every pair of wavelengths. Shape
         ``(w, w, y, x)``. Equal-time only.
+
+        Returns:
+            Cross-band degree of impropriety, (w, w, y, x), dimensionless.
         """
         self._require_equal_time("impropriety")
         g = jnp.real(jnp.einsum("iiyx->iyx", self.gamma_pixel_map))
@@ -445,6 +555,21 @@ class SpeckleProcess(eqx.Module):
     continuous PSD's transform. A ``slope=-2`` (Lorentzian) process
     decorrelates as ``exp(-2 pi knee tau)``, matching the time requested
     through :meth:`from_decorrelation`.
+
+    Attributes:
+        response: Complex density amplitudes and their photometric reference.
+        per_mode_rms: RMS drift per mode, shape (m,), in the mode units of the response.
+        knee_hz: Temporal PSD knee frequency per mode in Hz, shape (m,).
+        slope: High-frequency PSD slope per mode, shape (m,).
+        epoch_d: Days from the scene epoch at which elapsed time is zero.
+        wavelengths_nm: Channel wavelengths in nanometers, shape (w,), or None for a
+            monochromatic process.
+        coherent: Whether drawn fields include the pinning cross term.
+        n_freq: Number of spectral-synthesis frequencies.
+        decades_below: Frequency-grid extent below the knee, in decades.
+        decades_above: Frequency-grid extent above the knee, in decades.
+        per_mode_freq: True when modes have different knees or slopes, so each has its
+            own frequency grid.
     """
 
     response: FocalResponse
@@ -554,6 +679,16 @@ class SpeckleProcess(eqx.Module):
         The knee is ``1 / (2 pi tau)`` so the field decorrelates over roughly
         ``decorr_hours``, and the budget is split evenly over the modes
         (``per_mode_rms = total_rms / sqrt(m)``; rms adds in quadrature).
+
+        Args:
+            response: Complex density amplitudes and their photometric reference.
+            decorr_hours: Decorrelation time in hours.
+            total_rms: Total WFE budget, split evenly over the modes, in the mode units
+                of the response.
+            **kwargs: Forwarded to the SpeckleProcess constructor.
+
+        Returns:
+            The process parameter object.
         """
         tau_s = decorr_hours * 3600.0
         m = response.G.shape[-3]
@@ -571,6 +706,9 @@ class SpeckleProcess(eqx.Module):
         straddling the common knee, the default), or ``(m, f)`` when the
         modes carry per-mode timescales (one grid straddling each mode's own
         knee).
+
+        Returns:
+            Log-spaced synthesis frequencies in Hz, shape (f,) or (m, f).
         """
         if not self.per_mode_freq:
             log_knee = jnp.log10(self.knee_hz[0])
@@ -592,6 +730,12 @@ class SpeckleProcess(eqx.Module):
         Follows the grid rank: a ``(f,)`` grid uses the shared knee/slope
         and returns ``(f,)``; an ``(m, f)`` grid uses each mode's own
         knee/slope and returns ``(m, f)``.
+
+        Args:
+            frequencies_hz: Frequencies in Hz, shape (f,) or (m, f).
+
+        Returns:
+            Temporal PSD values at those frequencies, with the shape of the input.
         """
         f = jnp.asarray(frequencies_hz)
         if f.ndim >= 2:
@@ -613,6 +757,9 @@ class SpeckleProcess(eqx.Module):
 
         Returned unnormalized (callers divide by the sum), and always
         broadcast to the full ``(m, f)`` mode axis.
+
+        Returns:
+            Unnormalized per-line spectral power weights, shape (m, f).
         """
         f = self.frequencies_hz()
         weights = self.psd(f) * trapezoid_weights(f)
@@ -729,6 +876,15 @@ class SpeckleProcess(eqx.Module):
           The equal-time modal coefficients are then exactly Gaussian, so the
           ensemble is the exact improper-Gaussian process :meth:`moments`
           describes -- the oracle-exact draw.
+
+        Args:
+            key: JAX random key; independent keys give independent realizations.
+            renormalize: True renormalizes each mode to exactly its per-mode rms per
+                draw; False draws the exact improper-Gaussian ensemble.
+
+        Returns:
+            Frozen realization of the process; a ChromaticAnalyticSpeckleField when
+            wavelengths_nm is set.
         """
         m = self.response.G.shape[-3]
         f = self.frequencies_hz()

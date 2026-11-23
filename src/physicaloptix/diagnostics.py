@@ -161,6 +161,16 @@ class QuadratureAudit:
     pseudo-covariance, so completing it collapses ``eta`` and the ratio falls
     far below 1. A basis that already spans both quadratures has nothing to
     gain, and the ratio sits near 1.
+
+    Attributes:
+        eta_as_built: Median degree of impropriety of the basis as built.
+        eta_completed: Median degree of impropriety after adding the missing quadrature
+            partners.
+        ratio: eta_completed divided by eta_as_built.
+        n_modes: Number of modes as built.
+        n_modes_completed: Number of modes after completion.
+        verdict: The string 'locked' when completion collapses the impropriety, else
+            'complete'.
     """
 
     eta_as_built: float
@@ -171,7 +181,12 @@ class QuadratureAudit:
     verdict: str  # "locked" or "complete"
 
     def __str__(self) -> str:
-        """A few lines fit to print next to a reported impropriety."""
+        """A few lines fit to print next to a reported impropriety.
+
+        Returns:
+            Multi-line text with the mode counts, both degrees of impropriety, the ratio
+            and the verdict.
+        """
         return "\n".join(
             [
                 f"modes               {self.n_modes} -> {self.n_modes_completed}",

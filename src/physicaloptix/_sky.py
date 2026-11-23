@@ -17,7 +17,17 @@ from physicaloptix.core import Field
 
 
 def entrance_energy(field):
-    """Collect the band-averaged power over the entire entrance field."""
+    """Collect the band-averaged power over the entire entrance field.
+
+    Args:
+        field: Entrance field, mono (y, x) or chromatic (wavelength, y, x), on any
+            sampled grid.
+
+    Returns:
+        Total power in the field, taken over the whole sample rectangle with the
+        spectral weighting of the field, in field-power units times grid-unit area (a
+        scalar).
+    """
     intensity = field.intensity()
     ny, nx = intensity.grid.shape
     # Total power is translation invariant. Centre both footprints on the
@@ -37,7 +47,15 @@ def entrance_energy(field):
 
 
 def unit_energy(field):
-    """Normalize to unit entrance power, weighted over the build spectrum."""
+    """Normalize to unit entrance power, weighted over the build spectrum.
+
+    Args:
+        field: Entrance field to normalize.
+
+    Returns:
+        Field with the same grid, plane and spectrum whose data are divided by the
+        square root of its entrance power, so that its entrance power is one.
+    """
     energy = entrance_energy(field)
     return Field(field.data / jnp.sqrt(energy), field.grid, field.plane, field.spectrum)
 
@@ -77,6 +95,24 @@ def uniform_sky_image(core_path, science, base, *, n_screens, seed, sky_band_nm=
     a fixed angular YIP grid each draw selects a wavelength in sky_band_nm
     and scales its field by lambda/lambda_ref for uniform surface brightness.
     Both use the survey's seeded screen sequence and open-pupil normalization.
+
+    Args:
+        core_path: Optical path from the entrance field to the Lyot pupil plane.
+        science: Fraunhofer propagator from the Lyot pupil grid to the focal product
+            grid. Its reference wavelength scales the sky draws and its output grid is
+            the grid of the result.
+        base: Unit-energy entrance field, mono (y, x) or chromatic (wavelength, y, x);
+            each screen multiplies its data.
+        n_screens: Number of independent complex Gaussian screens, at least 1.
+        seed: Seed of the NumPy generator that draws the screens and the wavelength
+            fractions.
+        sky_band_nm: Optional (low, high) wavelength interval in nanometers. When given,
+            each draw selects one wavelength in the interval; when None, the spectrum of
+            base is used as it stands.
+
+    Returns:
+        Dimensionless intensive transmission image of uniform sky on the output grid of
+        science, averaged over the screens.
     """
     if n_screens < 1:
         raise ValueError("n_screens must be positive")

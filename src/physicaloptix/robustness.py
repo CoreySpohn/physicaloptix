@@ -169,6 +169,14 @@ class SensitivityOperators(eqx.Module):
 
         This is the PASTIS diagonal contracted with the variance vector: each
         mode's own mean contribution, with no interference between modes.
+
+        Args:
+            per_mode_variance: Per-mode wavefront-error variance (the square of the
+                per-mode rms), shape (m,).
+
+        Returns:
+            Scalar dark-zone-mean residual power, in the squared units of the
+            focal-plane field.
         """
         return jnp.diagonal(self.pastis) @ jnp.asarray(per_mode_variance)
 
@@ -187,6 +195,15 @@ class SensitivityBudget(eqx.Module):
     ``imbalance`` and ``pseudocov`` are the IMPROPER terms: they vanish only
     if the residual field is circularly symmetric, which a real coronagraph
     dark zone is not.
+
+    Attributes:
+        heterodyne: Term that beats the residual field against the nominal field, linear
+            in the variances.
+        imbalance: Improper term from the real part of the squared residual response
+            against the nominal field, linear in the variances.
+        speckle: Term quadratic in the residual response magnitude.
+        pseudocov: Improper term from the pseudo-covariance of the residual response,
+            quadratic in the variances.
     """
 
     heterodyne: Array

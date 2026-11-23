@@ -20,19 +20,44 @@ import numpy as np
 
 
 def shift_center(a):
-    """Roll the center sample ``n // 2`` to the corner (self-inverse for even sizes)."""
+    """Roll the center sample ``n // 2`` to the corner (self-inverse for even sizes).
+
+    Args:
+        a: Array whose last two axes are rolled.
+
+    Returns:
+        The array rolled by half its size along each of the last two axes.
+    """
     s = a.shape
     return jnp.roll(a, (s[-2] // 2, s[-1] // 2), axis=(-2, -1))
 
 
 def fft_forward(a, n=1):
-    """PROPER corner-layout forward FFT, divided by array size and scaled by n."""
+    """PROPER corner-layout forward FFT, divided by array size and scaled by n.
+
+    Args:
+        a: Complex array, trailing axes (n, n).
+        n: Scale factor applied after dividing by the array size.
+
+    Returns:
+        Two-dimensional FFT of the trailing axes, divided by the array size and
+        multiplied by n.
+    """
     size = a.shape[-2] * a.shape[-1]
     return jnp.fft.fft2(a) / size * n
 
 
 def fft_backward(a, n=1):
-    """Inverse of :func:`fft_forward` with the same scale n."""
+    """Inverse of :func:`fft_forward` with the same scale n.
+
+    Args:
+        a: Complex array, trailing axes (n, n).
+        n: Scale factor, the one given to fft_forward.
+
+    Returns:
+        Two-dimensional inverse FFT of the trailing axes, multiplied by the array size
+        and divided by n.
+    """
     size = a.shape[-2] * a.shape[-1]
     return jnp.fft.ifft2(a) * size / n
 
@@ -41,6 +66,13 @@ def ffts(a, direction):
     """Centered FFT (``direction=-1``, divided by the size) or its inverse (``+1``).
 
     The inverse is multiplied by the size, so the pair round-trips.
+
+    Args:
+        a: Complex array, trailing axes (n, n), center-layout.
+        direction: -1 for the forward transform, +1 for the inverse.
+
+    Returns:
+        The transformed array in center layout, with the shape of the input.
     """
     n = a.shape[-1]
     a = jnp.roll(a, (-n // 2, -n // 2), axis=(-2, -1))
@@ -58,6 +90,9 @@ def mft2(field, dout, d, nout, direction):
         d: Pupil diameter in input samples.
         nout: Output size.
         direction: -1 (forward) or +1 (inverse).
+
+    Returns:
+        Transformed array of shape (nout, nout).
     """
     nin = field.shape[-1]
     x = jnp.arange(nin) - nin // 2
@@ -121,6 +156,14 @@ def cubic_conv_weights(coords, n_in, a=-0.5):
 
     Output sample ``k`` is ``weights[k] @ samples``; the 2-D kernel is the
     product of two such rows.
+
+    Args:
+        coords: 1D output sample positions in units of input samples.
+        n_in: Number of input samples.
+        a: Cubic convolution parameter.
+
+    Returns:
+        Weight matrix of shape (len(coords), n_in).
     """
     w = np.zeros((len(coords), n_in))
     for k, x in enumerate(np.asarray(coords, dtype=np.float64)):
@@ -175,6 +218,16 @@ def szoom_weights(n_in, n_out, mag, k=13, dk=6):
 
     The zoomed image is ``w @ image @ w.T``.
 
+    Args:
+        n_in: Number of input samples.
+        n_out: Number of output samples.
+        mag: Magnification, output samples per input sample.
+        k: Width of the kernel window in input samples.
+        dk: Half-width in samples of the damping window of the sinc kernel.
+
+    Returns:
+        Weight matrix of shape (n_out, n_in).
+
     Raises:
         ValueError: If an output sample's kernel window leaves the input grid.
     """
@@ -198,7 +251,16 @@ def szoom_weights(n_in, n_out, mag, k=13, dk=6):
 
 
 def noll_z6(n, dx_m, beam_radius_m):
-    """Noll Z6 (0-degree astigmatism, unit RMS over ``beam_radius_m``), centered."""
+    """Noll Z6 (0-degree astigmatism, unit RMS over ``beam_radius_m``), centered.
+
+    Args:
+        n: Grid size in samples.
+        dx_m: Sample spacing in meters.
+        beam_radius_m: Beam radius in meters over which the mode has unit RMS.
+
+    Returns:
+        Dimensionless Z6 map of shape (n, n), centered on sample n // 2.
+    """
     x = (jnp.arange(n, dtype=float) - n // 2) * dx_m / beam_radius_m
     r2 = x[None, :] ** 2 + x[:, None] ** 2
     t = jnp.arctan2(x[:, None], x[None, :])

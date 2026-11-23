@@ -34,6 +34,14 @@ def radial_frequency(shape, spacing=1.0):
     shape is (ny, nx) or a square side length. spacing is a scalar or (dy, dx),
     in spatial units per sample. For cycles per pupil, supply spacing=1/D
     where D is the number of samples across one pupil diameter.
+
+    Args:
+        shape: (ny, nx) or a square side length.
+        spacing: Spatial units per sample, a scalar or (dy, dx).
+
+    Returns:
+        Radial frequency magnitude, shape (ny, nx), in FFT order, in cycles per spatial
+        unit.
     """
     shape, spacing = _geometry(shape, spacing)
     fy, fx = (np.fft.fftfreq(n, d=d) for n, d in zip(shape, spacing, strict=True))
@@ -52,6 +60,10 @@ class StationaryGaussianField:
     original marginal variance, but the masked field is not stationary.
     Concrete construction validates arrays; transformed leaves must preserve
     these constraints. No mean subtraction or per-draw RMS rescaling occurs.
+
+    Attributes:
+        amplitude: Nonnegative, inversion-symmetric Fourier gain, shape (ny, nx).
+        support: Boolean mask, shape (ny, nx), applied after coloring.
     """
 
     amplitude: jax.Array
@@ -85,6 +97,18 @@ class StationaryGaussianField:
         To convert a per-FFT-cell periodogram P, supply S=P*dy*dx.
         A radial density integrates with 2*pi*k*dk in a continuous circular
         band; no extra radial Jacobian belongs in psd(k) itself.
+
+        Args:
+            psd: Radial density: accepts a NumPy radial-frequency array and returns
+                broadcastable finite nonnegative powers.
+            support: Boolean mask of shape (ny, nx).
+            spacing: Spatial units per sample, a scalar or (dy, dx).
+            dtype: Dtype of the amplitude array; defaults to the configured JAX
+                precision.
+
+        Returns:
+            The field operator whose amplitude is the square root of the density divided
+            by the cell area.
         """
         support = np.asarray(support, dtype=bool)
         shape, spacing = _geometry(support.shape, spacing)
@@ -107,6 +131,12 @@ class StationaryGaussianField:
         FFT2(white) has expected squared modulus ny*nx. Multiplication by
         sqrt(S/(dy*dx)) and the inverse FFT therefore give pixel variance
         sum(S)/(ny*nx*dy*dx), without a missing FFT-size or half-plane factor.
+
+        Args:
+            white: Real unit-variance white noise, shape (..., ny, nx).
+
+        Returns:
+            Colored real field with the shape of the input, zero outside the support.
         """
         white = jnp.asarray(white)
         if white.shape[-2:] != self.shape or jnp.iscomplexobj(white):
@@ -119,6 +149,12 @@ class StationaryGaussianField:
 
         On partial support, returns white coordinates of the zero-filled map;
         this does not recover the original white noise outside the support.
+
+        Args:
+            field: Real field, shape (..., ny, nx).
+
+        Returns:
+            Real white-noise coordinates of the field, with the shape of the input.
         """
         return jnp.fft.ifft2(jnp.fft.fft2(field) / self.amplitude).real
 
@@ -128,30 +164,70 @@ class StationaryGaussianField:
         Requires positive gain. Partial support uses the zero-filled map,
         not the marginal density after integrating out exterior pixels.
         Leading batch axes are retained.
+
+        Args:
+            field: Real field, shape (..., ny, nx).
+
+        Returns:
+            Quadratic log density per leading batch element, summed over the two spatial
+            axes.
         """
         return self.log_prob_white(self.whiten(jnp.where(self.support, field, 0.0)))
 
     @staticmethod
     def log_prob_white(white):
-        """Standard-normal quadratic log density, summing the two spatial axes."""
+        """Standard-normal quadratic log density, summing the two spatial axes.
+
+        Args:
+            white: White-noise coordinates, shape (..., ny, nx).
+
+        Returns:
+            Standard-normal quadratic log density per leading batch element.
+        """
         return -0.5 * jnp.sum(jnp.asarray(white) ** 2, axis=(-2, -1))
 
     def sample(self, key, n_samples: int | None = None):
-        """Draw one field or n_samples fields with an explicit JAX random key."""
+        """Draw one field or n_samples fields with an explicit JAX random key.
+
+        Args:
+            key: JAX random key.
+            n_samples: Number of fields to draw; None draws one.
+
+        Returns:
+            One field of shape (ny, nx) or n_samples fields of shape (n_samples, ny,
+            nx).
+        """
         shape = self.shape if n_samples is None else (index(n_samples), *self.shape)
         return self.color(jax.random.normal(key, shape, self.amplitude.dtype))
 
     def pixel_variance(self):
-        """Unmasked pixel variance, equal to the discrete PSD integral."""
+        """Unmasked pixel variance, equal to the discrete PSD integral.
+
+        Returns:
+            Scalar variance of an unmasked pixel, the mean of the squared amplitude.
+        """
         return jnp.mean(self.amplitude**2)
 
     def tree_flatten(self):
-        """Expose Fourier gain and support as dynamic leaves."""
+        """Expose Fourier gain and support as dynamic leaves.
+
+        Returns:
+            Pair of the leaves (amplitude, support) and None, since there is no static
+            metadata.
+        """
         return (self.amplitude, self.support), None
 
     @classmethod
     def tree_unflatten(cls, metadata, arrays):
-        """Reconstruct transformed arrays without host validation."""
+        """Reconstruct transformed arrays without host validation.
+
+        Args:
+            metadata: Static metadata; unused.
+            arrays: Leaves (amplitude, support).
+
+        Returns:
+            The reconstructed operator, with no validation of the leaves.
+        """
         result = object.__new__(cls)
         object.__setattr__(result, "amplitude", arrays[0])
         object.__setattr__(result, "support", arrays[1])

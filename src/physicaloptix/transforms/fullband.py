@@ -128,7 +128,11 @@ class FullBandFraunhofer(eqx.Module):
         )
 
     def spectral_breaks_nm(self) -> np.ndarray:
-        """The fixed conjugate-grid transform has no wavelength breaks."""
+        """The fixed conjugate-grid transform has no wavelength breaks.
+
+        Returns:
+            Empty array: the fixed conjugate-grid transform has no wavelength breaks.
+        """
         return np.empty(0)
 
     def _check_mono(self, field):
@@ -139,7 +143,14 @@ class FullBandFraunhofer(eqx.Module):
             )
 
     def forward(self, field):
-        """Propagate ``plane_in`` -> ``plane_out``; equals ``cmft_fwd`` on the band."""
+        """Propagate ``plane_in`` -> ``plane_out``; equals ``cmft_fwd`` on the band.
+
+        Args:
+            field: Monochromatic field in plane_in on grid_in.
+
+        Returns:
+            Field in plane_out on the full-band focal grid.
+        """
         validate_field(
             field, plane=self.plane_in, grid=self.grid_in, context="FullBandFraunhofer"
         )
@@ -151,7 +162,14 @@ class FullBandFraunhofer(eqx.Module):
         )
 
     def backward(self, field):
-        """Adjoint propagation ``plane_out`` -> ``plane_in``; equals ``cmft_bwd``."""
+        """Adjoint propagation ``plane_out`` -> ``plane_in``; equals ``cmft_bwd``.
+
+        Args:
+            field: Monochromatic field in plane_out on the full-band focal grid.
+
+        Returns:
+            Field in plane_in on grid_in.
+        """
         grid_out = self.grid_out
         validate_field(
             field, plane=self.plane_out, grid=grid_out, context="FullBandFraunhofer"

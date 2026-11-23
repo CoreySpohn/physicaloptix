@@ -168,19 +168,20 @@ class Mirror:
 
     The ``parabola`` and ``hyperbola`` constructors build the conic mirrors;
     any other surface can be built directly from its ``G`` and ``curve``.
-
-    Attributes:
-        g: ``G(z, y)``, zero on the mirror; it must accept NumPy arrays.
-        curve: ``curve(lo, hi, n=120)``, an ``(n, 2)`` array of points
-            ``(z, y)`` over ``[lo, hi]`` of the coordinate ``piece_axis``.
-        piece: ``(lo, hi)`` of the coordinate ``piece_axis`` that the mirror
-            occupies, or None for the whole curve.
-        piece_axis: 0 when the curve is parametrized by ``z``, 1 by ``y``.
-        focus: The focus ``(z, y)`` of a parabola, else None.
     """
 
     def __init__(self, g, curve, *, piece=None, piece_axis=1, focus=None):
-        """Store the surface; see the class docstring for the fields."""
+        """Store the surface under the argument names, which are its fields.
+
+        Args:
+            g: G(z, y), zero on the mirror; it must accept NumPy arrays.
+            curve: curve(lo, hi, n=120), an (n, 2) array of points (z, y) over [lo, hi]
+                of the coordinate piece_axis.
+            piece: (lo, hi) of the coordinate piece_axis that the mirror occupies, or
+                None for the whole curve.
+            piece_axis: 0 when the curve is parametrized by z, 1 by y.
+            focus: The focus (z, y) of a parabola, else None.
+        """
         if piece_axis not in (0, 1):
             msg = f"Mirror: piece_axis must be 0 (z) or 1 (y), not {piece_axis!r}"
             raise ValueError(msg)
@@ -191,14 +192,28 @@ class Mirror:
         self.focus = focus
 
     def contains(self, point):
-        """Whether ``point`` lies on the mirror's piece (by its coordinate)."""
+        """Whether ``point`` lies on the mirror's piece (by its coordinate).
+
+        Args:
+            point: Point (z, y) to test.
+
+        Returns:
+            True when the point's piece_axis coordinate lies within the piece.
+        """
         if self.piece is None:
             return True
         lo, hi = self.piece
         return lo <= point[self.piece_axis] <= hi
 
     def normal(self, point):
-        """The unit normal of the surface at ``point``, by central differences."""
+        """The unit normal of the surface at ``point``, by central differences.
+
+        Args:
+            point: Point (z, y) on the surface.
+
+        Returns:
+            Unit normal (dz, dy) as an array.
+        """
         z, y = point
         h = _NORMAL_STEP
         gz = (self.g(z + h, y) - self.g(z - h, y)) / (2 * h)
@@ -427,6 +442,10 @@ def ray_crossing(a, b):
 
     Returns:
         The crossing ``(z, y)`` as an array.
+
+    Args:
+        a: First ray as (point, direction) in (z, y).
+        b: Second ray as (point, direction) in (z, y).
 
     Raises:
         numpy.linalg.LinAlgError: Parallel rays.

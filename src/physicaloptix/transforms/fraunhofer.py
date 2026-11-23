@@ -51,6 +51,18 @@ class Fraunhofer(eqx.Module):
     kernel Nyquist ratio is computed once at construction on the static grids
     and handled per ``on_undersampled`` ("raise", "warn", or "record") -- the
     construction-time sampling gate.
+
+    Attributes:
+        grid_in: Input (pupil-side) grid, in pupil diameters.
+        grid_out: Output (focal-side) grid, in lambda/D.
+        plane_in: Plane the input field must be in.
+        plane_out: Plane the output field is tagged with.
+        on_undersampled: Policy applied at construction when the sampling parameter is
+            below 1: 'raise', 'warn' or 'record'.
+        sampling_parameter: Kernel Nyquist ratio evaluated at construction; values below
+            1 mean the kernel is undersampled.
+        reference_wavelength_nm: Reference wavelength in nanometers of the fixed angular
+            output grid, or None when the output grid is in lambda/D at each wavelength.
     """
 
     grid_in: PixelGrid
@@ -119,7 +131,11 @@ class Fraunhofer(eqx.Module):
                 warnings.warn(message, stacklevel=2)
 
     def spectral_breaks_nm(self) -> np.ndarray:
-        """Fourier propagation varies smoothly with wavelength."""
+        """Fourier propagation varies smoothly with wavelength.
+
+        Returns:
+            Empty array: Fourier propagation varies smoothly with wavelength.
+        """
         return np.empty(0)
 
     def _chromatic_scaling(self, field):
@@ -129,7 +145,15 @@ class Fraunhofer(eqx.Module):
         return self.reference_wavelength_nm / field.spectrum.nodes_nm[0]
 
     def forward(self, field):
-        """Propagate ``plane_in`` -> ``plane_out`` (retags plane and grid)."""
+        """Propagate ``plane_in`` -> ``plane_out`` (retags plane and grid).
+
+        Args:
+            field: Field in plane_in on grid_in, mono or chromatic.
+
+        Returns:
+            Field in plane_out on grid_out with the same spectrum, with energy conserved
+            on the weighted grids.
+        """
         validate_field(
             field, plane=self.plane_in, grid=self.grid_in, context="Fraunhofer"
         )
@@ -161,6 +185,12 @@ class Fraunhofer(eqx.Module):
         At a wavelength whose native spacing makes the focal grid a complete
         conjugate grid, this is also the exact inverse propagation, so a round
         trip returns the input field.
+
+        Args:
+            field: Field in plane_out on grid_out, mono or chromatic.
+
+        Returns:
+            Field in plane_in on grid_in with the same spectrum.
         """
         validate_field(
             field, plane=self.plane_out, grid=self.grid_out, context="Fraunhofer"

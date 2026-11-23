@@ -2,7 +2,11 @@
 
 
 def eyepiece():
-    """Return the eyepiece module or raise an actionable ImportError."""
+    """Return the eyepiece module or raise an actionable ImportError.
+
+    Returns:
+        The imported eyepiece module.
+    """
     try:
         import eyepiece as _eyepiece
     except ImportError as err:

@@ -49,7 +49,14 @@ def dark_zone_mask(grid, *, inner_working_angle_lod, outer_working_angle_lod):
 
 
 def coherent_intensity(e_nom):
-    """The deterministic (coherent) intensity ``Ic = |E_nom|^2``."""
+    """The deterministic (coherent) intensity ``Ic = |E_nom|^2``.
+
+    Args:
+        e_nom: Complex nominal field.
+
+    Returns:
+        Squared magnitude of the nominal field, with the shape of the input.
+    """
     return e_nom.real**2 + e_nom.imag**2
 
 

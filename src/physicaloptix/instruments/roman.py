@@ -41,7 +41,15 @@ from physicaloptix.transforms import Fraunhofer, Fresnel
 
 
 def proper_trim(a, n):
-    """Crop or zero-pad a square array to ``n`` about the integer center ``m // 2``."""
+    """Crop or zero-pad a square array to ``n`` about the integer center ``m // 2``.
+
+    Args:
+        a: Array whose last two axes are square, of equal size m.
+        n: Target size in samples along each of the last two axes.
+
+    Returns:
+        The array cropped or zero-padded to (n, n) about the sample m // 2.
+    """
     a = jnp.asarray(a)
     m = a.shape[-1]
     if n == m:
@@ -295,6 +303,9 @@ def dm_median_volts(volts, *, volt_quantum, live):
         volt_quantum: Driver voltage step in volts.
         live: Boolean mask of live actuators, the shape of ``volts``.
 
+    Returns:
+        Scalar median of the quantized voltages in volts over the live actuators.
+
     Raises:
         ValueError: If ``live`` does not have the shape of ``volts``.
     """
@@ -310,28 +321,31 @@ class RomanCompact(eqx.Module):
     """Monochromatic compact Roman coronagraph train on prescription grids.
 
     Attributes:
-        pupil: Entrance pupil amplitude, ``(n_small, n_small)``.
-        lyot: Lyot stop amplitude, ``(n_small, n_small)``.
-        pupil_mask: Shaped-pupil mask on ``(n_big, n_big)``, or ``None``.
-        fpm: Focal-plane mask on its own odd grid (real for shaped-pupil
-            designs, complex for hybrid-Lyot designs), or ``None``.
-        kind: ``"spc"`` (direct focal mask) or ``"hlc"`` (Babinet complex mask).
-        n_small, n_big: Prescription grid sizes (``n_big`` is the grid fed to
-            the focal-mask transform).
+        pupil: Entrance pupil amplitude, (n_small, n_small).
+        lyot: Lyot stop amplitude, (n_small, n_small).
+        pupil_mask: Shaped-pupil mask on (n_big, n_big), or None.
+        fpm: Focal-plane mask on its own odd grid (real for shaped-pupil designs,
+            complex for hybrid-Lyot designs), or None.
+        kind: 'spc' (direct focal mask) or 'hlc' (Babinet complex mask).
+        n_small: Prescription grid size of the pupil and Lyot arrays.
+        n_big: Prescription grid size fed to the focal-mask transform.
         pupil_diam_pix: Pupil diameter in samples.
-        fpm_sampling_lod: Mask sampling in lambda/D at ``fpm_lam0_nm``.
-        fpm_lam0_nm: Wavelength that defines the mask sampling.
-        lam0_nm: Design wavelength defining the source-offset unit.
-        primary_diameter_m: Circumscribed primary diameter defining focal lambda/D.
-        beam_diameter_m: Beam diameter at DM1.
-        dm_separation_m: DM1 to DM2 distance.
-        dm1_surface_m, dm2_surface_m: DM surface maps on ``(n_small, n_small)``
-            in meters, positive into the DM (as :func:`dm_surface` returns
-            them); the reflected wavefront is delayed by twice the surface.
-            ``None`` for a flat DM.
-        dm1_wfe_m, dm2_wfe_m: Wavefront terms in meters applied after each DM
-            surface (the flight DM model's static and bias-proportional surface
-            errors, reflected at -2x, and its residual astigmatism), or ``None``.
+        fpm_sampling_lod: Mask sampling in lambda/D at fpm_lam0_nm.
+        fpm_lam0_nm: Wavelength in nanometers that defines the mask sampling.
+        lam0_nm: Design wavelength in nanometers defining the source-offset unit.
+        primary_diameter_m: Circumscribed primary diameter in meters defining focal
+            lambda/D.
+        beam_diameter_m: Beam diameter at DM1 in meters.
+        dm_separation_m: DM1 to DM2 distance in meters.
+        dm1_surface_m: DM1 surface map on (n_small, n_small) in meters, positive into
+            the DM (as dm_surface returns it); the reflected wavefront is delayed by
+            twice the surface. None for a flat DM.
+        dm2_surface_m: DM2 surface map, with the same conventions as dm1_surface_m.
+        dm1_wfe_m: Wavefront term in meters applied after the DM1 surface (the flight DM
+            model's static and bias-proportional surface errors, reflected at -2x, and
+            its residual astigmatism), or None.
+        dm2_wfe_m: Wavefront term in meters applied after the DM2 surface, with the same
+            conventions as dm1_wfe_m.
     """
 
     pupil: Array = eqx.field(converter=jnp.asarray)

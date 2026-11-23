@@ -43,15 +43,17 @@ class BeamSplitter(eqx.Module):
     grid, no propagation.
 
     Attributes:
-        t: Amplitude transmission -- scalar ``()``, spatial ``(y, x)``, or
-            spectral-spatial ``(nlam, y, x)``. ``None`` for a dichroic.
-        r: Amplitude reflection, same rank rules. ``None`` for a dichroic.
-        wavelengths_nm: Dichroic table wavelengths (``None`` otherwise).
-        transmit_table: Dichroic intensity-transmittance table, interpolated
-            against the incident field's spectrum at call time.
+        t: Amplitude transmission, scalar (), spatial (y, x), or spectral-spatial
+            (nlam, y, x). None for a dichroic.
+        r: Amplitude reflection, same rank rules. None for a dichroic.
+        wavelengths_nm: Dichroic table wavelengths in nanometers (None otherwise).
+        transmit_table: Dichroic intensity-transmittance table, interpolated against the
+            incident field's spectrum at call time.
         grid: The grid the splitter sits on.
         plane: The plane the splitter sits in.
-        on_violation: Energy-gate policy: ``"raise"``, ``"warn"``, ``"record"``.
+        on_violation: Energy-gate policy: 'raise', 'warn', 'record'.
+        multi_output: Marks the module as returning several ports, which the path guard
+            rejects as a Stage; always True.
     """
 
     t: Array | None
@@ -248,7 +250,11 @@ class BeamSplitter(eqx.Module):
         )
 
     def spectral_breaks_nm(self) -> np.ndarray:
-        """Interpolation knots of a dichroic [nm], empty for fixed amplitudes."""
+        """Interpolation knots of a dichroic [nm], empty for fixed amplitudes.
+
+        Returns:
+            Dichroic table wavelengths in nanometers; empty for fixed amplitudes.
+        """
         return (
             np.empty(0)
             if self.wavelengths_nm is None
@@ -329,13 +335,21 @@ class SplitterPort(eqx.Module):
     trunk + one branch can be composed into an ordinary ``OpticalPath``
     (``OpticalSystem.as_channel_path``). The sibling port's field is simply
     not computed.
+
+    Attributes:
+        split: The two-port splitter being viewed.
+        port: Port kept, 'transmit' or 'reflect'.
     """
 
     split: BeamSplitter
     port: str = eqx.field(static=True)
 
     def spectral_breaks_nm(self) -> np.ndarray:
-        """Use the same wavelength breaks as the two-port splitter."""
+        """Use the same wavelength breaks as the two-port splitter.
+
+        Returns:
+            Wavelength breaks in nanometers declared by the splitter.
+        """
         return self.split.spectral_breaks_nm()
 
     @property
@@ -349,7 +363,14 @@ class SplitterPort(eqx.Module):
         return self.split.plane
 
     def __call__(self, field):
-        """Apply the splitter and keep this port."""
+        """Apply the splitter and keep this port.
+
+        Args:
+            field: Field at the splitter plane on the splitter grid.
+
+        Returns:
+            The field of the kept port.
+        """
         return self.split(field)[self.port]
 
 
@@ -406,7 +427,12 @@ class OpticalSystem(eqx.Module):
                     )
 
     def spectral_breaks_nm(self) -> np.ndarray:
-        """Union of breaks in the trunk, splitter, and downstream paths."""
+        """Union of breaks in the trunk, splitter, and downstream paths.
+
+        Returns:
+            Sorted union of the wavelength breaks, in nanometers, of the trunk, splitter
+            and branch paths.
+        """
         return spectral_breaks(self.trunk, self.split, *(b.path for b in self.branches))
 
     def _parse_taps(self, taps):

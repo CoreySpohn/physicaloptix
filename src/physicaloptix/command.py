@@ -18,6 +18,12 @@ class CommandResponse(eqx.Module):
     The field at the element's input is propagated once at construction.
     Each derivative runs the commanded element and the downstream optics
     through their ordinary propagation, sharing the trunk in a forked system.
+
+    Attributes:
+        element: The commandable element whose command is differentiated.
+        field: Field at the input of the element, propagated once at construction.
+        downstream: Optical path or system that carries the element output onward; a
+            system is forked at its trunk.
     """
 
     element: AbstractCommandableElement
@@ -33,6 +39,15 @@ class CommandResponse(eqx.Module):
 
         Return the complex density-amplitude derivative on the output grid,
         or a dict of those arrays keyed by channel for an OpticalSystem.
+
+        Args:
+            tangent: Command-shaped perturbation, with the shape and units of the
+                element command.
+
+        Returns:
+            Complex density-amplitude derivative of the output field, shaped like the
+            output field data, or a dict of such arrays keyed by channel name for an
+            OpticalSystem.
         """
         command = self.element.command
         if not jnp.issubdtype(command.dtype, jnp.inexact):
@@ -53,6 +68,15 @@ class CommandResponse(eqx.Module):
 
         Chunking bounds the number of propagated tangents in a batch. None
         batches all commands. The remaining axes match the output field data.
+
+        Args:
+            chunk_size: Largest number of tangents propagated in one batch; None
+                propagates all commands at once.
+
+        Returns:
+            Jacobian with a leading command axis of length command.size followed by the
+            output field data axes, or a dict of such arrays keyed by channel name for
+            an OpticalSystem.
         """
         if chunk_size is not None and chunk_size < 1:
             raise ValueError("chunk_size must be positive")
@@ -70,7 +94,17 @@ class CommandResponse(eqx.Module):
 def command_response(
     path_or_system: OpticalPath | OpticalSystem, field: Field, stage: str
 ) -> CommandResponse:
-    """Differentiate the command of a named path stage or system trunk stage."""
+    """Differentiate the command of a named path stage or system trunk stage.
+
+    Args:
+        path_or_system: Optical path, or optical system whose trunk is searched.
+        field: Field entering the path or the trunk.
+        stage: Name of the stage holding the commandable element.
+
+    Returns:
+        The response object for that stage, holding the propagated input field and the
+        downstream optics.
+    """
     system = path_or_system if isinstance(path_or_system, OpticalSystem) else None
     path = path_or_system if system is None else system.trunk
     names = tuple(step.name for step in path.stages)

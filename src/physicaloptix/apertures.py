@@ -64,7 +64,11 @@ def load_primary_yaml(path):
 
 
 def eac1_primary():
-    """The EAC-1 segmented primary from the bundled geometry YAML."""
+    """The EAC-1 segmented primary from the bundled geometry YAML.
+
+    Returns:
+        The EAC-1 segmented primary geometry loaded from the bundled YAML file.
+    """
     return load_primary_yaml(_EAC1_YAML)
 
 

@@ -49,7 +49,11 @@ class ZernikeWavefrontSensor(eqx.Module):
     plane_out: PlaneKind = eqx.field(static=True)
 
     def spectral_breaks_nm(self) -> np.ndarray:
-        """The fixed phase mask has no wavelength breaks."""
+        """The fixed phase mask has no wavelength breaks.
+
+        Returns:
+            Empty array: the fixed phase mask has no wavelength breaks.
+        """
         return np.empty(0)
 
     @classmethod
@@ -94,7 +98,15 @@ class ZernikeWavefrontSensor(eqx.Module):
         )
 
     def __call__(self, field):
-        """Propagate a pupil field to the sensor (pupil) plane."""
+        """Propagate a pupil field to the sensor (pupil) plane.
+
+        Args:
+            field: Pupil field on the sensor grid.
+
+        Returns:
+            Complex field in the sensor pupil plane on the same grid; its squared
+            magnitude is the sensor image.
+        """
         validate_field(
             field, plane=self.plane_in, grid=self.grid, context="ZernikeWavefrontSensor"
         )

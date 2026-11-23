@@ -160,6 +160,12 @@ class CoordinateInversion(Element):
 
     On the symmetric half-pixel grid, reversing the array along an axis maps
     each coordinate to its negative exactly, so the reflection is lossless.
+
+    Attributes:
+        grid: Grid the field must be sampled on.
+        axis: Axis along which the field is reflected: 'y' reverses rows, 'x' reverses
+            columns.
+        plane: Plane the element acts in.
     """
 
     grid: PixelGrid
@@ -172,11 +178,24 @@ class CoordinateInversion(Element):
             raise ValueError(f"axis must be 'x' or 'y', got {self.axis!r}")
 
     def spectral_breaks_nm(self) -> np.ndarray:
-        """Flipping a grid axis is independent of wavelength."""
+        """Flipping a grid axis is independent of wavelength.
+
+        Returns:
+            Empty array: the flip does not depend on wavelength.
+        """
         return np.empty(0)
 
     def __call__(self, field):
-        """Reverse the field along ``axis`` (leading axes broadcast)."""
+        """Reverse the field along ``axis`` (leading axes broadcast).
+
+        Args:
+            field: Field in the element plane on the element grid; leading axes
+                broadcast.
+
+        Returns:
+            Field with the same grid, plane and spectrum, reversed along the chosen
+            axis.
+        """
         validate_field(
             field, plane=self.plane, grid=self.grid, context="CoordinateInversion"
         )

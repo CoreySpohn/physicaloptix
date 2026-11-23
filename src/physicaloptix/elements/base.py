@@ -19,17 +19,31 @@ class Element(eqx.Module):
     Concrete elements declare the plane they act in (``plane``) and validate
     the incoming field against it, so a focal-plane mask dropped in a pupil
     fails loudly instead of silently doing the wrong thing.
+
+    Attributes:
+        plane: Plane the element acts in; incoming fields are validated against it.
     """
 
     plane: eqx.AbstractVar[PlaneKind]
 
     def __call__(self, field):
-        """Apply the element to a field."""
+        """Apply the element to a field.
+
+        A concrete element returns the field after the element.
+
+        Args:
+            field: Field to act on.
+        """
         raise NotImplementedError
 
 
 class AbstractCommandableElement(Element):
-    """An optic driven by a real vector of commanded coefficients."""
+    """An optic driven by a real vector of commanded coefficients.
+
+    Attributes:
+        command: Real command vector of the element, in the units of its basis
+            coefficients.
+    """
 
     command: eqx.AbstractVar[Array]
 
@@ -40,7 +54,15 @@ class AbstractCommandableElement(Element):
 
     @abstractmethod
     def with_command(self, command: Array) -> Self:
-        """Return this optic with a new command in the same units and layout."""
+        """Return this optic with a new command in the same units and layout.
+
+        Args:
+            command: Replacement command, with the shape and units of the current
+                command.
+
+        Returns:
+            A copy of this optic carrying the new command.
+        """
 
 
 class SampledOptic(Element):
@@ -78,7 +100,11 @@ class SampledOptic(Element):
     shift_order: int = eqx.field(static=True, default=1)
 
     def spectral_breaks_nm(self) -> np.ndarray:
-        """The fixed spatial transmission has no wavelength breaks."""
+        """The fixed spatial transmission has no wavelength breaks.
+
+        Returns:
+            Empty array: the transmission is fixed in wavelength.
+        """
         return np.empty(0)
 
     def __check_init__(self):
@@ -96,7 +122,15 @@ class SampledOptic(Element):
             )
 
     def __call__(self, field):
-        """Multiply the field by the (shifted) transmission."""
+        """Multiply the field by the (shifted) transmission.
+
+        Args:
+            field: Field on the grid of the optic, in the optic plane.
+
+        Returns:
+            Field with the same grid, plane and spectrum, multiplied by the transmission
+            after any shift.
+        """
         validate_field(field, plane=self.plane, grid=self.grid, context="SampledOptic")
         transmission = self.transmission
         if self.shift_px is not None:

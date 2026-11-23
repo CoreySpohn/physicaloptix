@@ -43,7 +43,21 @@ def _tilted_xy(field, x_lod, y_lod):
 
 
 class PathCoronagraph(AbstractImagingCoronagraph):
-    """Cached on-axis propagation and eagerly prepared aperture-rule records."""
+    """Cached on-axis propagation and eagerly prepared aperture-rule records.
+
+    Attributes:
+        core_path: Optical path from the entrance field to the Lyot pupil plane.
+        input_field: Entrance field, with a one-band spectrum.
+        lyot_field: On-axis field at the Lyot plane, propagated once at construction.
+        input_energy: Total energy of the entrance field, used as the stellar flux
+            normalization.
+        grid: Native focal grid of the products, in lambda/D of the reference
+            wavelength.
+        uniform_sky_profile: Annular mean profile of the uniform-sky map, sampled on
+            separation.
+        wavelength_nm: Wavelength in nanometers that binds monochromatic screens, or
+            None.
+    """
 
     core_path: object
     input_field: Field
@@ -88,6 +102,34 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         further immutable records. Finite stellar diameters are not modeled.
         n_sky_screens independent complex pupil screens (drawn with seed)
         estimate the uniform-sky map and its annular means.
+
+        Args:
+            core_path: Optical path from the entrance field to the Lyot pupil plane; its
+                last stage must end in the pupil plane.
+            input_field: Entrance field; a field without a spectrum is made
+                monochromatic at wavelength_nm.
+            primary: Primary geometry; its frame at the reference wavelength defines the
+                native angular grid.
+            max_separation_lod: Largest separation in lambda/D at which the records are
+                sampled.
+            reference_wavelength_nm: Reference wavelength in nanometers of the angular
+                frame.
+            pixel_scale_lod: Focal pixel size in lambda/D.
+            separation_step_lod: Spacing in lambda/D of the sampled source separations.
+            fov_margin_lod: Extra half field of view in lambda/D beyond
+                max_separation_lod.
+            wavelength_nm: Wavelength in nanometers that binds monochromatic OPD screens
+                when given.
+            rules: Extra aperture rules to prepare, in addition to the default and
+                half-maximum rules.
+            n_sky_screens: Number of independent screens used to estimate the
+                uniform-sky map.
+            seed: Seed of the screen sequence.
+            leakage_rule: Rule that reduces leakage to a curve, passed to the
+                performance curves.
+
+        Returns:
+            The compiled point-star model.
         """
         if wavelength_nm is not None and input_field.spectrum is None:
             input_field = Field(
@@ -161,7 +203,15 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         )
 
     def curves(self, rule=DEFAULT_APERTURE_RULE, *, leakage_rule="aperture_mean"):
-        """Select an eagerly built record; unprepared rules raise."""
+        """Select an eagerly built record; unprepared rules raise.
+
+        Args:
+            rule: Aperture rule of the record.
+            leakage_rule: Leakage rule of the record.
+
+        Returns:
+            The prepared performance record for that rule pair.
+        """
         for record in self._records:
             if record.rule == rule and record.leakage_rule == leakage_rule:
                 return record
@@ -173,11 +223,27 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         return self.grid.frame
 
     def at_wavelength(self, wavelength_nm):
-        """Return the product grids of the build spectrum."""
+        """Return the product grids of the build spectrum.
+
+        Args:
+            wavelength_nm: Wavelength in nanometers; unused, because the grids are those
+                of the build spectrum.
+
+        Returns:
+            Product grids, with the native grid for the stellar and source images and
+            the sky map grid for the uniform sky.
+        """
         return ProductGrids(self.grid, self.grid, self._sky.grid)
 
     def uniform_sky_response(self, separation_lod):
-        """Annular mean of the uniform-sky map in the performance frame."""
+        """Annular mean of the uniform-sky map in the performance frame.
+
+        Args:
+            separation_lod: Separations in lambda/D as dimensionless numeric values.
+
+        Returns:
+            Annular mean of the uniform-sky map at those separations, dimensionless.
+        """
         if hasattr(separation_lod, "unit"):
             raise TypeError("separation_lod must be dimensionless numeric values")
         return self.uniform_sky_profile.evaluate(separation_lod)
@@ -205,7 +271,19 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         return native if grid is None or native.grid == grid else on_grid(native, grid)
 
     def stellar_map(self, wavelength_nm, stellar_diameter_lod, *, grid=None):
-        """Point-star flux fraction; reject concrete or mark traced finite stars NaN."""
+        """Point-star flux fraction; reject concrete or mark traced finite stars NaN.
+
+        Args:
+            wavelength_nm: Wavelength in nanometers; unused, because the model holds its
+                build spectrum.
+            stellar_diameter_lod: Stellar angular diameter in lambda/D; only zero is
+                supported, and a traced nonzero value yields NaN.
+            grid: Target grid; None keeps the native grid.
+
+        Returns:
+            Stellar flux-fraction image of the on-axis star, native or resampled onto
+            the target grid.
+        """
         if (
             not isinstance(stellar_diameter_lod, jax.core.Tracer)
             and float(stellar_diameter_lod) != 0
@@ -225,6 +303,17 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         A tilt at or beyond the pupil Nyquist frequency on either axis is
         ambiguous with a different source position: that source has ``valid``
         False and an all-zero image, and the other sources are unaffected.
+
+        Args:
+            wavelength_nm: Wavelength in nanometers; unused, because the model holds its
+                build spectrum.
+            x_lod: Source offsets along x in lambda/D, broadcast with y_lod.
+            y_lod: Source offsets along y in lambda/D, broadcast with x_lod.
+            grid: Target grid; None keeps the native grid.
+
+        Returns:
+            Images of each source and a validity flag per source; invalid sources have
+            all-zero images.
         """
 
         def one(x, y):
@@ -244,5 +333,14 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         return SourcePSFs(images, valid)
 
     def uniform_sky_map(self, wavelength_nm, *, grid):
-        """Dimensionless extended-illumination transmission on the requested grid."""
+        """Dimensionless extended-illumination transmission on the requested grid.
+
+        Args:
+            wavelength_nm: Wavelength in nanometers; unused, because the model holds its
+                build spectrum.
+            grid: Target grid of the map.
+
+        Returns:
+            Dimensionless uniform-sky transmission image on the target grid.
+        """
         return self._sky if self._sky.grid == grid else on_grid(self._sky, grid)

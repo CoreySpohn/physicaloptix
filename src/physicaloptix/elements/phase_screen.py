@@ -27,6 +27,14 @@ class PhaseScreen(AbstractCommandableElement, AbstractChromaticOp):
     setpoint) or the fixed coefficients of a static aberration. The OPD map
     ``coeffs . B`` (nanometers) becomes a monochromatic pupil phasor, so the
     stage enters an ``OpticalPath`` as a commandable, differentiable optic.
+
+    Attributes:
+        basis: Mode basis whose coefficients are the command; the OPD map is in
+            nanometers.
+        grid: Plane grid the basis and the incoming field live on.
+        wavelength_nm: Wavelength in nanometers used to convert the OPD of a
+            monochromatic field.
+        plane: Plane the screen acts in.
     """
 
     basis: ModeBasis
@@ -71,11 +79,22 @@ class PhaseScreen(AbstractCommandableElement, AbstractChromaticOp):
         return "opd"
 
     def with_command(self, command: Array) -> Self:
-        """Return a screen with the specified command."""
+        """Return a screen with the specified command.
+
+        Args:
+            command: Replacement basis coefficients, shape (m,).
+
+        Returns:
+            A screen whose basis coefficients are the new command.
+        """
         return eqx.tree_at(lambda screen: screen.basis.coeffs, self, command)
 
     def opd(self) -> Array:
-        """The applied optical path difference map in nm."""
+        """The applied optical path difference map in nm.
+
+        Returns:
+            OPD map in nanometers, shape (y, x).
+        """
         return self.basis.opd()
 
     def __call__(self, field):
@@ -85,6 +104,12 @@ class PhaseScreen(AbstractCommandableElement, AbstractChromaticOp):
         field converts it per wavelength (``opd * 2 pi / lambda_k``), so the DM
         or aberration phase carries its true wavelength dependence -- what a
         broadband dark hole needs.
+
+        Args:
+            field: Field in the screen plane on the screen grid, mono or chromatic.
+
+        Returns:
+            Field with the same grid, plane and spectrum, multiplied by the OPD phasor.
         """
         validate_field(field, plane=self.plane, grid=self.grid, context="PhaseScreen")
         opd = self.opd()
@@ -101,7 +126,11 @@ class PhaseScreen(AbstractCommandableElement, AbstractChromaticOp):
         )
 
     def spectral_breaks_nm(self) -> np.ndarray:
-        """The OPD phase varies smoothly with wavelength."""
+        """The OPD phase varies smoothly with wavelength.
+
+        Returns:
+            Empty array: the phase varies smoothly with wavelength.
+        """
         return np.empty(0)
 
     def at_wavelength(self, wavelength_nm):
@@ -148,7 +177,11 @@ class SampledPhaseScreen(Element, AbstractChromaticOp):
             )
 
     def spectral_breaks_nm(self) -> np.ndarray:
-        """The OPD phase varies smoothly with wavelength."""
+        """The OPD phase varies smoothly with wavelength.
+
+        Returns:
+            Empty array: the phase varies smoothly with wavelength.
+        """
         return np.empty(0)
 
     def at_wavelength(self, wavelength_nm):
@@ -164,6 +197,12 @@ class SampledPhaseScreen(Element, AbstractChromaticOp):
 
     def __call__(self, field):
         """Apply the OPD phasor to the field (same plane and grid).
+
+        Args:
+            field: Field in the screen plane on the screen grid, mono or chromatic.
+
+        Returns:
+            Field with the same grid, plane and spectrum, multiplied by the OPD phasor.
 
         Raises:
             ValueError: A monochromatic field arrives while the wavelength is

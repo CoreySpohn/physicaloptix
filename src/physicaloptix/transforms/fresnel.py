@@ -37,6 +37,20 @@ class Fresnel(eqx.Module):
     same grid; ``backward`` is the adjoint (propagation by ``-z``). The chirp's
     Nyquist ratio is evaluated once at construction on the static grid and
     handled per ``on_undersampled`` ("raise", "warn", or "record").
+
+    Attributes:
+        grid: Propagation grid shared by the input and output fields.
+        plane_in: Plane the input field must be in.
+        plane_out: Plane the output field is tagged with.
+        distance_m: Propagation distance in meters; may be negative.
+        beam_diameter_m: Physical beam diameter at this plane in meters.
+        wavelength_nm: Design wavelength in nanometers.
+        method: 'fresnel' (paraxial) or 'exact' (non-paraxial angular spectrum).
+        npad: Real-domain zero-pad factor against FFT wrap-around.
+        on_undersampled: Policy applied at construction when the sampling parameter is
+            below 1: 'raise', 'warn' or 'record'.
+        sampling_parameter: Chirp Nyquist ratio evaluated at construction; values below
+            1 mean the transfer function is undersampled.
     """
 
     grid: PixelGrid
@@ -69,24 +83,24 @@ class Fresnel(eqx.Module):
         Args:
             grid: The (same in/out) propagation grid.
             distance_m: Physical propagation distance (meters); may be negative.
-            beam_diameter_m: Physical beam diameter AT this plane (the
-                demagnified relay beam, not the primary), which forms ``alpha``.
-            wavelength_nm: Design wavelength (nanometers); mono fields use it,
-                chromatic fields scale each slice by its own wavelength.
+            beam_diameter_m: Physical beam diameter AT this plane (the demagnified relay
+                beam, not the primary), which forms alpha.
+            wavelength_nm: Design wavelength (nanometers); mono fields use it, chromatic
+                fields scale each slice by its own wavelength.
             plane_in: Plane the input field must be in.
             plane_out: Plane the output field is tagged with.
-            on_undersampled: Policy when the chirp Nyquist ratio is below 1:
-                "raise" fails construction, "warn" emits a warning, "record"
-                only stores the metric. The gate is a conservative operator
-                bound, so band-limited fields are often fine below 1.
-            method: "fresnel" (paraxial, default) or "exact" (non-paraxial
-                angular spectrum with a decaying evanescent branch).
-            npad: Real-domain zero-pad factor to suppress FFT wrap-around; the
-                field is embedded in an ``npad * npix`` grid and cropped back
-                (see :func:`physicaloptix.diagnostics.fresnel_pad_factor`).
-            high_nm: Red end of a chromatic band for the gate (alpha
-                grows with lambda, so the reddest slice is worst-sampled);
-                defaults to ``wavelength_nm``.
+            method: 'fresnel' (paraxial, default) or 'exact' (non-paraxial angular
+                spectrum with a decaying evanescent branch).
+            npad: Real-domain zero-pad factor to suppress FFT wrap-around; the field is
+                embedded in an npad * npix grid and cropped back (see
+                :func:`physicaloptix.diagnostics.fresnel_pad_factor`).
+            on_undersampled: Policy when the chirp Nyquist ratio is below 1: 'raise'
+                fails construction, 'warn' emits a warning, 'record' only stores the
+                metric. The gate is a conservative operator bound, so band-limited
+                fields are often fine below 1.
+            high_nm: Red end of a chromatic band for the gate in nanometers (alpha grows
+                with lambda, so the reddest slice is worst-sampled); defaults to
+                wavelength_nm.
         """
         if method not in ("fresnel", "exact"):
             raise ValueError(f"method must be fresnel/exact, got {method!r}")
@@ -120,7 +134,12 @@ class Fresnel(eqx.Module):
                 warnings.warn(message, stacklevel=2)
 
     def spectral_breaks_nm(self) -> np.ndarray:
-        """Evanescent cutoffs [nm] of the exact propagator; Fresnel is smooth."""
+        """Evanescent cutoffs [nm] of the exact propagator; Fresnel is smooth.
+
+        Returns:
+            Evanescent cutoff wavelengths in nanometers, ascending, for the exact
+            method; empty for the paraxial method or zero distance.
+        """
         if self.method == "fresnel" or self.distance_m == 0:
             return np.empty(0)
         nu2 = np.unique(np.asarray(self._nu2(self.grid.shape[0] * self.npad)))
@@ -195,7 +214,14 @@ class Fresnel(eqx.Module):
         return jax.vmap(self._apply_data)(field.data, transfers)
 
     def forward(self, field):
-        """Propagate ``plane_in`` -> ``plane_out`` by ``+distance_m``."""
+        """Propagate ``plane_in`` -> ``plane_out`` by ``+distance_m``.
+
+        Args:
+            field: Field in plane_in on the propagation grid, mono or chromatic.
+
+        Returns:
+            Field in plane_out on the same grid, propagated by +distance_m.
+        """
         validate_field(field, plane=self.plane_in, grid=self.grid, context="Fresnel")
         return Field(
             data=self._propagate(field, conjugate=False),
@@ -205,7 +231,14 @@ class Fresnel(eqx.Module):
         )
 
     def backward(self, field):
-        """Adjoint propagation ``plane_out`` -> ``plane_in`` (propagation by ``-z``)."""
+        """Adjoint propagation ``plane_out`` -> ``plane_in`` (propagation by ``-z``).
+
+        Args:
+            field: Field in plane_out on the propagation grid, mono or chromatic.
+
+        Returns:
+            Field in plane_in on the same grid, propagated by -distance_m.
+        """
         validate_field(field, plane=self.plane_out, grid=self.grid, context="Fresnel")
         return Field(
             data=self._propagate(field, conjugate=True),

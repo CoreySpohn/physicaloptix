@@ -205,6 +205,21 @@ def perturbed_map(
     from the mono ``E * (1 + B . eps)`` at finite ``eps`` (the exp-form is
     only exact to first order there); the first derivative at ``eps = 0`` --
     what ``linearize`` actually uses -- is identical.
+
+    Args:
+        path: Optical path that propagates the perturbed field to the focal plane.
+        field: Unperturbed input field.
+        basis: Mode basis; its kind selects the phase or amplitude perturbation.
+        wavelength_nm: Design wavelength in nanometers for the phase factor of a
+            monochromatic map.
+        wavelengths_nm: Channel wavelengths in nanometers, shape (w,), for the chromatic
+            exp-form; None for the monochromatic map.
+        dispersion: Optional complex (m, w) table of per-mode factors at wavelengths_nm;
+            the default derives from basis.kind.
+
+    Returns:
+        Function of the coefficient vector eps, shape (m,), that returns the complex
+        propagated field data.
     """
     if wavelengths_nm is not None:
         factors = _factors(basis, wavelength_nm, wavelengths_nm, dispersion)
@@ -549,6 +564,19 @@ def linearity_residual(path, field, basis, linearization, eps):
     chromatic ``linearization`` by rebuilding the chromatic
     ``perturbed_map`` (from the recorded ``wavelengths_nm`` / ``dispersion``)
     and contracting ``G``'s mode axis, which is no longer the leading axis.
+
+    Args:
+        path: Optical path used to build the linearization.
+        field: Unperturbed input field the linearization was built around.
+        basis: Mode basis the linearization was built with.
+        linearization: Linearization to check; it must be an input-plane one, with no
+            perturbation stage.
+        eps: Coefficient vector, shape (m,), at which the linear model is compared with
+            the nonlinear map.
+
+    Returns:
+        Relative error, a dimensionless float: the norm of the model minus exact
+        difference divided by the norm of the exact field.
     """
     if linearization.perturbation_stage is not None:
         raise NotImplementedError(

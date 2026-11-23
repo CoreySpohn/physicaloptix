@@ -10,7 +10,14 @@ from optixstuff.spectral import Quadrature
 
 
 class PlaneKind(Enum):
-    """Plane tag; pupil coordinates use diameters and focal coordinates lambda/D."""
+    """Plane tag; pupil coordinates use diameters and focal coordinates lambda/D.
+
+    Attributes:
+        PUPIL: Pupil plane, sampled in pupil diameters.
+        FOCAL: Focal plane, sampled in lambda/D.
+        INTERMEDIATE: Intermediate plane between a pupil and a focal plane.
+        DETECTOR: Detector plane.
+    """
 
     PUPIL = "pupil"
     FOCAL = "focal"
@@ -25,13 +32,27 @@ class Field(GridArray):
 
     Mono data are (y, x); chromatic data are (wavelength, y, x).
     Intensity retains continuous-field density units; energy includes pixel area.
+
+    Attributes:
+        plane: Plane tag of the sampled field.
+        spectrum: One-band spectral quadrature whose wavelength nodes label the leading
+            axis, or None for a monochromatic field.
     """
 
     plane: PlaneKind
     spectrum: Quadrature | None
 
     def __init__(self, data, grid, plane, spectrum=None):
-        """Construct the locked mono or chromatic layout on the shared grid."""
+        """Construct the locked mono or chromatic layout on the shared grid.
+
+        Args:
+            data: Complex samples, (y, x) without a spectrum or (wavelength, y, x) with
+                one; promoted to a complex dtype.
+            grid: Sampling grid of the last two axes.
+            plane: Plane tag of the field.
+            spectrum: One-band quadrature whose node count matches the wavelength axis,
+                or None for a monochromatic field.
+        """
         data = jnp.asarray(data, dtype=jnp.result_type(data, 1j))
         object.__setattr__(self, "data", data)
         object.__setattr__(self, "grid", grid)
@@ -57,12 +78,25 @@ class Field(GridArray):
         super().__post_init__()
 
     def tree_flatten(self):
-        """Expose complex data and spectral leaves; retain static geometry/tags."""
+        """Expose complex data and spectral leaves; retain static geometry/tags.
+
+        Returns:
+            Pair of the dynamic leaves (data, spectrum) and the static metadata (grid,
+            leading_axes, plane).
+        """
         return (self.data, self.spectrum), (self.grid, self.leading_axes, self.plane)
 
     @classmethod
     def tree_unflatten(cls, metadata, arrays):
-        """Reconstruct mapped fields without validating JAX placeholders."""
+        """Reconstruct mapped fields without validating JAX placeholders.
+
+        Args:
+            metadata: Static metadata (grid, leading_axes, plane) from tree_flatten.
+            arrays: Dynamic leaves (data, spectrum) from tree_flatten.
+
+        Returns:
+            The reconstructed field, with no validation of the leaves.
+        """
         result = object.__new__(cls)
         for name, value in zip(
             ("grid", "leading_axes", "plane", "data", "spectrum"),
@@ -77,6 +111,12 @@ class Field(GridArray):
 
         Focal optical samples use band-limited reconstruction. Other planes
         use linear reconstruction, including hard-edged pupil intensities.
+
+        Returns:
+            Image of the squared field magnitude on the field grid, (y, x), density per
+            grid-unit area. A chromatic field is reduced over wavelength by the
+            quadrature, summed for a zero-width band and averaged over the band
+            otherwise.
         """
         abs2 = self.data.real**2 + self.data.imag**2
         if self.spectrum is not None:
@@ -97,13 +137,26 @@ class Field(GridArray):
         )
 
     def energy(self):
-        """Integrated power, per wavelength for a chromatic field."""
+        """Integrated power, per wavelength for a chromatic field.
+
+        Returns:
+            Squared field magnitude summed over the grid and multiplied by the pixel
+            area: a scalar for a mono field and one value per wavelength node for a
+            chromatic field.
+        """
         abs2 = self.data.real**2 + self.data.imag**2
         return jnp.sum(abs2, axis=(-2, -1)) * self.grid.pixel_area
 
 
 def validate_field(field, *, plane, grid, context):
-    """Reject fields with a plane tag or sampling different from the operator."""
+    """Reject fields with a plane tag or sampling different from the operator.
+
+    Args:
+        field: Field to check.
+        plane: Plane the operator acts in.
+        grid: Grid the operator was built on.
+        context: Operator name used in the error message.
+    """
     if field.plane is not plane:
         raise ValueError(
             f"{context} acts in the {plane.value} plane but the field is in "
