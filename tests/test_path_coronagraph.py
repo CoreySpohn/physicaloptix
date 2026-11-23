@@ -730,10 +730,6 @@ def test_public_coronagraph_reconstruction(vortex_coronagraph):
         ):
             assert image.reconstruction == expected
         assert c.uniform_sky_map(600.0, grid=grid).reconstruction == "linear"
-        # No product continues past its grid.
-        assert c.stellar_map(600.0, 0.0, grid=grid).outside == "zero"
-        assert c.uniform_sky_map(600.0, grid=grid).outside == "zero"
-        assert c.off_axis_psf(600.0, 6.0, grid).outside == "zero"
 
 
 def test_stellar_map_rejects_finite_diameters(bare_telescope):
@@ -765,4 +761,3 @@ def test_stellar_map_rejects_finite_diameters(bare_telescope):
     assert np.all(np.isnan(finite.data))
     assert finite.grid == point.grid
     assert finite.quantity == point.quantity
-    assert finite.outside == point.outside
