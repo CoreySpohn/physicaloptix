@@ -69,6 +69,13 @@ field also carries a `FocalResponse` so that preparation can reconstruct
 the floor from the nominal amplitude density and input energy. The field counts its own evaluations so the
 page can show when the science runs.
 
+A linearization is known on its model grid only. A renderer that adds the
+field to a coronagraph's stellar map supports a detector pixel only where both
+the coronagraph products and the field's grid cover it, so a field built on a
+grid narrower than the coronagraph's leaves the outer dark hole unsupported:
+zero in frames and without exposure times. To keep the dark hole supported,
+build the linearization on the grid of the coronagraph products, or wider.
+
 ```{code-cell} python
 N_PIX, PUPIL_PIX = 64, 32
 PIXSCALE_LOD = PUPIL_PIX / N_PIX  # lambda/D per focal-plane pixel

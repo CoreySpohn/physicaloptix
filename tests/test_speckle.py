@@ -1793,3 +1793,31 @@ def test_ou_exposure_neff_integrates_the_exponential_kernel():
     np.testing.assert_allclose(derivative, 1 / 6, rtol=2e-15)
     with pytest.raises(ValueError, match="positive"):
         ou_exposure_neff(0.0, 1.0)
+
+
+@pytest.mark.parametrize("chromatic", [False, True])
+def test_data_mask_contract(chromatic):
+    """Fails if a field's data mask disagrees with the data it realizes.
+
+    Contract over the physicaloptix implementations (``AnalyticSpeckleField`` and
+    the ``ChromaticAnalyticSpeckleField`` a chromatic process draws):
+    ``data_mask()`` is None, or a boolean of ``grid.shape`` with ``realize``
+    exactly 0.0 wherever it is False. A linearization holds data on its whole
+    model grid, so both return None today. Truth: the contract; exact.
+    """
+    if chromatic:
+        field = _chromatic_process(coherent=True).draw(jax.random.PRNGKey(0))
+        wavelength_nm = _CROSS_WLS[1]
+    else:
+        field = _field(coherent=True)
+        wavelength_nm = 1000.0
+    assert type(field).__name__ == (
+        "ChromaticAnalyticSpeckleField" if chromatic else "AnalyticSpeckleField"
+    )
+    mask = field.data_mask()
+    if mask is None:
+        return
+    mask = np.asarray(mask)
+    assert mask.dtype == bool and mask.shape == field.grid.shape
+    data = np.asarray(field.realize(wavelength_nm=wavelength_nm, time_d=3.0).data)
+    assert np.all(data[..., ~mask] == 0.0)
