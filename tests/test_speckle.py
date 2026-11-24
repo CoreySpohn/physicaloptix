@@ -1717,10 +1717,12 @@ def test_fields_run_on_their_own_clock(chromatic, x64):
     agrees. The kernel is the interface's own, and a positional time or a
     ``time_d`` keyword raises. Eager against ``eqx.filter_jit``: tolerance
     basis floating-point, 8 eps of the sum over frequencies of amplitude
-    times (1 + cosine argument), because the compiled program contracts
-    multiply-adds (one rounding fewer). The times are off the float32 grid,
-    so a branch that casts a JAX array through float32 fails the x64
-    comparison.
+    times (1 + cosine argument) for the coefficients, and 64 eps of the
+    largest pixel for the images, because the compiled program contracts
+    multiply-adds (one rounding fewer); an error only one execution mode
+    makes (a traced-only image scaling) fails it. The times are off the
+    float32 grid, so a branch that casts a JAX array through float32 fails
+    the x64 comparison.
     """
     from dataclasses import replace
 
@@ -1755,11 +1757,14 @@ def test_fields_run_on_their_own_clock(chromatic, x64):
             compiled = coefficients(zero, t)
             np.testing.assert_array_equal(coefficients(anchored, t), compiled)
             np.testing.assert_array_less(np.abs(compiled - eager), 8 * eps * scale)
+            image = zero.realize(wavelength_nm=wavelength_nm, elapsed_s=t).data
             np.testing.assert_array_equal(
-                anchored.realize(wavelength_nm=wavelength_nm, elapsed_s=t).data,
-                zero.realize(wavelength_nm=wavelength_nm, elapsed_s=t).data,
+                anchored.realize(wavelength_nm=wavelength_nm, elapsed_s=t).data, image
             )
-            np.testing.assert_array_equal(realize(anchored, t), realize(zero, t))
+            compiled_image = realize(zero, t)
+            np.testing.assert_array_equal(realize(anchored, t), compiled_image)
+            floor = 64 * eps * np.max(np.abs(image))
+            np.testing.assert_allclose(compiled_image, image, rtol=0, atol=floor)
         peak = dict(telescope_peak=2.0, wavelength_nm=wavelength_nm, elapsed_s=7.0)
         np.testing.assert_array_equal(
             anchored.peak_contrast(**peak), zero.peak_contrast(**peak)
