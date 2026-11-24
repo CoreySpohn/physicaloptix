@@ -101,6 +101,7 @@ from the ``inversion`` tap.
 import dataclasses
 import hashlib
 import json
+import math
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -372,11 +373,14 @@ class _Provenance(Mapping):
     field and pass through ``jax.jit`` without it becoming leaves. Equal
     content gives equal hashes, so equal records never retrace.
 
-    Values must hash stably: strings, numbers, None and other hashable
-    objects, and mappings, lists and tuples of them. NumPy arrays, sets and
-    other unhashable values are refused, and so are NaN numbers, which are
-    unequal to themselves and would retrace on every call. The keys of one
-    mapping share one type that can be ordered.
+    Values are limited to what hashes and compares stably: ``str``, ``bool``,
+    ``int``, finite ``float`` and ``None`` (exact types, not subclasses), and
+    lists, tuples and string-keyed mappings of them. Anything else is refused
+    at construction, naming the key: NumPy scalars and arrays, ``Decimal``,
+    NaN and infinite floats, sets and frozensets, and objects whose hashing or
+    equality the record cannot vouch for. Equality also tells the scalar types
+    apart, so ``1``, ``1.0`` and ``True`` make different records.
+    :meth:`to_dict` returns plain dicts and lists, for example for JSON.
 
     Args:
         items: A mapping or pairs to freeze.
@@ -384,27 +388,24 @@ class _Provenance(Mapping):
             enclosing record.
 
     Raises:
-        TypeError: If a value cannot be hashed, or the keys of a mapping mix
-            types or cannot be ordered; the message names the key.
-        ValueError: If a value is NaN; the message names the key.
+        TypeError: If a key is not a ``str`` or a value is of a type the
+            record does not hold; the message names the key.
+        ValueError: If a float is NaN or infinite; the message names the key.
     """
 
     def __init__(self, items=(), *, _path="provenance"):
         data = dict(items)
-        if len({type(k) for k in data}) > 1:
-            kinds = sorted({type(k).__name__ for k in data})
-            raise TypeError(
-                f"{_path} mixes key types {kinds}; use keys of one type, "
-                "such as strings"
-            )
-        try:
-            keys = sorted(data)
-        except TypeError as err:
-            raise TypeError(f"{_path} has keys that cannot be ordered: {err}") from err
-        for key in keys:
-            _require_stable(key, f"{_path} key {key!r}")
-        self._items = tuple((k, _freeze(data[k], f"{_path}[{k!r}]")) for k in keys)
+        for key in data:
+            if type(key) is not str:
+                raise TypeError(
+                    f"{_path} has the key {key!r} of type {type(key).__name__}; "
+                    "provenance keys are strings"
+                )
+        self._items = tuple(
+            (k, _freeze(data[k], f"{_path}[{k!r}]")) for k in sorted(data)
+        )
         self._lookup = dict(self._items)
+        self._key = tuple((k, _canonical(v)) for k, v in self._items)
 
     def __getitem__(self, key):
         return self._lookup[key]
@@ -415,34 +416,70 @@ class _Provenance(Mapping):
     def __len__(self):
         return len(self._items)
 
+    def __eq__(self, other):
+        if isinstance(other, _Provenance):
+            return self._key == other._key
+        return super().__eq__(other)
+
     def __hash__(self):
-        return hash(self._items)
+        return hash(self._key)
 
     def __repr__(self):
-        return f"{type(self).__name__}({dict(self._items)!r})"
+        return f"{type(self).__name__}({self.to_dict()!r})"
+
+    def to_dict(self):
+        """Return the record as plain nested dicts and lists.
+
+        Returns:
+            A new ``dict`` whose nested records are ``dict`` and whose tuples
+            are ``list``, ready for ``json.dumps``.
+        """
+        return {k: _thaw(v) for k, v in self._items}
 
 
-def _require_stable(value, path):
-    """Refuse a value whose hash or equality is not stable across calls."""
-    try:
-        hash(value)
-    except TypeError as err:
-        raise TypeError(
-            f"{path} holds an unhashable {type(value).__name__}; provenance "
-            "holds strings, numbers, None, mappings, lists and tuples"
-        ) from err
-    if isinstance(value, float | complex | np.number) and value != value:
-        raise ValueError(f"{path} is NaN; record a string such as 'nan' instead")
+_SCALAR_TYPES = (str, bool, int, type(None))
 
 
 def _freeze(value, path):
+    """Freeze an allowed value; refuse any other, naming where it sits."""
     if isinstance(value, _Provenance):
         return value
     if isinstance(value, Mapping):
         return _Provenance(value, _path=path)
     if isinstance(value, list | tuple):
         return tuple(_freeze(v, f"{path}[{i}]") for i, v in enumerate(value))
-    _require_stable(value, path)
+    if type(value) in _SCALAR_TYPES:
+        return value
+    if type(value) is float:
+        if not math.isfinite(value):
+            raise ValueError(
+                f"{path} is {value!r}; provenance floats are finite, so record "
+                "a string such as 'nan' instead"
+            )
+        return value
+    raise TypeError(
+        f"{path} holds a {type(value).__name__}; provenance holds str, bool, "
+        "int, finite float and None, and lists, tuples and string-keyed "
+        "mappings of them"
+    )
+
+
+def _canonical(value):
+    """A hashable key that tells the scalar types and signed zeros apart."""
+    if isinstance(value, _Provenance):
+        return ("mapping", value._key)
+    if isinstance(value, tuple):
+        return ("sequence", tuple(_canonical(v) for v in value))
+    if type(value) is float:
+        return ("float", value.hex())
+    return (type(value).__name__, value)
+
+
+def _thaw(value):
+    if isinstance(value, _Provenance):
+        return value.to_dict()
+    if isinstance(value, tuple):
+        return [_thaw(v) for v in value]
     return value
 
 

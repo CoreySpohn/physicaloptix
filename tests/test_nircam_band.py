@@ -28,6 +28,7 @@ import hashlib
 import json
 import re
 from dataclasses import replace
+from decimal import Decimal
 
 import equinox as eqx
 import jax
@@ -53,6 +54,16 @@ NM_TO_M = 1e-9
 DIAMETER_M = 6.5
 NPUP = 48
 FLOOR = 1e-10
+
+
+class _ArrayEqual:
+    """Hashable, but compares with an array result, as a NumPy wrapper might."""
+
+    def __hash__(self):
+        return 1
+
+    def __eq__(self, other):
+        return np.zeros(2)
 
 
 def _pupil_coords(npup):
@@ -516,29 +527,69 @@ class TestBandFromBundle:
         assert record["files"]["f"]["sha256"] == "a"
         assert {**record, "t": 1} == {"s": "x", "files": record["files"], "t": 1}
 
+    def test_provenance_equality_hash_and_plain_form(self):
+        """Fails if equal records hash or compare unequal, or the plain form
+        is not JSON-ready.
+
+        Truth source: the hashing contract of a static field (equal content,
+        equal hash and ``==``, from separately built records, so an identity
+        hash fails) and the input mapping itself for ``to_dict``. Scalars of
+        different types stay distinct so one record never stands in for
+        another under ``jax.jit``. Exact comparisons, no tolerance.
+        """
+        content = {"k": [1, 2.5], "s": "x", "n": None, "f": {"b": True, "a": "y"}}
+        first = _Provenance(content)
+        second = _Provenance(dict(reversed(content.items())))
+        assert first is not second
+        assert first == second and hash(first) == hash(second)
+        assert first != _Provenance({**content, "k": [1, 2.0]})
+        for a, b in ((1, 1.0), (1, True), (0.0, -0.0)):
+            assert _Provenance({"v": a}) != _Provenance({"v": b})
+        plain = first.to_dict()
+        assert plain == content
+        assert type(plain["f"]) is dict and type(plain["k"]) is list
+        assert json.loads(json.dumps(plain)) == content
+
     @pytest.mark.parametrize(
         ("provenance", "error", "where"),
         [
             ({"files": {"f": np.arange(3)}}, TypeError, "['files']['f']"),
-            ({"tags": {1, 2}}, TypeError, "['tags']"),
-            ({"raw": [bytearray(b"x")]}, TypeError, "['raw'][0]"),
+            ({"check": np.float64(1.0)}, TypeError, "['check']"),
+            ({"check": Decimal("NaN")}, TypeError, "['check']"),
+            ({"t": [np.datetime64("NaT")]}, TypeError, "['t'][0]"),
+            ({"tags": frozenset({1, 2})}, TypeError, "['tags']"),
+            ({"raw": [_ArrayEqual()]}, TypeError, "['raw'][0]"),
             ({"check": {"max": float("nan")}}, ValueError, "['check']['max']"),
-            ({"check": np.float64("nan")}, ValueError, "['check']"),
+            ({"check": {"max": float("inf")}}, ValueError, "['check']['max']"),
             ({"files": {1: "a", "b": "c"}}, TypeError, "['files']"),
         ],
-        ids=["ndarray", "set", "unhashable", "nan", "numpy-nan", "mixed-keys"],
+        ids=[
+            "ndarray",
+            "numpy-scalar",
+            "decimal",
+            "nat",
+            "frozenset",
+            "custom-eq",
+            "nan",
+            "inf",
+            "non-str-key",
+        ],
     )
-    def test_provenance_refuses_values_that_cannot_hash_stably(
+    def test_provenance_refuses_values_outside_the_allowlist(
         self, provenance, error, where
     ):
-        """Fails if a record that would crash hashing or retrace every call
-        is accepted at construction, or the refusal does not name the key.
+        """Fails if a value outside the allowlist is accepted at construction,
+        or the refusal does not name the key path.
 
-        Truth source: the hashing contract of a static field; an array or a
-        set cannot be hashed, NaN is unequal to itself, and keys of mixed
-        types cannot be sorted. The record names the key; the band refuses
-        it at construction (for mixed keys, JAX's own walk of the dataclass
-        arguments refuses it first). No tolerance.
+        Truth source: the hashing contract of a static field. Only exact
+        ``str``, ``bool``, ``int``, finite ``float`` and ``None`` hash and
+        compare stably; a NumPy scalar, a ``Decimal``, NaT or a frozenset can
+        hold NaN, and a custom ``__eq__`` may not return a bool, so each
+        retraces or breaks ``jax.jit``. Keys are strings. The record names
+        the key path; the band refuses it at construction (for a non-string
+        key next to a string one, JAX's own walk of the dataclass arguments
+        refuses it first). Cases are microsecond constructions with no
+        compile. No tolerance.
         """
         with pytest.raises(error, match=re.escape("provenance" + where)):
             _Provenance(provenance)
