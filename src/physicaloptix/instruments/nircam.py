@@ -364,15 +364,41 @@ class _Provenance(Mapping):
 
     Holds the sorted items of a mapping, nested mappings and lists frozen
     recursively (lists become tuples), so a module can carry it as a static
-    field and pass through ``jax.jit`` without it becoming leaves.
+    field and pass through ``jax.jit`` without it becoming leaves. Equal
+    content gives equal hashes, so equal records never retrace.
+
+    Values must hash stably: strings, numbers, None and other hashable
+    objects, and mappings, lists and tuples of them. NumPy arrays, sets and
+    other unhashable values are refused, and so are NaN numbers, which are
+    unequal to themselves and would retrace on every call. The keys of one
+    mapping share one type that can be ordered.
 
     Args:
         items: A mapping or pairs to freeze.
+        _path: Where this record sits, for the refusal messages; set by the
+            enclosing record.
+
+    Raises:
+        TypeError: If a value cannot be hashed, or the keys of a mapping mix
+            types or cannot be ordered; the message names the key.
+        ValueError: If a value is NaN; the message names the key.
     """
 
-    def __init__(self, items=()):
+    def __init__(self, items=(), *, _path="provenance"):
         data = dict(items)
-        self._items = tuple(sorted((k, _freeze(v)) for k, v in data.items()))
+        if len({type(k) for k in data}) > 1:
+            kinds = sorted({type(k).__name__ for k in data})
+            raise TypeError(
+                f"{_path} mixes key types {kinds}; use keys of one type, "
+                "such as strings"
+            )
+        try:
+            keys = sorted(data)
+        except TypeError as err:
+            raise TypeError(f"{_path} has keys that cannot be ordered: {err}") from err
+        for key in keys:
+            _require_stable(key, f"{_path} key {key!r}")
+        self._items = tuple((k, _freeze(data[k], f"{_path}[{k!r}]")) for k in keys)
         self._lookup = dict(self._items)
 
     def __getitem__(self, key):
@@ -391,11 +417,27 @@ class _Provenance(Mapping):
         return f"{type(self).__name__}({dict(self._items)!r})"
 
 
-def _freeze(value):
+def _require_stable(value, path):
+    """Refuse a value whose hash or equality is not stable across calls."""
+    try:
+        hash(value)
+    except TypeError as err:
+        raise TypeError(
+            f"{path} holds an unhashable {type(value).__name__}; provenance "
+            "holds strings, numbers, None, mappings, lists and tuples"
+        ) from err
+    if isinstance(value, float | complex | np.number) and value != value:
+        raise ValueError(f"{path} is NaN; record a string such as 'nan' instead")
+
+
+def _freeze(value, path):
+    if isinstance(value, _Provenance):
+        return value
     if isinstance(value, Mapping):
-        return value if isinstance(value, _Provenance) else _Provenance(value)
-    if isinstance(value, (list, tuple)):
-        return tuple(_freeze(v) for v in value)
+        return _Provenance(value, _path=path)
+    if isinstance(value, list | tuple):
+        return tuple(_freeze(v, f"{path}[{i}]") for i, v in enumerate(value))
+    _require_stable(value, path)
     return value
 
 

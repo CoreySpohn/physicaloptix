@@ -26,6 +26,7 @@ midpoint rule; the measured orders are listed in that test.
 
 import hashlib
 import json
+import re
 from dataclasses import replace
 
 import equinox as eqx
@@ -45,6 +46,7 @@ from physicaloptix.instruments import (
     integrate_detector_pixels,
     nircam_band_image,
 )
+from physicaloptix.instruments.nircam import _Provenance
 
 ARCSEC_TO_RAD = np.pi / (180.0 * 3600.0)
 NM_TO_M = 1e-9
@@ -480,6 +482,68 @@ class TestBandFromBundle:
         assert all(isinstance(leaf, jax.Array) for leaf in leaves)
         assert isinstance(hash(band.provenance), int)
         assert float(eqx.filter_jit(lambda b: b.si_opd_nm.sum())(band)) != 0.0
+
+    def test_provenance_traces_once_over_equal_content(self):
+        """Fails if equal provenance records hash or compare unequal.
+
+        Truth source: a trace counter under ``eqx.filter_jit``. Three bands
+        whose records differ only in key order and list versus tuple trace
+        once; a record with other content traces again. The record reads by
+        key and spreads with ``**``. Counts are exact.
+        """
+        traces = []
+
+        @eqx.filter_jit
+        def total(band):
+            traces.append(None)
+            return band.si_opd_nm.sum()
+
+        def band(provenance):
+            return NIRCamBand(
+                wavelengths_nm=(3300.0,),
+                weights=(1.0,),
+                si_opd_nm=jnp.zeros((1, 4, 4)),
+                provenance=provenance,
+            )
+
+        total(band({"k": [1, 2], "s": "x", "files": {"f": {"sha256": "a"}}}))
+        total(band({"files": {"f": {"sha256": "a"}}, "s": "x", "k": (1, 2)}))
+        total(band({"s": "x", "k": [1, 2], "files": {"f": {"sha256": "a"}}}))
+        assert len(traces) == 1
+        total(band({"k": [1, 3], "s": "x", "files": {"f": {"sha256": "a"}}}))
+        assert len(traces) == 2
+        record = band({"s": "x", "files": {"f": {"sha256": "a"}}}).provenance
+        assert record["files"]["f"]["sha256"] == "a"
+        assert {**record, "t": 1} == {"s": "x", "files": record["files"], "t": 1}
+
+    @pytest.mark.parametrize(
+        ("provenance", "error", "where"),
+        [
+            ({"files": {"f": np.arange(3)}}, TypeError, "['files']['f']"),
+            ({"tags": {1, 2}}, TypeError, "['tags']"),
+            ({"raw": [bytearray(b"x")]}, TypeError, "['raw'][0]"),
+            ({"check": {"max": float("nan")}}, ValueError, "['check']['max']"),
+            ({"check": np.float64("nan")}, ValueError, "['check']"),
+            ({"files": {1: "a", "b": "c"}}, TypeError, "['files']"),
+        ],
+        ids=["ndarray", "set", "unhashable", "nan", "numpy-nan", "mixed-keys"],
+    )
+    def test_provenance_refuses_values_that_cannot_hash_stably(
+        self, provenance, error, where
+    ):
+        """Fails if a record that would crash hashing or retrace every call
+        is accepted at construction, or the refusal does not name the key.
+
+        Truth source: the hashing contract of a static field; an array or a
+        set cannot be hashed, NaN is unequal to itself, and keys of mixed
+        types cannot be sorted. The record names the key; the band refuses
+        it at construction (for mixed keys, JAX's own walk of the dataclass
+        arguments refuses it first). No tolerance.
+        """
+        with pytest.raises(error, match=re.escape("provenance" + where)):
+            _Provenance(provenance)
+        with pytest.raises((TypeError, ValueError)):
+            NIRCamBand(wavelengths_nm=(3300.0,), weights=(1.0,), provenance=provenance)
 
     def test_bundle_without_si_gives_no_cube(self, tmp_path):
         bundle, _ = _write_band_bundle(tmp_path, si=False)
