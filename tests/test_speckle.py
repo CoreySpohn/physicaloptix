@@ -96,7 +96,8 @@ class TestSpeckleProcess:
         assert field.response is proc.response
         assert field.epoch_d == proc.epoch_d
         time_d = field.epoch_d + 10.0 * s2d
-        m = field.realize(wavelength_nm=1000.0, time_d=time_d).data
+        elapsed = field.elapsed_s(time_d)
+        m = field.realize(wavelength_nm=1000.0, elapsed_s=elapsed).data
         assert m.shape == (_DIMS, _DIMS)
         # Day subtraction at epoch 2 has <4e-11 s roundoff; the phase
         # error at this test's frequencies is below 1e-12 radians.
@@ -106,7 +107,7 @@ class TestSpeckleProcess:
             axis=-1,
         )
         np.testing.assert_allclose(
-            field.coefficients(time_d), expected, rtol=0, atol=1e-12
+            field.coefficients(elapsed_s=elapsed), expected, rtol=0, atol=1e-12
         )
 
     def test_draw_is_reproducible_and_key_dependent(self):
@@ -253,7 +254,7 @@ class TestPerModePSD:
 
         def two_times(key):
             field = proc.draw(key)
-            return field.coefficients((0.0) * s2d), field.coefficients((lag) * s2d)
+            return field.coefficients(elapsed_s=0.0), field.coefficients(elapsed_s=lag)
 
         e0, elag = jax.vmap(two_times)(keys)  # (N, 2)
         autocorr = jnp.mean(e0 * elag, axis=0) / proc.per_mode_rms**2
@@ -308,7 +309,7 @@ class TestTemporalKernel:
         def two_times(key):
             field = proc.draw(key)
             return jnp.stack(
-                [field.coefficients((float(t)) * s2d) for t in [0.0, *lags.tolist()]]
+                [field.coefficients(elapsed_s=float(t)) for t in [0.0, *lags.tolist()]]
             )
 
         eps = jax.vmap(two_times)(keys)  # (N, 1 + n_lags, m)
@@ -420,7 +421,7 @@ class TestMoments:
             return jax.vmap(
                 lambda k: (
                     proc.draw(k, renormalize=False)
-                    .realize(wavelength_nm=1000.0, time_d=0.0 * s2d)
+                    .realize(wavelength_nm=1000.0, elapsed_s=0.0)
                     .data
                 )
             )(keys)
@@ -453,8 +454,8 @@ class TestMoments:
         def ensemble(keys):
             def one(key):
                 field = proc.draw(key, renormalize=True)
-                delta = field.realize(wavelength_nm=1000.0, time_d=0.0 * s2d).data
-                return delta, field.coefficients((0.0) * s2d), field.amplitudes
+                delta = field.realize(wavelength_nm=1000.0, elapsed_s=0.0).data
+                return delta, field.coefficients(elapsed_s=0.0), field.amplitudes
 
             return jax.vmap(one)(keys)
 
@@ -536,8 +537,8 @@ class TestMoments:
         def ensemble(keys):
             def one(key):
                 field = proc.draw(key, renormalize=True)
-                delta = field.realize(wavelength_nm=1000.0, time_d=0.0 * s2d).data
-                return delta, field.coefficients((0.0) * s2d)
+                delta = field.realize(wavelength_nm=1000.0, elapsed_s=0.0).data
+                return delta, field.coefficients(elapsed_s=0.0)
 
             return jax.vmap(one)(keys)
 
@@ -622,11 +623,12 @@ class TestExposureNeff:
         times = jnp.asarray(np.linspace(0.0, exposure, 400))
 
         keys = jax.random.split(jax.random.PRNGKey(3), 3000)
-        eps = jax.vmap(
-            lambda k: jax.vmap(proc.draw(k, renormalize=False).coefficients)(
-                times * s2d
-            )
-        )(keys)  # (n, t, m)
+
+        def trajectory(key):
+            field = proc.draw(key, renormalize=False)
+            return jax.vmap(lambda t: field.coefficients(elapsed_s=t))(times)
+
+        eps = jax.vmap(trajectory)(keys)  # (n, t, m)
         measured = np.asarray(eps.mean(axis=1).var(axis=0) / eps[:, 0, :].var(axis=0))
         predicted = 1.0 / np.asarray(proc.exposure_neff(exposure))
         np.testing.assert_allclose(measured, predicted, rtol=0.12)
@@ -700,7 +702,8 @@ class TestRealizedSpectrum:
         times = jnp.arange(self.N_T) * self.DT
         cumulative = []
         for key in jax.random.split(jax.random.PRNGKey(0), self.N_DRAWS):
-            eps = jax.vmap(proc.draw(key, renormalize=False).coefficients)(times * s2d)
+            field = proc.draw(key, renormalize=False)
+            eps = jax.vmap(lambda t, f=field: f.coefficients(elapsed_s=t))(times)
             series = np.array(eps)[:, 0]
             power = np.abs(np.fft.rfft(series - series.mean())) ** 2
             cumulative.append(np.cumsum(power) / power.sum())
@@ -767,19 +770,19 @@ class TestFluxFractionNormalization:
         """realize == raw intensity delta * du^2 / E_in, from primitives."""
         sp = _field()
         t = 10.0
-        g_eps = jnp.tensordot(sp.coefficients((t) * s2d), sp.response.G, axes=1)
+        g_eps = jnp.tensordot(sp.coefficients(elapsed_s=t), sp.response.G, axes=1)
         expected = jnp.abs(g_eps) ** 2 * sp.grid.pixel_area / sp.response.input_energy
-        got = sp.realize(wavelength_nm=1000.0, time_d=t * s2d).data
+        got = sp.realize(wavelength_nm=1000.0, elapsed_s=t).data
         np.testing.assert_allclose(
             np.asarray(got), np.asarray(expected), rtol=0, atol=1e-15
         )
 
     def test_peak_contrast_is_the_rescaled_view(self):
         sp = _field(coherent=True)
-        frac = sp.realize(wavelength_nm=1000.0, time_d=5.0 * s2d).data
+        frac = sp.realize(wavelength_nm=1000.0, elapsed_s=5.0).data
         peak = 0.7  # any caller-supplied telescope peak intensity density
         contrast = sp.peak_contrast(
-            telescope_peak=peak, wavelength_nm=1000.0, time_d=5.0 * s2d
+            telescope_peak=peak, wavelength_nm=1000.0, elapsed_s=5.0
         )
         np.testing.assert_allclose(
             np.asarray(contrast),
@@ -846,7 +849,7 @@ class TestChromaticProcess:
         )
         field = process.draw(jax.random.PRNGKey(1))
         assert field.wavelengths_nm is not None
-        eps = field.coefficients((0.0) * s2d)
+        eps = field.coefficients(elapsed_s=0.0)
         expected0 = jnp.abs(jnp.tensordot(eps, g[0], axes=1)) ** 2
         np.testing.assert_allclose(
             field.realize(wavelength_nm=500.0).data, expected0, rtol=0, atol=1e-12
@@ -1048,7 +1051,7 @@ class TestSeamIdentity:
             jnp.broadcast_to(jnp.asarray(lin.input_energy), wavelengths.shape)
         )
         for w, wl in enumerate(wavelengths):
-            delta = field.realize(wavelength_nm=float(wl), time_d=0.0 * s2d).data
+            delta = field.realize(wavelength_nm=float(wl), elapsed_s=0.0).data
             direct = (
                 (jnp.abs(exact[w]) ** 2 - jnp.abs(lin.e_nom[w]) ** 2) * du2 / e_in[w]
             )
@@ -1144,10 +1147,10 @@ class TestCrossBandMoments:
         def sample(key):
             f = proc.draw(key, renormalize=False)
             d0 = jnp.stack(
-                [f.realize(wavelength_nm=v, time_d=0.0 * s2d).data for v in self._WLS]
+                [f.realize(wavelength_nm=v, elapsed_s=0.0).data for v in self._WLS]
             )
             d1 = jnp.stack(
-                [f.realize(wavelength_nm=v, time_d=tau * s2d).data for v in self._WLS]
+                [f.realize(wavelength_nm=v, elapsed_s=tau).data for v in self._WLS]
             )
             return d0, d1
 
@@ -1390,7 +1393,7 @@ class TestCrossBandViews:
         def sample(key):
             f = proc.draw(key, renormalize=False)
             d = jnp.stack(
-                [f.realize(wavelength_nm=v, time_d=0.0 * s2d).data for v in self._WLS]
+                [f.realize(wavelength_nm=v, elapsed_s=0.0).data for v in self._WLS]
             )
             return d[:, 0, jnp.array([3, 9])]  # (w, 2)
 
@@ -1637,7 +1640,7 @@ def test_shared_law_matches_density_parent_formula(record_property):
     parent = (
         (2 * np.real(np.conj(e) * increment) + np.abs(increment) ** 2) * 0.3**2 / 4.0
     )
-    image = field.realize(wavelength_nm=500.0, time_d=seconds * s2d)
+    image = field.realize(wavelength_nm=500.0, elapsed_s=seconds)
     assert isinstance(field, ox.LinearSpeckleField)
     assert AnalyticSpeckleField.realize is ox.LinearSpeckleField.realize
     assert AnalyticSpeckleField.broadened is ox.LinearSpeckleField.broadened
@@ -1655,9 +1658,7 @@ def test_shared_law_matches_density_parent_formula(record_property):
     record_property("shared_pixel", float(image.data[0, 0]))
     record_property("max_abs_difference", float(np.max(np.abs(image.data - parent))))
     # The inherited law stays traceable and differentiable through this synthesis.
-    fn = jax.jit(
-        lambda t: field.realize(wavelength_nm=500.0, time_d=t * s2d).data.sum()
-    )
+    fn = jax.jit(lambda t: field.realize(wavelength_nm=500.0, elapsed_s=t).data.sum())
     np.testing.assert_allclose(fn(seconds), np.sum(parent), rtol=1e-14, atol=0)
     h = 1e-3  # central-difference O((2*pi*f*h)^2), below 1e-7 here
     np.testing.assert_allclose(
@@ -1669,10 +1670,11 @@ def test_shared_law_matches_density_parent_formula(record_property):
 
 
 def test_synthesis_clock_origin_and_time_axes():
-    """Fails if absolute days reach the Hz synthesis or time axes pair modes.
+    """Fails if scene days reach the Hz synthesis or time axes pair modes.
 
-    Basis: identical elapsed clocks, 8 ulps of absolute day rounding times
-    the maximum phase derivative; timestamps promoted before adding offsets.
+    Truth: the field anchored at zero read at the elapsed seconds. Basis: 8
+    ulps of the binary64 scene time at day 17, converted to seconds, times the
+    maximum phase derivative.
     """
     field = _field(coherent=True)
     # Static epoch is a constructor argument, never a float32 device scalar.
@@ -1683,9 +1685,9 @@ def test_synthesis_clock_origin_and_time_axes():
         frequencies_hz=field.frequencies_hz,
         phases=field.phases,
     )
-    offsets = jnp.asarray([1e-6, 3e-5, 2e-4], dtype=jnp.float64)
-    expected = field.coefficients(offsets)
-    actual = shifted.coefficients(jnp.asarray(17.0, dtype=jnp.float64) + offsets)
+    offsets = np.array([0.1, 2.5, 17.0])
+    expected = field.coefficients(elapsed_s=offsets)
+    actual = shifted.coefficients(elapsed_s=shifted.elapsed_s(17.0 + offsets * s2d))
     bound = (
         8
         * np.spacing(17.0)
@@ -1698,11 +1700,74 @@ def test_synthesis_clock_origin_and_time_axes():
     np.testing.assert_array_less(
         np.abs(actual - expected), np.broadcast_to(bound, actual.shape)
     )
-    image = shifted.realize(
-        wavelength_nm=jnp.array([500.0, 1000.0]), time_d=17.0 + offsets
-    )
+    image = shifted.realize(wavelength_nm=jnp.array([500.0, 1000.0]), elapsed_s=offsets)
     assert image.data.shape == (2, 3, _DIMS, _DIMS)
     assert image.leading_axes == ("wavelength", "time_0")
+
+
+@pytest.mark.parametrize("chromatic", [False, True], ids=["analytic", "chromatic"])
+@pytest.mark.parametrize("x64", [False, True], ids=["x32", "x64"])
+def test_fields_run_on_their_own_clock(chromatic, x64):
+    """Fails if a field reads ``epoch_d``, overrides the kernel or takes days.
+
+    Truth: the same field anchored at zero. Two fields that differ only in
+    ``epoch_d`` (0 and 60000.123) give bitwise equal coefficients and images
+    at each elapsed second, eagerly and compiled, and ``peak_contrast``
+    agrees. The kernel is the interface's own, and a positional time or a
+    ``time_d`` keyword raises. Eager against ``eqx.filter_jit``: tolerance
+    basis floating-point, 8 eps of the sum over frequencies of amplitude
+    times (1 + cosine argument), because the compiled program contracts
+    multiply-adds (one rounding fewer). The times are off the float32 grid,
+    so a branch that casts a JAX array through float32 fails the x64
+    comparison.
+    """
+    from dataclasses import replace
+
+    import equinox as eqx
+    from optixstuff.speckle import AbstractSpeckleField
+
+    with jax.enable_x64(x64):
+        if chromatic:
+            zero = _chromatic_process(True).draw(jax.random.PRNGKey(0))
+            wavelength_nm = _CROSS_WLS[1]
+        else:
+            zero = _field(coherent=True)
+            wavelength_nm = 1000.0
+        anchored = replace(zero, epoch_d=60000.123)
+        assert anchored.epoch_d == 60000.123
+        assert type(anchored).elapsed_s is AbstractSpeckleField.elapsed_s
+        coefficients = eqx.filter_jit(lambda f, t: f.coefficients(elapsed_s=t))
+        realize = eqx.filter_jit(
+            lambda f, t: f.realize(wavelength_nm=wavelength_nm, elapsed_s=t).data
+        )
+        eps = float(jnp.finfo(jnp.float64 if x64 else jnp.float32).eps)
+        times = np.array([0.0, 7.1, 130.3])
+        argument = 2 * np.pi * np.asarray(zero.frequencies_hz) * times[
+            :, None, None
+        ] + np.asarray(zero.phases)
+        scale = np.sum(np.abs(np.asarray(zero.amplitudes)) * (1 + np.abs(argument)), -1)
+        eager = zero.coefficients(elapsed_s=times)
+        np.testing.assert_array_equal(anchored.coefficients(elapsed_s=times), eager)
+        compiled = coefficients(zero, jnp.asarray(times))
+        np.testing.assert_array_equal(
+            coefficients(anchored, jnp.asarray(times)), compiled
+        )
+        np.testing.assert_array_less(np.abs(compiled - eager), 8 * eps * scale)
+        np.testing.assert_array_equal(
+            anchored.realize(wavelength_nm=wavelength_nm, elapsed_s=times).data,
+            zero.realize(wavelength_nm=wavelength_nm, elapsed_s=times).data,
+        )
+        np.testing.assert_array_equal(
+            realize(anchored, jnp.asarray(times)), realize(zero, jnp.asarray(times))
+        )
+        peak = dict(telescope_peak=2.0, wavelength_nm=wavelength_nm, elapsed_s=7.0)
+        np.testing.assert_array_equal(
+            anchored.peak_contrast(**peak), zero.peak_contrast(**peak)
+        )
+        with pytest.raises(TypeError):
+            anchored.coefficients(1.0)
+        with pytest.raises(TypeError):
+            anchored.realize(wavelength_nm=wavelength_nm, time_d=1.0)
 
 
 def test_broadened_equals_explicit_node_sum():
@@ -1717,7 +1782,7 @@ def test_broadened_equals_explicit_node_sum():
         _field(coherent=True),
         _chromatic_process(True).draw(jax.random.PRNGKey(0)),
     )
-    times = jnp.array([0.0, 13 * s2d])
+    times = jnp.array([0.0, 13.0])
     for field in fields:
         expected_breaks = getattr(field, "wavelengths_nm", ())
         np.testing.assert_array_equal(field.spectral_breaks_nm(), expected_breaks)
@@ -1728,12 +1793,12 @@ def test_broadened_equals_explicit_node_sum():
         ):
             expected.append(
                 sum(
-                    weight * field.realize(wavelength_nm=node, time_d=times).data
+                    weight * field.realize(wavelength_nm=node, elapsed_s=times).data
                     for node, weight in zip(nodes, weights, strict=True)
                 )
                 / weights.sum()
             )
-        image = field.broadened(quadrature=quadrature, time_d=times)
+        image = field.broadened(quadrature=quadrature, elapsed_s=times)
         np.testing.assert_allclose(
             image.data,
             jnp.stack(expected),
@@ -1745,7 +1810,7 @@ def test_broadened_equals_explicit_node_sum():
         # Inherited midpoint average also retains Image geometry and metadata.
         average = field.realize_average(wavelength_nm=550.0, exposure_s=4.0, n_sub=2)
         midpoint = (
-            sum(field.realize(wavelength_nm=550.0, time_d=t * s2d).data for t in (1, 3))
+            sum(field.realize(wavelength_nm=550.0, elapsed_s=t).data for t in (1, 3))
             / 2
         )
         np.testing.assert_allclose(
@@ -1819,5 +1884,5 @@ def test_data_mask_contract(chromatic):
         return
     mask = np.asarray(mask)
     assert mask.dtype == bool and mask.shape == field.grid.shape
-    data = np.asarray(field.realize(wavelength_nm=wavelength_nm, time_d=3.0).data)
+    data = np.asarray(field.realize(wavelength_nm=wavelength_nm, elapsed_s=3.0).data)
     assert np.all(data[..., ~mask] == 0.0)

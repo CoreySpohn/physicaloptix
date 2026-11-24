@@ -12,7 +12,6 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from hwoutils.constants import d2s
 from jaxtyping import Array
 from optixstuff import FocalResponse, LinearSpeckleField
 from optixstuff.grids import PixelGrid
@@ -127,34 +126,37 @@ class AnalyticSpeckleField(LinearSpeckleField):
     frequencies_hz: Array
     phases: Array
 
-    def coefficients(self, time_d):
-        """Synthesize ``(*time_shape, n_modes)`` coefficients at absolute days.
+    def coefficients(self, *, elapsed_s):
+        """Synthesize ``(*time_shape, n_modes)`` coefficients at ``elapsed_s``.
+
+        ``elapsed_s`` is seconds since the clock origin:
+        ``sum_f amplitudes * cos(2 pi frequencies_hz * elapsed_s + phases)``.
 
         Args:
-            time_d: Absolute times in days; any shape.
+            elapsed_s: Seconds since the field's clock origin; any shape.
 
         Returns:
             Mode coefficients of shape (*time_shape, n_modes), in the mode units of the
             response.
         """
-        t = (jnp.asarray(time_d, dtype=float) - self.epoch_d) * d2s
+        t = jnp.asarray(elapsed_s, dtype=float)
         phase = 2.0 * jnp.pi * self.frequencies_hz * t[..., None, None] + self.phases
         return jnp.sum(self.amplitudes * jnp.cos(phase), axis=-1)
 
-    def peak_contrast(self, *, telescope_peak, wavelength_nm, time_d=0.0):
+    def peak_contrast(self, *, telescope_peak, wavelength_nm, elapsed_s=0.0):
         """Peak-referenced delta; telescope_peak is an intensity density.
 
         Args:
             telescope_peak: Peak intensity density of the unocculted telescope PSF on
                 the same grid, as returned by telescope_peak.
             wavelength_nm: Wavelength in nanometers.
-            time_d: Absolute time in days.
+            elapsed_s: Seconds since the field's clock origin.
 
         Returns:
             Delta map referenced to the telescope peak (dimensionless contrast), on the
             grid of the response.
         """
-        delta = self.realize(wavelength_nm=wavelength_nm, time_d=time_d)
+        delta = self.realize(wavelength_nm=wavelength_nm, elapsed_s=elapsed_s)
         return (
             delta.data
             * self.response.input_energy
@@ -251,13 +253,13 @@ class ChromaticAnalyticSpeckleField(AnalyticSpeckleField):
             phases=self.phases,
         )
 
-    def realize(self, *, wavelength_nm, time_d=0.0):
+    def realize(self, *, wavelength_nm, elapsed_s=0.0):
         """Evaluate every requested node through LinearSpeckleField.realize.
 
         Args:
             wavelength_nm: Wavelength in nanometers: a scalar, or an array whose axes
                 become leading axes of the result.
-            time_d: Absolute time in days.
+            elapsed_s: Seconds since the field's clock origin.
 
         Returns:
             Flux-fraction delta image on the response grid, with the wavelength axes
@@ -267,7 +269,7 @@ class ChromaticAnalyticSpeckleField(AnalyticSpeckleField):
 
         def node(wavelength):
             return self.at_wavelength(wavelength).realize(
-                wavelength_nm=wavelength, time_d=time_d
+                wavelength_nm=wavelength, elapsed_s=elapsed_s
             )
 
         if wavelengths.ndim == 0:
@@ -286,21 +288,23 @@ class ChromaticAnalyticSpeckleField(AnalyticSpeckleField):
             leading_axes=axes + images.leading_axes,
         )
 
-    def peak_contrast(self, *, telescope_peak, wavelength_nm, time_d=0.0):
+    def peak_contrast(self, *, telescope_peak, wavelength_nm, elapsed_s=0.0):
         """Peak contrast at a scalar wavelength using its interpolated energy.
 
         Args:
             telescope_peak: Peak intensity density of the unocculted telescope PSF on
                 the same grid.
             wavelength_nm: Scalar wavelength in nanometers.
-            time_d: Absolute time in days.
+            elapsed_s: Seconds since the field's clock origin.
 
         Returns:
             Delta map referenced to the telescope peak (dimensionless contrast), on the
             grid of the response.
         """
         return self.at_wavelength(jnp.asarray(wavelength_nm)).peak_contrast(
-            telescope_peak=telescope_peak, wavelength_nm=wavelength_nm, time_d=time_d
+            telescope_peak=telescope_peak,
+            wavelength_nm=wavelength_nm,
+            elapsed_s=elapsed_s,
         )
 
 

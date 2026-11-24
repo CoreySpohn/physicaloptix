@@ -6,7 +6,6 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TEST_FRAME
-from hwoutils.constants import s2d
 from jax.test_util import check_grads
 from optixstuff.grids import PixelGrid
 from optixstuff.spectral import Band, Quadrature
@@ -179,7 +178,7 @@ class TestSpeckleBridge:
         assert isinstance(process, SpeckleProcess)
         np.testing.assert_array_equal(np.asarray(process.response.G), np.asarray(lin.G))
         speckle_field = process.draw(jax.random.PRNGKey(0))
-        delta = speckle_field.realize(wavelength_nm=WL_NM, time_d=0.0 * s2d).data
+        delta = speckle_field.realize(wavelength_nm=WL_NM, elapsed_s=0.0).data
         assert delta.shape == lin.e_nom.shape
 
 
@@ -222,8 +221,8 @@ def test_realize_is_flux_fraction_end_to_end(setup):
     process = lin.to_speckle_process(per_mode_rms=0.01, knee_hz=1e-3)
     drawn = process.draw(jax.random.PRNGKey(0))
     t = 30.0
-    got = drawn.realize(wavelength_nm=WL_NM, time_d=t * s2d).data
-    g_eps = jnp.tensordot(drawn.coefficients((t) * s2d), lin.G, axes=1)
+    got = drawn.realize(wavelength_nm=WL_NM, elapsed_s=t).data
+    g_eps = jnp.tensordot(drawn.coefficients(elapsed_s=t), lin.G, axes=1)
     du2 = 0.5**2  # the focal grid's cell area, from the fixture
     e_in = float(field.energy())
     expected = jnp.abs(g_eps) ** 2 * du2 / e_in
@@ -340,7 +339,7 @@ class TestChromaticLinearize:
         field = lin.to_speckle_process(
             per_mode_rms=0.2, knee_hz=1e-3, coherent=True
         ).draw(jax.random.PRNGKey(0))
-        eps = field.coefficients(0.0)
+        eps = field.coefficients(elapsed_s=0.0)
         exact_node = field.realize(wavelength_nm=wavelengths[-1]).data
         increment = jnp.einsum("m,myx->yx", eps, lin.G[-1])
         parent = (

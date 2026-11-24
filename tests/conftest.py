@@ -8,7 +8,6 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from hwoutils import enable_x64, set_platform
-from hwoutils.constants import d2s
 from hypothesis import settings
 from optixstuff import FocalResponse
 from optixstuff.grids import Frame, PixelGrid
@@ -153,7 +152,7 @@ class ProtocolFake:
     def __init__(self):
         self.calls = 0
 
-    def realize(self, *, wavelength_nm, time_d=0.0):
+    def realize(self, *, wavelength_nm, elapsed_s=0.0):
         # Asymmetric in x/y AND time-varying: a uniform or static fixture
         # cannot tell a shared norm from a per-panel one, nor an x/y
         # conflation from a correct one.
@@ -162,9 +161,7 @@ class ProtocolFake:
         from optixstuff.grids import Image, Measure
 
         return Image(
-            jnp.asarray(
-                1e-9 * (1.0 + 0.5 * np.sin(time_d * d2s)) * (1.0 + x + 3.0 * y)
-            ),
+            jnp.asarray(1e-9 * (1.0 + 0.5 * np.sin(elapsed_s)) * (1.0 + x + 3.0 * y)),
             self.grid,
             (),
             Measure.integral(),

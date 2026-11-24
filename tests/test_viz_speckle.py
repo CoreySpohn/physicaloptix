@@ -3,7 +3,6 @@
 import jax.numpy as jnp
 import matplotlib
 from conftest import speckle_grid
-from hwoutils.constants import s2d
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -533,7 +532,9 @@ def test_field_ellipse_consumes_delta_e_from_a_real_field():
     draws = np.stack(
         [
             np.asarray(
-                jnp.einsum("m,myx->yx", field.coefficients(t * s2d), field.response.G)
+                jnp.einsum(
+                    "m,myx->yx", field.coefficients(elapsed_s=t), field.response.G
+                )
             )
             for t in times
         ]

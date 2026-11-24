@@ -530,7 +530,7 @@ def plot_field_ellipse(
     ``roles.model``, the empirical cloud ``roles.measured``.
 
     At the reference wavelength, build complex increments from the public
-    coefficients as ``np.einsum("tm,myx->tyx", field.coefficients(times_d),
+    coefficients as ``np.einsum("tm,myx->tyx", field.coefficients(elapsed_s=times_s),
     field.response.per_pixel()[1])``. For a propagated chromatic field first use
     ``field.at_wavelength(w)`` and include its reference/w phase factor.
 

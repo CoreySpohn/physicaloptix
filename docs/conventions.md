@@ -316,10 +316,10 @@ processes draw `ChromaticAnalyticSpeckleField`, retaining every stored
 complex `e_nom` and `G` node and input energy. Queries interpolate amplitudes
 linearly with clamped endpoints, then delegate to the shared law. At stored
 nodes the propagated values are exact; between nodes this is an
-interpolation approximation. `broadened(quadrature=..., time_d=...)` returns
+interpolation approximation. `broadened(quadrature=..., elapsed_s=...)` returns
 an `Image` of the normalized node sum at fixed native lambda/D coordinates.
 For detector photometry, resample each node at its wavelength before
-spectral weighting. `coefficients(time_d)` replaces the old coefficient
+spectral weighting. `coefficients(elapsed_s=...)` replaces the old coefficient
 accessors; complex increments can be formed by contracting these with the Jacobian from
 `response.per_pixel()` and applying the wavelength factor. Raw moment kernels are named
 `gamma_pixel_map`, `p_pixel_map`, and `var_x_pixel_map` in energy/pixel units.
@@ -329,10 +329,12 @@ phases, after which `realize` is deterministic and differentiable in time --
 realizations vary by key, never by repeated calls at the same time. The
 temporal PSD is the knee form $(1 + (f/f_{\mathrm{knee}})^2)^{s/2}$, and a
 decorrelation time $\tau$ maps to $f_{\mathrm{knee}} = 1/(2\pi\tau)$ (the
-Ornstein-Uhlenbeck identification, exact for $s = -2$). `epoch_d` anchors
-the clock in days from the scene epoch and defaults to 0.0. Promote absolute
-timestamps to float64 before adding small offsets; synthesis subtracts the
-static binary64 epoch before converting elapsed days to seconds.
+Ornstein-Uhlenbeck identification, exact for $s = -2$). A field runs on
+its own clock: its methods take `elapsed_s`, seconds since the clock origin,
+and synthesis never reads `epoch_d`. `epoch_d` places that origin on the scene
+clock in days from the scene epoch and defaults to 0.0; `field.elapsed_s(time_d)`
+converts scene days, subtracting the static binary64 epoch, and refuses a
+float32 time at a nonzero epoch.
 
 Two draw statistics exist, and the defaults straddle them:
 `draw(renormalize=True)` (the default) honors the wavefront-error budget
@@ -382,5 +384,5 @@ the records are sampled. The adapter exposes
 its native `grid` and prepares `curves(Circular(0.7))` and
 `curves(HalfMaximum(0.5))`; request additional aperture rules with `rules=`.
 All coronagraph image methods take a target `PixelGrid`. Scalar performance
-and speckle methods take `time_d`; visualization `times_s` are second offsets
-from the speckle field epoch and are converted with `hwoutils.constants.s2d`.
+methods take `time_d`; speckle methods take `elapsed_s`, seconds on the field's
+own clock, and visualization `times_s` are passed to them unchanged.

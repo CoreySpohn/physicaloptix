@@ -7,7 +7,6 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TEST_FRAME, speckle_grid
-from hwoutils.constants import s2d
 from optixstuff import FocalResponse
 from optixstuff.grids import PixelGrid
 
@@ -118,7 +117,7 @@ class TestMonteCarloConsistency:
         total = np.zeros((n, n))
         for key in keys:
             field = process.draw(key)
-            eps = field.coefficients((0.0) * s2d)
+            eps = field.coefficients(elapsed_s=0.0)
             e = e_nom + jnp.tensordot(eps, g, axes=1)
             total += np.asarray(jnp.abs(e) ** 2)
         mean = total / len(keys)

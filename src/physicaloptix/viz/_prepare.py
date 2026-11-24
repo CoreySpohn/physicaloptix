@@ -46,7 +46,7 @@ from eyepiece.prepared import (
     Sequence,
     resolve_bounds,
 )
-from hwoutils.constants import d2s, s2d
+from hwoutils.constants import d2s
 from optixstuff.grids import PixelGrid
 
 # Stable element IDs of a prepared speckle view. The image, its acquisition
@@ -241,10 +241,7 @@ def _protocol_cube(
     )
 
     def evaluate(t):
-        image = field.realize(
-            wavelength_nm=wavelength_nm,
-            time_d=getattr(field, "epoch_d", 0.0) + float(t) * s2d,
-        )
+        image = field.realize(wavelength_nm=wavelength_nm, elapsed_s=float(t))
         frame = np.asarray(image.data)
         if floor_map is not None:
             frame = frame + floor_map
@@ -505,7 +502,7 @@ def prepare_speckles(
 
     Args:
         field_or_cube: A speckle field implementing ``realize(wavelength_nm=,
-            time_d=) -> Image`` with its own grid; or a
+            elapsed_s=) -> Image`` with its own grid; or a
             precomputed ``(n_t, y, x)`` array (a ``numpy.ma.MaskedArray``'s
             mask is captured as validity). A field is evaluated once per
             epoch into one allocated cube; a bare array is borrowed as given
