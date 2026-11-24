@@ -29,6 +29,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.leaves import as_leaf
 from hwoutils.map_coordinates import map_coordinates
 from jax.scipy.signal import fftconvolve
 from jaxtyping import Array
@@ -349,8 +350,8 @@ class RomanCompact(eqx.Module):
             conventions as dm1_wfe_m.
     """
 
-    pupil: Array = eqx.field(converter=jnp.asarray)
-    lyot: Array = eqx.field(converter=jnp.asarray)
+    pupil: Array = eqx.field(converter=as_leaf)
+    lyot: Array = eqx.field(converter=as_leaf)
     pupil_mask: Array | None = eqx.field(converter=_optional_leaf)
     fpm: Array | None = eqx.field(converter=_optional_leaf)
     kind: str = eqx.field(static=True)

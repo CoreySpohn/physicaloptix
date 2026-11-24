@@ -109,6 +109,7 @@ import jax.numpy as jnp
 import numpy as np
 from hwoutils.constants import m2nm
 from hwoutils.conversions import arcsec_to_lambda_d, lambda_d_to_arcsec
+from hwoutils.leaves import as_leaf
 from hwoutils.radial import get_center
 from jaxtyping import Array
 from optixstuff.grids import (
@@ -131,7 +132,11 @@ from physicaloptix.elements import (
     mask_window,
     select_mask_transform,
 )
-from physicaloptix.elements.base import Element
+from physicaloptix.elements.base import (
+    Element,
+    _optional_float_leaf,
+    _optional_leaf,
+)
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.polychromatic import PolychromaticPath
 from physicaloptix.sources import PointSource, point_source
@@ -466,13 +471,13 @@ class NIRCamInputs(eqx.Module):
         provenance: Where the arrays came from (file names, checksums).
     """
 
-    pupil_amplitude: Array
+    pupil_amplitude: Array = eqx.field(converter=as_leaf)
     pupil_diameter_m: float = eqx.field(static=True)
-    ote_opd_nm: Array | None = None
+    ote_opd_nm: Array | None = eqx.field(default=None, converter=_optional_float_leaf)
     focal_mask: eqx.Module | None = None
-    lyot_amplitude: Array | None = None
-    si_opd_nm: Array | None = None
-    si_support: Array | None = None
+    lyot_amplitude: Array | None = eqx.field(default=None, converter=_optional_leaf)
+    si_opd_nm: Array | None = eqx.field(default=None, converter=_optional_float_leaf)
+    si_support: Array | None = eqx.field(default=None, converter=_optional_leaf)
     si_wavelength_nm: float | None = eqx.field(static=True, default=None)
     provenance: Mapping = eqx.field(
         static=True, default_factory=dict, converter=_Provenance
@@ -948,10 +953,6 @@ def _node_tuple(values):
     return tuple(float(v) for v in values)
 
 
-def _optional_array(value):
-    return None if value is None else jnp.asarray(value)
-
-
 class NIRCamBand(eqx.Module):
     """Wavelength nodes and photon weights of a band, with per-node SI OPDs.
 
@@ -971,7 +972,7 @@ class NIRCamBand(eqx.Module):
 
     wavelengths_nm: tuple[float, ...] = eqx.field(static=True, converter=_node_tuple)
     weights: tuple[float, ...] = eqx.field(static=True, converter=_node_tuple)
-    si_opd_nm: Array | None = eqx.field(default=None, converter=_optional_array)
+    si_opd_nm: Array | None = eqx.field(default=None, converter=_optional_float_leaf)
     provenance: Mapping = eqx.field(
         static=True, default_factory=dict, converter=_Provenance
     )

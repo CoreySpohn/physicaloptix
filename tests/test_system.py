@@ -12,6 +12,7 @@ from optixstuff.spectral import Band, Quadrature
 from physicaloptix.core import Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import SampledOptic, SampledPhaseScreen
+from physicaloptix.instruments.nircam import NIRCamBand, NIRCamInputs
 from physicaloptix.instruments.roman import RomanCompact
 from physicaloptix.instruments.roman_full import RomanFull
 from physicaloptix.path import OpticalPath, Stage
@@ -440,13 +441,13 @@ class TestOptixstuffSeam:
         assert np.all(np.isfinite(np.asarray(coronagraph.curves().throughput)))
 
 
-def _roman_compact(fpm):
-    flat = np.zeros((4, 4))
+def _roman_compact(fpm, cast):
+    flat = cast(np.zeros((4, 4)))
     return RomanCompact(
         pupil=flat,
         lyot=flat,
         pupil_mask=flat,
-        fpm=fpm,
+        fpm=cast(fpm),
         kind="hlc",
         n_small=4,
         n_big=4,
@@ -461,30 +462,48 @@ def _roman_compact(fpm):
     )
 
 
-def _leaf_cases():
+def _leaf_cases(cast):
     grid = PixelGrid.pupil(NPIX)
-    flat = np.ones((NPIX, NPIX))
+    flat = cast(np.ones((NPIX, NPIX)))
     return {
         "sampled_optic": (
-            SampledOptic(flat, grid, PlaneKind.PUPIL, shift_px=np.zeros(2)),
+            SampledOptic(flat, grid, PlaneKind.PUPIL, shift_px=cast(np.zeros(2))),
             ["transmission", "shift_px"],
-            jnp.float32,
+            "float",
         ),
         "sampled_optic_phasor": (
-            SampledOptic(flat * 1j, grid, PlaneKind.PUPIL),
+            SampledOptic(cast(np.ones((NPIX, NPIX)) * 1j), grid, PlaneKind.PUPIL),
             ["transmission"],
-            jnp.complex64,
+            "complex",
         ),
-        "phase_screen": (SampledPhaseScreen(flat, grid), ["opd_nm"], jnp.float32),
-        "point_source": (PointSource([0.0, 0.0], flux=2), ["flux"], jnp.float32),
+        "phase_screen": (SampledPhaseScreen(flat, grid), ["opd_nm"], "float"),
+        "point_source": (
+            PointSource(
+                cast([0.1, -0.2]), flux=cast(2.0), spectral_weights=cast([1.0, 0.5])
+            ),
+            ["position_arcsec", "flux", "spectral_weights"],
+            "float",
+        ),
         "beam_splitter": (
-            BeamSplitter(t=0.6, r=0.8, grid=grid, plane=PlaneKind.PUPIL),
+            BeamSplitter(t=cast(1.0), r=cast(0.0), grid=grid, plane=PlaneKind.PUPIL),
             ["t", "r"],
-            jnp.float32,
+            "float",
+        ),
+        "dichroic": (
+            BeamSplitter(
+                wavelengths_nm=cast([500.0, 600.0]),
+                transmit_table=cast([0.5, 0.25]),
+                grid=grid,
+                plane=PlaneKind.PUPIL,
+            ),
+            ["wavelengths_nm", "transmit_table"],
+            "float",
         ),
         "roman_compact": (
-            _roman_compact(np.ones((3, 3))),
+            _roman_compact(np.ones((3, 3)), cast),
             [
+                "pupil",
+                "lyot",
                 "pupil_mask",
                 "fpm",
                 "dm1_surface_m",
@@ -492,24 +511,70 @@ def _leaf_cases():
                 "dm1_wfe_m",
                 "dm2_wfe_m",
             ],
-            jnp.float32,
+            "float",
         ),
         "roman_compact_complex_mask": (
-            _roman_compact(np.ones((3, 3), complex)),
+            _roman_compact(np.ones((3, 3), complex), cast),
             ["fpm"],
-            jnp.complex64,
+            "complex",
+        ),
+        "nircam_inputs": (
+            NIRCamInputs(
+                pupil_amplitude=flat,
+                pupil_diameter_m=6.5,
+                ote_opd_nm=flat,
+                lyot_amplitude=flat,
+                si_opd_nm=flat,
+                si_support=flat,
+                si_wavelength_nm=3300.0,
+            ),
+            [
+                "pupil_amplitude",
+                "ote_opd_nm",
+                "lyot_amplitude",
+                "si_opd_nm",
+                "si_support",
+            ],
+            "float",
+        ),
+        "nircam_band": (
+            NIRCamBand(
+                wavelengths_nm=(3300.0,),
+                weights=(1.0,),
+                si_opd_nm=cast(np.zeros((1, 4, 4))),
+            ),
+            ["si_opd_nm"],
+            "float",
         ),
     }
 
 
-@pytest.mark.parametrize("case", list(_leaf_cases()))
-def test_converted_fields_are_strong_leaves_under_x32(case):
-    """Python numbers and NumPy arrays given at construction are stored as
-    strongly typed arrays of the active dtype (float32; a complex focal mask
-    stays complex64). Truth source: the leaf rule; dtypes are exact, so there
-    is no tolerance."""
-    with jax.enable_x64(False):
-        module, names, expected = _leaf_cases()[case]
+def _narrow(value):
+    """NumPy float32 or complex64, the input a float64 build must widen."""
+    return np.asarray(value, np.complex64 if np.iscomplexobj(value) else np.float32)
+
+
+def _wide(value):
+    """NumPy float64 or complex128, the input a float32 build must narrow."""
+    return np.asarray(value, complex if np.iscomplexobj(value) else float)
+
+
+@pytest.mark.parametrize(
+    ("x64", "cast"), [(False, _wide), (True, _narrow)], ids=["x32", "x64"]
+)
+@pytest.mark.parametrize("case", list(_leaf_cases(_wide)))
+def test_converted_fields_are_strong_leaves(case, x64, cast):
+    """NumPy arrays and scalars given at construction are stored as strongly
+    typed arrays of the active dtype whatever their own width: float32 (a
+    complex value complex64) under x32 from float64 input, float64 (complex128)
+    under x64 from float32 input. Truth source: the leaf rule; dtypes are
+    exact, so there is no tolerance."""
+    with jax.enable_x64(x64):
+        module, names, kind = _leaf_cases(cast)[case]
+        expected = {
+            "float": jnp.float64 if x64 else jnp.float32,
+            "complex": jnp.complex128 if x64 else jnp.complex64,
+        }[kind]
         for name in names:
             leaf = getattr(module, name)
             assert isinstance(leaf, jax.Array), name

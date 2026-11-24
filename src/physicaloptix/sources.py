@@ -16,6 +16,7 @@ from jaxtyping import Array
 
 from physicaloptix.core import Field
 from physicaloptix.core.grid import _grid_axis
+from physicaloptix.elements.base import _optional_float_leaf
 
 
 def broadcast_to_spectrum(field, spectrum):
@@ -103,10 +104,6 @@ def point_source(
     return Field(data=data, grid=field.grid, plane=field.plane, spectrum=spectrum)
 
 
-def _optional_array(value):
-    return None if value is None else jnp.asarray(value)
-
-
 class PointSource(eqx.Module):
     """A point source: its sky position, flux and spectral shape.
 
@@ -124,9 +121,11 @@ class PointSource(eqx.Module):
             ``None`` means one at every node.
     """
 
-    position_arcsec: Array = eqx.field(converter=jnp.asarray)
+    position_arcsec: Array = eqx.field(converter=as_float_leaf)
     flux: Array = eqx.field(default=1.0, converter=as_float_leaf)
-    spectral_weights: Array | None = eqx.field(default=None, converter=_optional_array)
+    spectral_weights: Array | None = eqx.field(
+        default=None, converter=_optional_float_leaf
+    )
 
     def __check_init__(self):
         """Validate the position and weight shapes."""

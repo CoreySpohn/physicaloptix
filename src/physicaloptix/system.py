@@ -23,6 +23,7 @@ import warnings
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.leaves import as_float_leaf
 from jaxtyping import Array
 from optixstuff.grids import PixelGrid
 from optixstuff.spectral import spectral_breaks
@@ -124,8 +125,8 @@ class BeamSplitter(eqx.Module):
             t = _amplitude_leaf(t)
             r = _amplitude_leaf(r)
         else:
-            wavelengths_nm = jnp.asarray(wavelengths_nm)
-            transmit_table = jnp.asarray(transmit_table)
+            wavelengths_nm = as_float_leaf(wavelengths_nm)
+            transmit_table = as_float_leaf(transmit_table)
             if wavelengths_nm.ndim != 1 or wavelengths_nm.shape != (
                 transmit_table.shape[0],
             ):
