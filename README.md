@@ -11,6 +11,12 @@
 Physical optics -- PSFs and diffraction -- for the HWO direct-imaging
 simulation suite.
 
+The native grid samples a fixed sky angle at each wavelength. Pass a grid to
+`stellar_map` or `source_psfs` to integrate flux over its pixels, including
+pixels at native pitch. The curves and uniform-sky products in
+`coro.calibration` describe the train at build time. After editing the train
+with `eqx.tree_at`, use `coro = coro.recalibrated()` to refresh them.
+
 ## What physicaloptix is
 
 `physicaloptix` turns an [optixstuff](https://github.com/CoreySpohn/optixstuff)
@@ -90,7 +96,7 @@ Built on [JAX](https://github.com/google/jax) and
 - **The speckle layer** -- `SpeckleProcess` / `AnalyticSpeckleField`, the
   linear speckle generator (E_nom, G) behind optixstuff's `AbstractSpeckleField`.
 - **Interop** (`physicaloptix.interop`) -- `PathCoronagraph`, the
-  optixstuff `AbstractImagingCoronagraph` adapter: cached-Lyot image interface and
+  optixstuff `AbstractImagingCoronagraph` adapter, with live image propagation and
   rule-specific throughput, core area and leakage density from a separation sweep.
   The uniform-sky image and its annular means come from incoherent illumination.
 

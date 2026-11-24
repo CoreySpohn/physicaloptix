@@ -48,6 +48,7 @@ docs = [
     "imageio-ffmpeg>=0.5.1",
 ]
 test = [
+    "ineedvalidation>=1.1.0",
     "matplotlib>=3.11.0",
     "pytest>=7.3.2",
     "hypothesis>=6.79.1",

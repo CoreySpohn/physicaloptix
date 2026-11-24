@@ -367,6 +367,12 @@ class TestOptixstuffSeam:
     """A flattened science branch serves the optixstuff coronagraph seam."""
 
     def test_science_branch_wraps_into_a_path_coronagraph(self):
+        """A flattened science branch supplies the public coronagraph interface.
+
+        The vortex throughput curve must have a positive, finite half-maximum
+        crossing. This checks the existence of the crossing and finite samples,
+        so one sky screen suffices and no numerical tolerance is needed.
+        """
         from optixstuff.coronagraph import AbstractCoronagraph
 
         from physicaloptix.elements import MultiScaleVortex
@@ -432,6 +438,7 @@ class TestOptixstuffSeam:
             reference_wavelength_nm=600.0,
             max_separation_lod=6.0,
             pixel_scale_lod=0.5,
+            n_sky_screens=1,
         )
         assert isinstance(coronagraph, AbstractCoronagraph)
         assert (

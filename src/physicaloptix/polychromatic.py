@@ -109,11 +109,14 @@ class PolychromaticPath(eqx.Module):
 
         Returns:
             A cell-integrated stellar_flux_fraction Image on an arcsecond grid,
-            with values equal to fractions of the unocculted source flux.
+            with values equal to fractions of the unocculted source flux. The
+            shortest node supplies the common grid's wavelength frame.
 
         Raises:
-            ValueError: No sources, or a source's ``spectral_weights`` does
-                not have one entry per node.
+            ValueError: No sources, a source's ``spectral_weights`` does not
+                have one entry per node, or the angular grids differ in shape,
+                orientation, pixel basis or center. The relative tolerance for
+                the basis and center is 1e-9.
         """
         if isinstance(sources, PointSource):
             sources = (sources,)
@@ -131,6 +134,8 @@ class PolychromaticPath(eqx.Module):
                 )
         weights = np.asarray(self.weights) / np.sum(self.weights)
         unit = eqx.filter_checkpoint(_node_image) if self.checkpoint else _node_image
+        first_grid = None
+        shortest_nm = min(self.wavelengths_nm)
         total = None
         for k, (wavelength_nm, weight) in enumerate(
             zip(self.wavelengths_nm, weights, strict=True)
@@ -148,10 +153,32 @@ class PolychromaticPath(eqx.Module):
                     self.pupil_diameter_m,
                     self.source_parity,
                 )
+                grid = image.grid
+                if grid.unit != "arcsec":
+                    grid = grid.to_arcsec(grid.frame.reference_wavelength_nm)
+                if first_grid is None:
+                    first_grid = grid
+                elif (
+                    grid.shape != first_grid.shape
+                    or grid.orientation != first_grid.orientation
+                    or not np.allclose(grid.basis, first_grid.basis, rtol=1e-9, atol=0)
+                    or not np.allclose(
+                        (grid.center_x, grid.center_y),
+                        (first_grid.center_x, first_grid.center_y),
+                        rtol=1e-9,
+                        atol=0,
+                    )
+                ):
+                    raise ValueError(
+                        f"Angular grids differ between {self.wavelengths_nm[0]} nm "
+                        f"and {wavelength_nm} nm; the node images cannot be summed"
+                    )
+                if wavelength_nm == shortest_nm:
+                    common_grid = grid
                 total = image.data if total is None else total + image.data
         return Image(
             total,
-            image.grid.to_arcsec(image.grid.frame.reference_wavelength_nm),
+            common_grid,
             (),
             Measure.integral(),
             "stellar_flux_fraction",

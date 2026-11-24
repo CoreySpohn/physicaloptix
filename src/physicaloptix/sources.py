@@ -17,6 +17,7 @@ from jaxtyping import Array
 from physicaloptix.core import Field
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements.base import _optional_float_leaf
+from physicaloptix.transforms import Fraunhofer
 
 
 def broadcast_to_spectrum(field, spectrum):
@@ -37,7 +38,7 @@ def point_source(
     field,
     *,
     spectrum=None,
-    separation_lod=0.0,
+    separation_lod=None,
     position_lod=None,
     reference_wavelength_nm=None,
     opd_nm=None,
@@ -45,36 +46,53 @@ def point_source(
     """A point source through the entrance pupil, optionally chromatic.
 
     Args:
-        field: The unaberrated entrance-pupil ``Field`` (mono).
-        spectrum: Wavelengths and weights; ``None`` keeps the source mono.
+        field: Entrance-pupil ``Field``; a chromatic field retains its
+            wavelength-dependent amplitudes and phases.
+        spectrum: Optional wavelengths and weights for a monochromatic field.
+            By default the source retains the entrance field's spectrum.
         separation_lod: Source angle along +x, in ``reference_wavelength_nm``
             lambda/D units (the fixed angle across the band). For a mono
             source this is the tilt in the field's own lambda/D units.
+            Omitting both position keywords places the source on axis.
         position_lod: Optional ``(x, y)`` source position in the same
             angular units; overrides ``separation_lod``.
         reference_wavelength_nm: Reference wavelength defining the angular
-            unit; required for a chromatic off-axis source.
+            unit; required when specifying a position for a chromatic source.
         opd_nm: Optional OPD map in nanometers, bound per wavelength as
             ``exp(2j pi opd / lambda)``. A mono source with an OPD needs
             ``reference_wavelength_nm`` to bind against.
 
     Returns:
         The source ``Field`` (mono 2D, or chromatic ``(nlam, y, x)``).
+
+    Raises:
+        ValueError: A chromatic field is given a second spectrum, a chromatic
+            position has no reference wavelength, or a monochromatic OPD map
+            has no binding wavelength.
     """
-    x = jnp.asarray(_grid_axis(field.grid))
-    if position_lod is None:
+    if field.spectrum is not None:
+        if spectrum is not None:
+            raise ValueError(
+                "supply a spectrum only for a monochromatic entrance field"
+            )
+        spectrum = field.spectrum
+
+    if position_lod is None and separation_lod is not None:
         position_lod = (separation_lod, 0.0)
-    px, py = position_lod
-    off_axis = px != 0.0 or py != 0.0
-
-    def tilt(scale):
-        phase = px * x[jnp.newaxis, :] + py * x[:, jnp.newaxis]
-        return jnp.exp(2j * jnp.pi * scale * phase)
-
+    if (
+        position_lod is not None
+        and spectrum is not None
+        and reference_wavelength_nm is None
+    ):
+        raise ValueError(
+            "a chromatic source position needs reference_wavelength_nm to "
+            "define the fixed angle"
+        )
+    px, py = (0.0, 0.0) if position_lod is None else position_lod
+    coords = jnp.asarray(_grid_axis(field.grid))
+    phase = px * coords[None, :] + py * coords[:, None]
     if spectrum is None:
-        data = field.data
-        if off_axis:
-            data = data * tilt(1.0)
+        data = field.data * jnp.exp(2j * jnp.pi * phase)
         if opd_nm is not None:
             if reference_wavelength_nm is None:
                 raise ValueError(
@@ -82,26 +100,54 @@ def point_source(
                     "reference_wavelength_nm to bind the phasor"
                 )
             data = data * jnp.exp(2j * jnp.pi * opd_nm / reference_wavelength_nm)
-        return Field(data=data, grid=field.grid, plane=field.plane, spectrum=None)
+    else:
+        wavelengths = spectrum.nodes_nm[0, :, None, None]
+        scale = (
+            jnp.ones_like(wavelengths)
+            if reference_wavelength_nm is None
+            else reference_wavelength_nm / wavelengths
+        )
+        data = field.data * jnp.exp(2j * jnp.pi * scale * phase)
+        if opd_nm is not None:
+            data = data * jnp.exp(2j * jnp.pi * opd_nm / wavelengths)
+    return Field(data=data, grid=field.grid, plane=field.plane, spectrum=spectrum)
 
-    if off_axis and reference_wavelength_nm is None:
-        raise ValueError(
-            "a chromatic off-axis source needs reference_wavelength_nm to "
-            "define the fixed angle"
+
+def _fixed_angle_camera(base, grid, *, reference_wavelength_nm, low_nm, spectrum=None):
+    """Build a camera and place entrance fields in its fixed sky frame.
+
+    Args:
+        base: Entrance field, optionally already carrying the build spectrum.
+        grid: Camera output grid in reference-wavelength lambda/D.
+        reference_wavelength_nm: Wavelength defining both camera and source angles.
+        low_nm: Shortest active wavelength for the camera sampling check.
+        spectrum: Optional build quadrature for a monochromatic entrance field.
+
+    Returns:
+        The Fraunhofer camera and a function mapping an (x, y) offset in its
+        reference lambda/D to the tilted entrance field.
+    """
+    science = Fraunhofer(
+        base.grid, grid, reference_wavelength_nm=reference_wavelength_nm, low_nm=low_nm
+    )
+
+    def place(position_lod):
+        """Place a source in the camera's angular frame.
+
+        Args:
+            position_lod: (x, y) offset in reference-wavelength lambda/D.
+
+        Returns:
+            The entrance field with the corresponding phase ramp.
+        """
+        return point_source(
+            base,
+            spectrum=spectrum,
+            position_lod=position_lod,
+            reference_wavelength_nm=reference_wavelength_nm,
         )
 
-    wavelengths = spectrum.nodes_nm[0]
-
-    def slice_for(wavelength_nm):
-        data = field.data
-        if off_axis:
-            data = data * tilt(reference_wavelength_nm / wavelength_nm)
-        if opd_nm is not None:
-            data = data * jnp.exp(2j * jnp.pi * opd_nm / wavelength_nm)
-        return data
-
-    data = jnp.stack([slice_for(wl) for wl in wavelengths])
-    return Field(data=data, grid=field.grid, plane=field.plane, spectrum=spectrum)
+    return science, place
 
 
 class PointSource(eqx.Module):

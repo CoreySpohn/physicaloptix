@@ -21,9 +21,11 @@ Truth sources and tolerance bases:
 import dataclasses
 
 import equinox as eqx
+import ineedvalidation as vv
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 import scipy.special
 
 from physicaloptix.instruments import (
@@ -31,6 +33,7 @@ from physicaloptix.instruments import (
     NIRCamBand,
     NIRCamConfig,
     NIRCamInputs,
+    build_nircam,
     build_nircam_band,
     nircam_band_image,
 )
@@ -136,6 +139,58 @@ def test_zero_seam_band_equals_nircam_band_image():
 
     jitted = np.asarray(eqx.filter_jit(lambda m, s: m.image((s,)).data)(model, source))
     np.testing.assert_allclose(jitted, reference, rtol=1e-13, atol=0)
+
+
+@pytest.fixture(
+    params=["synthetic", pytest.param("public-bundle", marks=pytest.mark.slow)]
+)
+def band_inputs(request):
+    """Use the small test pupil or the public NIRCam prescription bundle."""
+    if request.param == "synthetic":
+        return _inputs()
+    return NIRCamInputs.from_bundle(request.getfixturevalue("nircam_bundle_dir"))
+
+
+@vv.case("airy-fraunhofer", "code-verification")
+def test_nircam_band_sums_independent_nodes_on_one_sky_grid(band_inputs):
+    """Truth is the weighted sum of two independent NIRCam propagations.
+
+    The node grids must coincide with the reported detector geometry
+    (1e-9 relative in angle, exact shape and center). The hand sum and
+    the band use float64 MFTs, with a 1e-12 relative floating-point
+    allowance. Doubling one camera pitch must prevent the sum.
+    """
+    config = _config(ote_opd=False, focal_mask=False, lyot_stop=False, si_wfe=False)
+    model, source = build_nircam_band(config, band_inputs, _band(cube=None))
+    image = model.image(source)
+    expected = np.zeros(image.grid.shape)
+    for wl, weight in zip(NODES_NM, RAW_WEIGHTS, strict=True):
+        node_config = dataclasses.replace(config, wavelength_nm=wl)
+        path, entrance = build_nircam(node_config, band_inputs)
+        field, _ = path.propagate(entrance)
+        grid = field.grid.to_arcsec(wl)
+        assert image.grid.shape == grid.shape
+        assert image.grid.unit == grid.unit == "arcsec"
+        assert (image.grid.center_x, image.grid.center_y) == (
+            grid.center_x,
+            grid.center_y,
+        )
+        np.testing.assert_allclose(image.grid.basis, grid.basis, rtol=1e-9, atol=0)
+        expected += (
+            weight / sum(RAW_WEIGHTS) * np.asarray(field.intensity().integrated().data)
+        )
+    np.testing.assert_allclose(image.data, expected, rtol=1e-12, atol=0)
+
+    wide_path, _ = build_nircam(
+        dataclasses.replace(node_config, pixel_scale_arcsec=2 * SCALE), band_inputs
+    )
+    unequal = eqx.tree_at(
+        lambda m: m.path.stage("science_focal").ops[-1],
+        model,
+        wide_path.stage("science_focal"),
+    )
+    with pytest.raises(ValueError, match=r"3000.*3600"):
+        unequal.image(source)
 
 
 def test_stage_names_and_zero_seams():

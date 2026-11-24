@@ -7,6 +7,8 @@ samples reproduces the on-axis image displaced by m columns, exactly, because
 the MFT samples the same continuous transform). Tolerances: floating-point.
 """
 
+import ineedvalidation as vv
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -15,7 +17,7 @@ from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis
-from physicaloptix.sources import PointSource
+from physicaloptix.sources import PointSource, point_source
 from physicaloptix.transforms import Fraunhofer
 
 ARCSEC_TO_RAD = np.pi / (180.0 * 3600.0)
@@ -91,3 +93,34 @@ def test_defaults_and_validation():
         PointSource([0.0, 0.0, 0.0])
     with pytest.raises(ValueError, match="spectral_weights"):
         PointSource([0.0, 0.0], spectral_weights=[[1.0]])
+
+
+@vv.case("point-source-position", "code-verification", basis="floating-point")
+def test_point_source_peak_has_a_traced_position_gradient():
+    """The zero ramp is unity bitwise; a central difference checks the gradient.
+
+    An offset focal sample breaks the symmetric peak's zero-slope degeneracy.
+    The 1e-5 relative bound covers truncation and roundoff in a float64
+    central difference with a 1e-5 lambda/D displacement.
+    """
+    entrance = _entrance()
+    camera = Fraunhofer(entrance.grid, PixelGrid.focal(5, 0.375, TEST_FRAME))
+
+    @jax.jit
+    def placed(x):
+        return point_source(entrance, position_lod=(x, 0.0))
+
+    def peak(x):
+        return camera.forward(placed(x)).intensity().data.max()
+
+    value_and_grad = jax.jit(jax.value_and_grad(peak))
+    np.testing.assert_array_equal(
+        placed(0.0).data.view(jnp.uint64), entrance.data.view(jnp.uint64)
+    )
+    for x in (0.0, 1.0):
+        value, derivative = value_and_grad(x)
+        assert jnp.isfinite(value) & jnp.isfinite(derivative)
+    step = 1e-5
+    finite_difference = (peak(1.0 + step) - peak(1.0 - step)) / (2 * step)
+    assert abs(finite_difference) > 0.01
+    np.testing.assert_allclose(derivative, finite_difference, rtol=1e-5, atol=0)

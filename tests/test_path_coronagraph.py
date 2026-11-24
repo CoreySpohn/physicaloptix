@@ -3,12 +3,18 @@
 from dataclasses import replace
 
 import equinox as eqx
+import ineedvalidation as vv
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TEST_FRAME
 from optixstuff import SimplePrimary
-from optixstuff.coronagraph import AbstractImagingCoronagraph, AbstractSceneCoronagraph
+from optixstuff.coronagraph import (
+    AbstractImagingCoronagraph,
+    AbstractSceneCoronagraph,
+    on_grid,
+)
 from optixstuff.grids import Measure, PixelGrid, resample
 from optixstuff.radial import radial_profile
 from optixstuff.spectral import Band, Quadrature
@@ -138,7 +144,9 @@ class TestConformance:
         assert c.source_psfs(600.0, 0.0, 0.0).image.measure == Measure.density("grid")
         detector = c.stellar_map(600.0, 0.0, grid=star.grid)
         assert detector.measure == Measure.integral()
-        np.testing.assert_allclose(star.integrated().data, detector.data, rtol=4e-15)
+        np.testing.assert_allclose(
+            on_grid(star, star.grid).data, detector.data, rtol=4e-15
+        )
 
     def test_consumable_through_the_abstract_interface(self, vortex_coronagraph):
         def consumer(coro: AbstractImagingCoronagraph):
@@ -170,18 +178,23 @@ class TestConformance:
 
 class TestNormalization:
     def test_unocculted_psf_integrates_to_unit_flux(self, bare_telescope):
-        """Carried from the legacy seam tests, now exact by Parseval.
+        """Parseval gives unit flux on the complete conjugate sampling.
 
-        The complete conjugate grid (128 px at 0.5 lambda/D spans the full
-        +-32 lambda/D band of a 64-sample pupil) captures all the energy;
-        requesting a wider field would alias (the sampling gate warns).
+        Native intensity quadrature sums the full period of a 64-sample
+        entrance pupil. The 1e-10 tolerance covers float64 roundoff.
         """
-        psf = np.asarray(
-            bare_telescope.on_axis_psf(
-                600.0, _grid((128, 128), (_lod_rad(600.0) * 0.5) / _lod_rad(600.0))
-            ).data
+        c = PathCoronagraph.from_path(
+            bare_telescope.core_path,
+            bare_telescope.input_field,
+            primary=PRIMARY,
+            reference_wavelength_nm=600.0,
+            max_separation_lod=2.0,
+            fov_margin_lod=NPUP / 2 - 2.0,
+            pixel_scale_lod=0.5,
+            n_sky_screens=1,
         )
-        np.testing.assert_allclose(psf.sum(), 1.0, rtol=1e-10)
+        native = c.stellar_map(600.0, 0.0)
+        np.testing.assert_allclose(native.integrated().data.sum(), 1.0, rtol=1e-10)
 
     def test_on_axis_is_suppressed_relative_to_off_axis(self, vortex_coronagraph):
         ps = _lod_rad(600.0) * 0.5
@@ -210,7 +223,7 @@ class TestImageInterface:
     def test_achromatic_pixel_scale_conversion(self, vortex_coronagraph):
         """Same lambda/D sampling at two wavelengths gives the same PSF."""
         psf_a = vortex_coronagraph.on_axis_psf(
-            500.0, _grid((48, 48), (_lod_rad(500.0) * 0.5) / _lod_rad(500.0))
+            600.0, _grid((48, 48), (_lod_rad(600.0) * 0.5) / _lod_rad(600.0))
         ).data
         psf_b = vortex_coronagraph.on_axis_psf(
             1000.0, _grid((48, 48), (_lod_rad(1000.0) * 0.5) / _lod_rad(1000.0))
@@ -264,7 +277,6 @@ class TestDerivedCurves:
 class TestConstruction:
     def test_rejects_core_path_not_ending_in_pupil(self, vortex_coronagraph):
         pupil_grid = PixelGrid.pupil(NPUP)
-        from physicaloptix.transforms import Fraunhofer
 
         bad_path = OpticalPath(
             stages=(
@@ -293,9 +305,9 @@ class TestConstruction:
 
 
 class TestSamplingExplicitContract:
-    """The target-sampling-first contract, served natively (no resample)."""
+    """Caller grids receive integrals of the native band-limited density."""
 
-    WL = 500.0
+    WL = 600.0
 
     def test_stellar_map_matches_on_axis_psf_at_same_sampling(self, vortex_coronagraph):
         c = vortex_coronagraph
@@ -382,7 +394,6 @@ class TestSamplingExplicitContract:
         half = c.grid.shape[0] * c.grid.step / 2
         step = 0.4
         npix = round(4 * half / step)
-        # An arcsec grid is resampled; a matching lod grid is propagated directly.
         wide = _grid((npix, npix), step).to_arcsec(600.0)
         coords = (np.arange(npix) - npix / 2 + 0.5) * step
         outer = np.maximum.outer(np.abs(coords), np.abs(coords)) >= half + 2 * step
@@ -450,8 +461,8 @@ class TestSamplingExplicitContract:
     def test_non_square_shape_center_crops(self, vortex_coronagraph):
         """Cropping commutes with integrating the same band-limited density.
 
-        Both rectangular targets go through resampling; a native direct
-        square render instead contains center samples without a pixel box.
+        The smaller target covers a central subset of the same pixel boxes.
+        The 1e-12 tolerance covers float64 reconstruction roundoff.
         """
         c = vortex_coronagraph
         wide = np.asarray(c.stellar_map(self.WL, 0.0, grid=_grid((40, 56), 0.5)).data)
@@ -500,7 +511,7 @@ class TestChromaticBuild:
             core_path,
             field,
             primary=PRIMARY,
-            reference_wavelength_nm=600.0,
+            reference_wavelength_nm=build_wavelength_nm or 600.0,
             max_separation_lod=OWA,
             pixel_scale_lod=0.5,
             n_sky_screens=32,
@@ -514,11 +525,11 @@ class TestChromaticBuild:
         of the unocculted telescope; the chromatic signal is the small
         scatter the OPD screen adds on top, so measure the difference.
         """
-        nominal = self._aberrated(None, amplitude_nm=0.0)
-        psf = np.asarray(coro.stellar_map(600.0, 0.0, grid=_grid((56, 56), 0.5)).data)
-        ref = np.asarray(
-            nominal.stellar_map(600.0, 0.0, grid=_grid((56, 56), 0.5)).data
-        )
+        wl = coro.frame.reference_wavelength_nm
+        nominal = self._aberrated(wl, amplitude_nm=0.0)
+        detector = PixelGrid.focal(56, 0.5, coro.frame)
+        psf = np.asarray(coro.stellar_map(wl, 0.0, grid=detector).data)
+        ref = np.asarray(nominal.stellar_map(wl, 0.0, grid=detector).data)
         n = psf.shape[0]
         yy, xx = np.mgrid[:n, :n]
         r = np.hypot(yy - n / 2 + 0.5, xx - n / 2 + 0.5) * 0.5
@@ -646,10 +657,11 @@ def test_rule_records_and_absolute_leakage(bare_telescope):
     from optixstuff.performance import performance_curves
 
     c = bare_telescope
-    star = c.stellar_map(600.0, 0.0, grid=c.grid)
+    star = c.stellar_map(600.0, 0.0).integrated()
 
     def off(s):
-        return c.off_axis_psf(600.0, s, c.grid)
+        image = c.source_psfs(600.0, s, 0.0).image.integrated()
+        return replace(image, data=image.data[0], leading_axes=())
 
     rule = HalfMaximum(0.5)
     expected = performance_curves(
@@ -709,7 +721,8 @@ def test_detector_aperture_matches_throughput_at_three_pitches(vortex_coronagrap
         aperture_sum = jnp.sum(image.data * weights)
         np.testing.assert_allclose(aperture_sum, expected, rtol=0.004, atol=0)
         # Negative control pins sensitivity to the reconstruction declaration.
-        native = c.off_axis_psf(600.0, separation, c.grid)
+        source = c.source_psfs(600.0, separation, 0.0).image.integrated()
+        native = replace(source, data=source.data[0], leading_axes=())
         linear = resample(replace(native, reconstruction="linear"), lod)
         assert abs(float(jnp.sum(linear.data * weights) / expected) - 1) > 0.09
 
@@ -751,9 +764,7 @@ def test_stellar_map_rejects_finite_diameters(bare_telescope):
     point = serve(jnp.asarray(0.0))
     np.testing.assert_allclose(
         point.data,
-        Fraunhofer(c.input_field.grid, grid).forward(c.lyot_field).intensity().data
-        * grid.pixel_area
-        / (jnp.sum(c.input_field.intensity().data) * c.input_field.grid.pixel_area),
+        on_grid(c.stellar_map(600.0, 0.0), grid).data,
         rtol=16 * np.finfo(float).eps,
         atol=0,
     )
@@ -761,3 +772,104 @@ def test_stellar_map_rejects_finite_diameters(bare_telescope):
     assert np.all(np.isnan(finite.data))
     assert finite.grid == point.grid
     assert finite.quantity == point.quantity
+
+
+@pytest.fixture(scope="module")
+def square_telescope():
+    """Build a unit-throughput square pupil with reproducible sky illumination."""
+    grid = PixelGrid.pupil(16)
+    stop = SampledOptic(jnp.ones(grid.shape), grid, PlaneKind.PUPIL)
+    field = Field(jnp.ones(grid.shape, dtype=complex), grid, PlaneKind.PUPIL)
+    return PathCoronagraph.from_path(
+        OpticalPath((Stage("stop", stop),)),
+        field,
+        primary=PRIMARY,
+        reference_wavelength_nm=600.0,
+        max_separation_lod=2.5,
+        pixel_scale_lod=0.25,
+        n_sky_screens=4,
+        seed=17,
+    )
+
+
+def _half_open_stop(model):
+    """Halve the stop amplitude on a copy of the current train."""
+    return eqx.tree_at(
+        lambda c: c.core_path.stages[-1].op.transmission,
+        model,
+        replace_fn=lambda t: t / 2,
+    )
+
+
+@vv.case("live-path-transmission", "code-verification")
+def test_live_stop_sets_stellar_and_source_flux(square_telescope):
+    """Halving amplitude quarters intensity in either route, to 1e-12 in x64."""
+    c = square_telescope
+    target = _grid((5, 5), 0.25)
+    before = c.stellar_map(600.0, 0.0, grid=target)
+    assert before.data.max() > 0
+    edited = _half_open_stop(c)
+    for model, factor in ((c, 1.0), (edited, 0.25)):
+        star = model.stellar_map(600.0, 0.0, grid=target)
+        source = model.source_psfs(600.0, 0.0, 0.0, grid=target)
+        np.testing.assert_allclose(star.data, before.data * factor, rtol=1e-12)
+        np.testing.assert_allclose(source.image.data[0], star.data, rtol=1e-12)
+
+
+@vv.case("live-path-calibration", "code-verification")
+def test_calibration_snapshot_and_seed_replay(square_telescope):
+    """A fixed train and seed replay every calibration leaf bit for bit.
+
+    An edited stop leaves the snapshot intact until refresh. The same random
+    screens through half the transmission give quarter the sky intensity
+    and throughput to 1e-12 relative in float64.
+    """
+    c = square_telescope
+    edited = _half_open_stop(c)
+    for snapshot in (edited.calibration, c.recalibrated().calibration):
+        assert jax.tree.structure(snapshot) == jax.tree.structure(c.calibration)
+        for old, new in zip(
+            jax.tree.leaves(c.calibration), jax.tree.leaves(snapshot), strict=True
+        ):
+            np.testing.assert_array_equal(old, new)
+
+    refreshed = edited.recalibrated()
+    for before, after in (
+        (
+            c.uniform_sky_map(600.0, grid=c.grid).data,
+            refreshed.uniform_sky_map(600.0, grid=c.grid).data,
+        ),
+        (c.performance_record.throughput, refreshed.performance_record.throughput),
+    ):
+        assert np.max(before) > 0
+        np.testing.assert_allclose(after, before / 4, rtol=1e-12)
+
+
+@vv.case("uniform-sky-transmission", "code-verification", basis="floating-point")
+def test_uniform_sky_transmission_uses_sky_area(square_telescope):
+    """Matched pupil frequencies and screens give equal sky transmission.
+
+    The blue camera samples angles scaled by 5/6, so each sample sees the
+    same screen Fourier coefficient. The dimensionless sky response agrees
+    to 1e-12 relative in float64, including the camera's area conversion.
+    """
+    c = square_telescope
+    ratio = 500 / 600
+    blue = PathCoronagraph.from_path(
+        c.core_path,
+        c.input_field,
+        primary=PRIMARY,
+        reference_wavelength_nm=600.0,
+        wavelength_nm=500.0,
+        max_separation_lod=ratio * c.max_separation_lod,
+        fov_margin_lod=ratio * c.fov_margin_lod,
+        pixel_scale_lod=ratio * c.grid.step,
+        n_sky_screens=c.n_sky_screens,
+        seed=c.seed,
+    )
+    np.testing.assert_allclose(
+        blue.uniform_sky_map(500.0, grid=blue.grid).data,
+        c.uniform_sky_map(600.0, grid=c.grid).data,
+        rtol=1e-12,
+        atol=0,
+    )

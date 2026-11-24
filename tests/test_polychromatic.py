@@ -19,14 +19,16 @@ a stop with a shift (``SampledOptic.shift_px``) and a per-node science grid
 - Checkpoint on and off are the same computation: equal values and gradients.
 """
 
+from dataclasses import replace
+
 import equinox as eqx
+import ineedvalidation as vv
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from conftest import TEST_FRAME
 from jax.test_util import check_grads
-from optixstuff.grids import PixelGrid
+from optixstuff.grids import Frame, PixelGrid
 
 from physicaloptix.core import ChromaticTable, Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis
@@ -45,14 +47,15 @@ NPUP = 32
 NODES = (1800.0, 2400.0)
 RAW_WEIGHTS = (1.0, 3.0)
 DIAMETER_M = 6.5
-ARCSEC_PER_SAMPLE_AT_REF = 0.04
-REF_NM = 2400.0
 NFOCAL = 24
 
 
-def _grids():
+def _grids(pitches_arcsec=(0.04, 0.04)):
     return PixelGrid.pupil(NPUP), {
-        wl: PixelGrid.focal(NFOCAL, 0.5 * wl / REF_NM, TEST_FRAME) for wl in NODES
+        wl: PixelGrid.regular((NFOCAL, NFOCAL), pitch, "arcsec").to_lod(
+            wl, Frame(wl, DIAMETER_M, "circumscribed")
+        )
+        for wl, pitch in zip(NODES, pitches_arcsec, strict=True)
     }
 
 
@@ -88,8 +91,10 @@ def _entrance():
     )
 
 
-def _fold(checkpoint=True, nodes=NODES, weights=RAW_WEIGHTS):
-    pupil, focal = _grids()
+def _fold(
+    checkpoint=True, nodes=NODES, weights=RAW_WEIGHTS, pitches_arcsec=(0.04, 0.04)
+):
+    pupil, focal = _grids(pitches_arcsec)
     stages = (
         Stage(
             "entrance_pupil", SampledOptic(_pupil_amplitude(), pupil, PlaneKind.PUPIL)
@@ -188,6 +193,26 @@ def test_image_equals_independent_per_node_paths_summed():
         np.asarray(image), np.asarray(expected), rtol=1e-14, atol=0
     )
     assert float(jnp.max(image)) > 0.0
+
+
+@vv.case("airy-fraunhofer", "code-verification")
+def test_image_requires_common_sky_grid_in_either_node_order():
+    """Only coincident angular pixels admit a per-pixel wavelength sum.
+
+    Truth is the geometry of the specified cameras and commutativity of
+    two-term addition. Equal angular grids and sums agree exactly
+    (exact-algebra). The 10 and 20 mas cameras address different sky pixels.
+    """
+    source = _sources()[0]
+    with pytest.raises(ValueError, match=r"1800.*2400"):
+        _fold(pitches_arcsec=(0.010, 0.020)).image(source)
+    model = _fold(pitches_arcsec=(0.010, 0.010))
+    image = model.image(source)
+    reversed_image = replace(
+        model, wavelengths_nm=NODES[::-1], weights=RAW_WEIGHTS[::-1]
+    ).image(source)
+    assert image.grid == reversed_image.grid
+    np.testing.assert_array_equal(image.data, reversed_image.data)
 
 
 def test_a_single_source_may_be_passed_bare():

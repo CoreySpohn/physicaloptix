@@ -16,13 +16,15 @@ reference implementation exactly:
   intensities accumulated and normalized by ``npix^2 / n_screens / 2`` --
   which makes an open telescope transmit exactly one.
 
-The input field is normalized to unit pre-coronagraph energy on the
-dimensionless pupil grid, and ``stellar_intens`` / ``offax_psf`` values are
-per-pixel flux fractions (intensity density times the pixel cell area) --
-the convention shipped survey packages carry; ``sky_trans`` samples
-dimensionless transmission and carries no area factor. This is
-builder-tier code: a full-scale package is many propagations; freeze once and
-serve from the tables.
+The native science grid samples sky angle in reference-wavelength lambda/D.
+The emitter normalizes the entrance field to unit energy and returns point
+densities for the star and off-axis PSFs. The FITS encoding multiplies each
+density by the native pixel area. A caller requesting an explicit detector
+grid from the table reader or the live adapter receives a flux integral over
+each pixel, including at native pitch. Sky transmission is dimensionless.
+A YIP freezes the train on disk. The live adapter keeps a calibration snapshot
+for its performance and sky products. After editing the train, call
+``recalibrated()`` to obtain an adapter with a refreshed snapshot.
 """
 
 from dataclasses import replace
@@ -37,8 +39,7 @@ from physicaloptix._sky import (
     uniform_sky_image,
     unit_energy,
 )
-from physicaloptix.sources import point_source
-from physicaloptix.transforms import Fraunhofer
+from physicaloptix.sources import _fixed_angle_camera
 
 DEFAULT_STELLAR_DIAMETERS = np.concatenate([[0.0], np.logspace(-3, 0, 11)])
 
@@ -109,6 +110,10 @@ def emit_yip(
 
     Returns:
         Point densities, transmission and sample axes under the YIPPackage names.
+
+    Raises:
+        ValueError: The quadrature has more than one band, or the science grid
+            extends beyond the pupil Nyquist radius at the shortest active node.
     """
     science_grid = replace(
         science_grid, frame=Frame(reference_wavelength_nm, diameter_m, "circumscribed")
@@ -124,27 +129,20 @@ def emit_yip(
     active = np.asarray(spectrum.active[0])
     nodes_nm = np.asarray(spectrum.nodes_nm[0])[active]
     base = unit_energy(input_field)
-    _require_inside_pupil_nyquist(science_grid, base, low_nm=float(nodes_nm.min()))
-    science = Fraunhofer(
-        grid_in=base.grid,
-        grid_out=science_grid,
+    low_nm = float(nodes_nm.min())
+    _require_inside_pupil_nyquist(science_grid, base, low_nm=low_nm)
+    science, place = _fixed_angle_camera(
+        base,
+        science_grid,
+        spectrum=spectrum,
         reference_wavelength_nm=reference_wavelength_nm,
-        low_nm=float(nodes_nm.min()),
+        low_nm=low_nm,
     )
 
     # -- off-axis PSFs ------------------------------------------------------
     offax = np.stack(
         [
-            _band_image(
-                core_path,
-                science,
-                point_source(
-                    base,
-                    spectrum=spectrum,
-                    separation_lod=float(offset),
-                    reference_wavelength_nm=reference_wavelength_nm,
-                ),
-            )
+            _band_image(core_path, science, place((offset, 0.0)))
             for offset in offsets_x_lod
         ]
     )
@@ -153,13 +151,7 @@ def emit_yip(
     stellar = []
     for diameter in stellar_diameters_lod:
         if diameter == 0.0:
-            stellar.append(
-                _band_image(
-                    core_path,
-                    science,
-                    point_source(base, spectrum=spectrum),
-                )
-            )
+            stellar.append(_band_image(core_path, science, place((0.0, 0.0))))
             continue
         rng = np.random.default_rng(seed)  # per-diameter, as the survey does
         radius = np.sqrt(rng.uniform(0, 1, n_pointings)) / 2
@@ -170,16 +162,7 @@ def emit_yip(
                 float(r * np.cos(t) * diameter),
                 float(r * np.sin(t) * diameter),
             )
-            image = image + _band_image(
-                core_path,
-                science,
-                point_source(
-                    base,
-                    spectrum=spectrum,
-                    position_lod=position,
-                    reference_wavelength_nm=reference_wavelength_nm,
-                ),
-            )
+            image = image + _band_image(core_path, science, place(position))
         stellar.append(image / n_pointings)
     stellar = np.stack(stellar)
 

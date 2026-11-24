@@ -174,11 +174,12 @@ brightness, not a per-pixel photon count. The matching `backward` divides
 each slice by the same factor, so it is the adjoint of `forward` under the
 fixed grids' weighted inner products at every wavelength (not only the
 reference) and, at a wavelength whose native spacing makes the fixed focal
-grid a complete conjugate grid, the exact inverse propagation. A band-averaged product must also
-state its angular space -- YIP band images average on one fixed
-reference-wavelength grid, while a chromatic-built `PathCoronagraph`
-averages in each wavelength's native {term}`lambda/D`; prefer per-wavelength
-instances in a `MultiBandCoronagraph` for chromatic work.
+grid a complete conjugate grid, the exact inverse propagation. Both `emit_yip` and `PathCoronagraph` use this native
+sky-angle grid for all wavelengths. Their native source and stellar images
+are point densities. Requesting a grid from the live or table-backed model
+integrates the density over each pixel, including at native pitch. A live
+model's `calibration` holds its aperture curves and uniform-sky products at
+build time. Call `recalibrated()` on an edited train to refresh that snapshot.
 
 A monochromatic field carries no wavelength of its own: the *element's*
 `wavelength_nm` performs the OPD-to-phase conversion, and nothing can
@@ -383,6 +384,14 @@ Construct `PathCoronagraph.from_path` with `primary`,
 the records are sampled. The adapter exposes
 its native `grid` and prepares `curves(Circular(0.7))` and
 `curves(HalfMaximum(0.5))`; request additional aperture rules with `rules=`.
+Choose a native `pixel_scale_lod` no larger than
+$\lambda_{\min}/(2 L \lambda_{\mathrm{ref}})$, where $L$ is the full pupil
+grid width in diameters and $\lambda_{\min}$ is the shortest active wavelength.
+Reduce any coarser build pitch and pass the detector pitch on the caller grid.
+For code that previously read a cached Lyot field, use
+`coro.core_path.propagate(coro.input_field)[0]` for the current complex field.
+Use `coro.calibration` for the measured photometry and sky response.
+
 All coronagraph image methods take a target `PixelGrid`. Scalar performance
 methods take `time_d`; speckle methods take `elapsed_s`, seconds on the field's
 own clock, and visualization `times_s` are passed to them unchanged.

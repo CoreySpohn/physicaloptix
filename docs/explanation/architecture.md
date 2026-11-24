@@ -89,13 +89,11 @@ this through, alongside the detector readout and the integral-field
 spectrograph.
 
 {class}`~physicaloptix.PathCoronagraph` is the interoperability layer. It wraps
-an `OpticalPath` and presents the `AbstractImagingCoronagraph` interface that the rest
-of the simulation suite consumes: an on-axis PSF, a throughput curve, an inner
-working angle. The defining property is that these are **derived from the
-propagated PSFs at construction, never declared** -- the inner working angle is
-measured from where the coronagraph starts passing off-axis light, not read
-from a configuration file. This is what lets a live-propagation coronagraph and
-a precomputed sampled-table coronagraph fill the same slot interchangeably.
+an `OpticalPath` and presents the `AbstractImagingCoronagraph` interface to
+the rest of the simulation suite. Each stellar or source image propagates
+through the current train. The throughput curve and inner working angle are
+measured from a separation sweep and stored with the uniform-sky products in
+a calibration snapshot.
 
 Aperture rules and performance reduction live in `optixstuff.apertures` and
 `optixstuff.performance`. `PathCoronagraph` uses those shared definitions;
