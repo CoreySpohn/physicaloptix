@@ -29,7 +29,6 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from hwoutils.leaves import as_float_leaf, as_leaf
 from hwoutils.map_coordinates import map_coordinates
 from jax.scipy.signal import fftconvolve
 from jaxtyping import Array
@@ -37,6 +36,7 @@ from optixstuff.grids import Frame, PixelGrid
 
 from physicaloptix.core import Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis
+from physicaloptix.elements.base import _optional_float_leaf, _optional_leaf
 from physicaloptix.sources import point_source
 from physicaloptix.transforms import Fraunhofer, Fresnel
 
@@ -316,14 +316,6 @@ def dm_median_volts(volts, *, volt_quantum, live):
     step = jnp.floor(v / volt_quantum) * volt_quantum
     quantized = v + jax.lax.stop_gradient(step - v)
     return jnp.nanmedian(jnp.where(jnp.asarray(live), quantized, jnp.nan))
-
-
-def _optional_leaf(value):
-    return None if value is None else as_leaf(value)
-
-
-def _optional_float_leaf(value):
-    return None if value is None else as_float_leaf(value)
 
 
 class RomanCompact(eqx.Module):

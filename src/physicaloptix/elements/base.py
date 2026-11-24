@@ -6,7 +6,7 @@ from typing import Self
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
-from hwoutils.leaves import as_complex_leaf, as_float_leaf
+from hwoutils.leaves import as_complex_leaf, as_float_leaf, as_leaf
 from hwoutils.transforms import shift_image
 from jaxtyping import Array
 from optixstuff.grids import PixelGrid
@@ -72,7 +72,13 @@ def _amplitude_leaf(value):
 
 
 def _optional_float_leaf(value):
+    """A float leaf of the active dtype, or None."""
     return None if value is None else as_float_leaf(value)
+
+
+def _optional_leaf(value):
+    """A strong leaf of the value's own kind, or None."""
+    return None if value is None else as_leaf(value)
 
 
 class SampledOptic(Element):
