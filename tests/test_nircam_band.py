@@ -533,7 +533,9 @@ class TestBandFromBundle:
 
         Truth source: the hashing contract of a static field (equal content,
         equal hash and ``==``, from separately built records, so an identity
-        hash fails) and the input mapping itself for ``to_dict``. Scalars of
+        hash fails) and the input mapping itself for ``to_dict``. A record is
+        never equal to a plain mapping, so ``{"v": True}`` cannot equal both
+        the ``1`` record and the ``True`` record. Scalars of
         different types stay distinct so one record never stands in for
         another under ``jax.jit``. Exact comparisons, no tolerance.
         """
@@ -545,6 +547,10 @@ class TestBandFromBundle:
         assert first != _Provenance({**content, "k": [1, 2.0]})
         for a, b in ((1, 1.0), (1, True), (0.0, -0.0)):
             assert _Provenance({"v": a}) != _Provenance({"v": b})
+            # A record equals only a record; a plain mapping compares through
+            # to_dict, so no mapping is equal to two records that differ.
+            assert _Provenance({"v": a}) != {"v": b}
+            assert _Provenance({"v": a}).to_dict() == {"v": a}
         plain = first.to_dict()
         assert plain == content
         assert type(plain["f"]) is dict and type(plain["k"]) is list
@@ -586,15 +592,22 @@ class TestBandFromBundle:
         compare stably; a NumPy scalar, a ``Decimal``, NaT or a frozenset can
         hold NaN, and a custom ``__eq__`` may not return a bool, so each
         retraces or breaks ``jax.jit``. Keys are strings. The record names
-        the key path; the band refuses it at construction (for a non-string
-        key next to a string one, JAX's own walk of the dataclass arguments
-        refuses it first). Cases are microsecond constructions with no
-        compile. No tolerance.
+        the key path, and both public constructors report the same message
+        (a non-string key next to a string one must not reach JAX's walk of
+        the arguments first, which loses the path). Cases are microsecond
+        constructions with no compile. No tolerance.
         """
-        with pytest.raises(error, match=re.escape("provenance" + where)):
+        where = re.escape("provenance" + where)
+        with pytest.raises(error, match=where):
             _Provenance(provenance)
-        with pytest.raises((TypeError, ValueError)):
+        with pytest.raises(error, match=where):
             NIRCamBand(wavelengths_nm=(3300.0,), weights=(1.0,), provenance=provenance)
+        with pytest.raises(error, match=where):
+            NIRCamInputs(
+                pupil_amplitude=np.ones((4, 4)),
+                pupil_diameter_m=6.5,
+                provenance=provenance,
+            )
 
     def test_bundle_without_si_gives_no_cube(self, tmp_path):
         bundle, _ = _write_band_bundle(tmp_path, si=False)

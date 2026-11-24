@@ -379,8 +379,10 @@ class _Provenance(Mapping):
     at construction, naming the key: NumPy scalars and arrays, ``Decimal``,
     NaN and infinite floats, sets and frozensets, and objects whose hashing or
     equality the record cannot vouch for. Equality also tells the scalar types
-    apart, so ``1``, ``1.0`` and ``True`` make different records.
-    :meth:`to_dict` returns plain dicts and lists, for example for JSON.
+    apart, so ``1``, ``1.0`` and ``True`` make different records. A record
+    compares equal only to another record; compare with a plain mapping
+    through :meth:`to_dict`, which returns plain dicts and lists, for example
+    for JSON.
 
     Args:
         items: A mapping or pairs to freeze.
@@ -419,7 +421,7 @@ class _Provenance(Mapping):
     def __eq__(self, other):
         if isinstance(other, _Provenance):
             return self._key == other._key
-        return super().__eq__(other)
+        return NotImplemented
 
     def __hash__(self):
         return hash(self._key)
@@ -438,6 +440,18 @@ class _Provenance(Mapping):
 
 
 _SCALAR_TYPES = (str, bool, int, type(None))
+
+
+def _header_value(value):
+    """A FITS header value in a form provenance holds.
+
+    FITS cards hold strings, booleans, integers, floats and complex numbers.
+    A complex value becomes ``{"real": float, "imag": float}``; the others
+    pass through unchanged.
+    """
+    if type(value) is complex:
+        return {"real": value.real, "imag": value.imag}
+    return value
 
 
 def _freeze(value, path):
@@ -520,6 +534,44 @@ class NIRCamInputs(eqx.Module):
         static=True, default_factory=dict, converter=_Provenance
     )
 
+    def __init__(
+        self,
+        pupil_amplitude,
+        pupil_diameter_m,
+        ote_opd_nm=None,
+        focal_mask=None,
+        lyot_amplitude=None,
+        si_opd_nm=None,
+        si_support=None,
+        si_wavelength_nm=None,
+        provenance=None,
+    ):
+        """Assign the fields; the field converters then run as declared.
+
+        The provenance is frozen first, so a value it refuses is reported
+        with its key path before anything else walks the arguments.
+
+        Args:
+            pupil_amplitude: See the class attributes.
+            pupil_diameter_m: See the class attributes.
+            ote_opd_nm: See the class attributes.
+            focal_mask: See the class attributes.
+            lyot_amplitude: See the class attributes.
+            si_opd_nm: See the class attributes.
+            si_support: See the class attributes.
+            si_wavelength_nm: See the class attributes.
+            provenance: See the class attributes; None records nothing.
+        """
+        self.provenance = _Provenance({} if provenance is None else provenance)
+        self.pupil_amplitude = pupil_amplitude
+        self.pupil_diameter_m = pupil_diameter_m
+        self.ote_opd_nm = ote_opd_nm
+        self.focal_mask = focal_mask
+        self.lyot_amplitude = lyot_amplitude
+        self.si_opd_nm = si_opd_nm
+        self.si_support = si_support
+        self.si_wavelength_nm = si_wavelength_nm
+
     def __check_init__(self):
         """Validate array shapes and the pupil diameter."""
         shape = self.pupil_amplitude.shape
@@ -591,6 +643,9 @@ class NIRCamInputs(eqx.Module):
         Returns:
             The ``NIRCamInputs`` with provenance recording the bundle name,
             the manifest hashes, each file's header and the focal-mask check.
+            A complex header value is recorded as
+            ``{"real": float, "imag": float}``, so the record stays
+            JSON-ready.
 
         Raises:
             FileNotFoundError: A manifest or listed file is missing.
@@ -659,7 +714,9 @@ class NIRCamInputs(eqx.Module):
                 "file": entry["file"],
                 "sha256": digest,
                 "header": {
-                    k: header[k] for k in header if k not in ("COMMENT", "HISTORY", "")
+                    k: _header_value(header[k])
+                    for k in header
+                    if k not in ("COMMENT", "HISTORY", "")
                 },
             }
             return data, header, extra
@@ -1013,6 +1070,23 @@ class NIRCamBand(eqx.Module):
     provenance: Mapping = eqx.field(
         static=True, default_factory=dict, converter=_Provenance
     )
+
+    def __init__(self, wavelengths_nm, weights, si_opd_nm=None, provenance=None):
+        """Assign the fields; the field converters then run as declared.
+
+        The provenance is frozen first, so a value it refuses is reported
+        with its key path before anything else walks the arguments.
+
+        Args:
+            wavelengths_nm: See the class attributes.
+            weights: See the class attributes.
+            si_opd_nm: See the class attributes.
+            provenance: See the class attributes; None records nothing.
+        """
+        self.provenance = _Provenance({} if provenance is None else provenance)
+        self.wavelengths_nm = wavelengths_nm
+        self.weights = weights
+        self.si_opd_nm = si_opd_nm
 
     def __check_init__(self):
         """Validate node counts, wavelengths, weights and the SI cube."""

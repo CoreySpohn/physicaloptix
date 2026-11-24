@@ -293,10 +293,12 @@ def _sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _write_array(directory, name, data, *, content, bunit, pixscale):
+def _write_array(directory, name, data, *, content, bunit, pixscale, cards=()):
     npix = data.shape[0]
     hdu = fits.PrimaryHDU(np.asarray(data, dtype=float))
     header = hdu.header
+    for card, value in cards:
+        header[card] = value
     header["CONTENT"] = content
     header["BUNIT"] = bunit
     header["PLANE"] = "entrance_pupil"
@@ -311,7 +313,7 @@ def _write_array(directory, name, data, *, content, bunit, pixscale):
     return {"file": name, "sha256": _sha256(path)}
 
 
-def _write_bundle(directory, amp, opd_m, *, opd_bunit="m"):
+def _write_bundle(directory, amp, opd_m, *, opd_bunit="m", pupil_cards=()):
     pixscale = DIAMETER_M / amp.shape[0]
     files = {
         "pupil_amplitude": _write_array(
@@ -321,6 +323,7 @@ def _write_bundle(directory, amp, opd_m, *, opd_bunit="m"):
             content="amplitude_transmission",
             bunit="",
             pixscale=pixscale,
+            cards=pupil_cards,
         ),
         "ote_opd": _write_array(
             directory,
@@ -338,9 +341,19 @@ def _write_bundle(directory, amp, opd_m, *, opd_bunit="m"):
 
 class TestFromBundle:
     def test_reads_arrays_diameter_and_provenance(self, tmp_path):
+        """Fails if a valid optional FITS card stops the bundle from loading.
+
+        A complex card (``COMPNUM = 3+4j``) is recorded as its real and
+        imaginary parts and survives ``to_dict`` and JSON exactly.
+        """
         amp = _asymmetric_pupil(NPUP)
         opd_m = _asymmetric_opd_nm(NPUP) * NM_TO_M
-        inputs = NIRCamInputs.from_bundle(_write_bundle(tmp_path, amp, opd_m))
+        bundle = _write_bundle(tmp_path, amp, opd_m, pupil_cards=[("COMPNUM", 3 + 4j)])
+        inputs = NIRCamInputs.from_bundle(bundle)
+        header = inputs.provenance["files"]["pupil_amplitude"]["header"]
+        assert header.to_dict()["COMPNUM"] == {"real": 3.0, "imag": 4.0}
+        plain = inputs.provenance.to_dict()
+        assert json.loads(json.dumps(plain)) == plain
         np.testing.assert_array_equal(np.asarray(inputs.pupil_amplitude), amp)
         assert inputs.pupil_diameter_m == pytest.approx(DIAMETER_M, rel=1e-15)
         assert inputs.provenance["bundle_name"] == "synthetic"
