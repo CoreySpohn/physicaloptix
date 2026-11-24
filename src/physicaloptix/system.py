@@ -28,6 +28,7 @@ from optixstuff.grids import PixelGrid
 from optixstuff.spectral import spectral_breaks
 
 from physicaloptix.core import Field, PlaneKind, validate_field
+from physicaloptix.elements.base import _amplitude_leaf
 from physicaloptix.path import OpticalPath, Stage, _planes
 
 _ENERGY_TOL = 1e-10
@@ -120,8 +121,8 @@ class BeamSplitter(eqx.Module):
                         f"{name} shape {jnp.shape(amp)} does not match grid "
                         f"({grid.shape[0]}, {grid.shape[0]})"
                     )
-            t = jnp.asarray(t)
-            r = jnp.asarray(r)
+            t = _amplitude_leaf(t)
+            r = _amplitude_leaf(r)
         else:
             wavelengths_nm = jnp.asarray(wavelengths_nm)
             transmit_table = jnp.asarray(transmit_table)

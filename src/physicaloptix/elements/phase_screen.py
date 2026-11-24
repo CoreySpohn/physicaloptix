@@ -6,6 +6,7 @@ from typing import Self
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.leaves import as_float_leaf
 from jaxtyping import Array
 from optixstuff.grids import PixelGrid
 
@@ -163,7 +164,7 @@ class SampledPhaseScreen(Element, AbstractChromaticOp):
             unbound.
     """
 
-    opd_nm: Array
+    opd_nm: Array = eqx.field(converter=as_float_leaf)
     grid: PixelGrid
     plane: PlaneKind = eqx.field(static=True, default=PlaneKind.PUPIL)
     wavelength_nm: float | None = eqx.field(static=True, default=None)

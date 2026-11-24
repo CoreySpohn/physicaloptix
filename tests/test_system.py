@@ -1,6 +1,7 @@
 """Tests for the beamsplitter and the forked optical system."""
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -10,9 +11,11 @@ from optixstuff.spectral import Band, Quadrature
 
 from physicaloptix.core import Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis
-from physicaloptix.elements import SampledOptic
+from physicaloptix.elements import SampledOptic, SampledPhaseScreen
+from physicaloptix.instruments.roman import RomanCompact
+from physicaloptix.instruments.roman_full import RomanFull
 from physicaloptix.path import OpticalPath, Stage
-from physicaloptix.sources import broadcast_to_spectrum
+from physicaloptix.sources import PointSource, broadcast_to_spectrum
 from physicaloptix.system import BeamSplitter, Branch, OpticalSystem
 from physicaloptix.transforms import Fraunhofer
 
@@ -435,3 +438,102 @@ class TestOptixstuffSeam:
             and float(coronagraph.curves().iwa_lod) > 0
         )
         assert np.all(np.isfinite(np.asarray(coronagraph.curves().throughput)))
+
+
+def _roman_compact(fpm):
+    flat = np.zeros((4, 4))
+    return RomanCompact(
+        pupil=flat,
+        lyot=flat,
+        pupil_mask=flat,
+        fpm=fpm,
+        kind="hlc",
+        n_small=4,
+        n_big=4,
+        pupil_diam_pix=2.0,
+        fpm_sampling_lod=1.0,
+        fpm_lam0_nm=500.0,
+        lam0_nm=500.0,
+        dm1_surface_m=flat,
+        dm2_surface_m=flat,
+        dm1_wfe_m=flat,
+        dm2_wfe_m=flat,
+    )
+
+
+def _leaf_cases():
+    grid = PixelGrid.pupil(NPIX)
+    flat = np.ones((NPIX, NPIX))
+    return {
+        "sampled_optic": (
+            SampledOptic(flat, grid, PlaneKind.PUPIL, shift_px=np.zeros(2)),
+            ["transmission", "shift_px"],
+            jnp.float32,
+        ),
+        "sampled_optic_phasor": (
+            SampledOptic(flat * 1j, grid, PlaneKind.PUPIL),
+            ["transmission"],
+            jnp.complex64,
+        ),
+        "phase_screen": (SampledPhaseScreen(flat, grid), ["opd_nm"], jnp.float32),
+        "point_source": (PointSource([0.0, 0.0], flux=2), ["flux"], jnp.float32),
+        "beam_splitter": (
+            BeamSplitter(t=0.6, r=0.8, grid=grid, plane=PlaneKind.PUPIL),
+            ["t", "r"],
+            jnp.float32,
+        ),
+        "roman_compact": (
+            _roman_compact(np.ones((3, 3))),
+            [
+                "pupil_mask",
+                "fpm",
+                "dm1_surface_m",
+                "dm2_surface_m",
+                "dm1_wfe_m",
+                "dm2_wfe_m",
+            ],
+            jnp.float32,
+        ),
+        "roman_compact_complex_mask": (
+            _roman_compact(np.ones((3, 3), complex)),
+            ["fpm"],
+            jnp.complex64,
+        ),
+    }
+
+
+@pytest.mark.parametrize("case", list(_leaf_cases()))
+def test_converted_fields_are_strong_leaves_under_x32(case):
+    """Python numbers and NumPy arrays given at construction are stored as
+    strongly typed arrays of the active dtype (float32; a complex focal mask
+    stays complex64). Truth source: the leaf rule; dtypes are exact, so there
+    is no tolerance."""
+    with jax.enable_x64(False):
+        module, names, expected = _leaf_cases()[case]
+        for name in names:
+            leaf = getattr(module, name)
+            assert isinstance(leaf, jax.Array), name
+            assert leaf.dtype == expected, name
+            assert not leaf.weak_type, name
+
+
+def test_roman_full_arrays_are_strong_leaves_of_their_kind_under_x32():
+    """Each array keeps its kind (a phasor stays complex, a mask stays boolean)
+    in the active precision. Truth source: the leaf rule; exact dtypes."""
+    with jax.enable_x64(False):
+        model = RomanFull(
+            arrays={
+                "tilt": np.ones((2, 2), complex),
+                "map": np.zeros((2, 2)),
+                "mask": np.ones((2, 2), bool),
+            },
+            program=(),
+            n=2,
+            lam_m=5e-7,
+            pupil_diam_pix=1.0,
+            final_dx_m=1e-5,
+        )
+        want = {"tilt": jnp.complex64, "map": jnp.float32, "mask": jnp.bool_}
+        for key, dtype in want.items():
+            assert model.arrays[key].dtype == dtype, key
+            assert not model.arrays[key].weak_type, key

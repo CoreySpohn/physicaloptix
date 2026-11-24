@@ -101,6 +101,7 @@ from the ``inversion`` tap.
 import dataclasses
 import hashlib
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
 import equinox as eqx
@@ -358,6 +359,46 @@ class NIRCamConfig(eqx.Module):
             )
 
 
+class _Provenance(Mapping):
+    """A read-only, hashable record of where an input came from.
+
+    Holds the sorted items of a mapping, nested mappings and lists frozen
+    recursively (lists become tuples), so a module can carry it as a static
+    field and pass through ``jax.jit`` without it becoming leaves.
+
+    Args:
+        items: A mapping or pairs to freeze.
+    """
+
+    def __init__(self, items=()):
+        data = dict(items)
+        self._items = tuple(sorted((k, _freeze(v)) for k, v in data.items()))
+        self._lookup = dict(self._items)
+
+    def __getitem__(self, key):
+        return self._lookup[key]
+
+    def __iter__(self):
+        return (k for k, _ in self._items)
+
+    def __len__(self):
+        return len(self._items)
+
+    def __hash__(self):
+        return hash(self._items)
+
+    def __repr__(self):
+        return f"{type(self).__name__}({dict(self._items)!r})"
+
+
+def _freeze(value):
+    if isinstance(value, Mapping):
+        return value if isinstance(value, _Provenance) else _Provenance(value)
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze(v) for v in value)
+    return value
+
+
 class NIRCamInputs(eqx.Module):
     """The optical prescription arrays, their physical sampling and provenance.
 
@@ -391,7 +432,9 @@ class NIRCamInputs(eqx.Module):
     si_opd_nm: Array | None = None
     si_support: Array | None = None
     si_wavelength_nm: float | None = eqx.field(static=True, default=None)
-    provenance: dict = eqx.field(default_factory=dict)
+    provenance: Mapping = eqx.field(
+        static=True, default_factory=dict, converter=_Provenance
+    )
 
     def __check_init__(self):
         """Validate array shapes and the pupil diameter."""
@@ -887,7 +930,9 @@ class NIRCamBand(eqx.Module):
     wavelengths_nm: tuple[float, ...] = eqx.field(static=True, converter=_node_tuple)
     weights: tuple[float, ...] = eqx.field(static=True, converter=_node_tuple)
     si_opd_nm: Array | None = eqx.field(default=None, converter=_optional_array)
-    provenance: dict = eqx.field(default_factory=dict)
+    provenance: Mapping = eqx.field(
+        static=True, default_factory=dict, converter=_Provenance
+    )
 
     def __check_init__(self):
         """Validate node counts, wavelengths, weights and the SI cube."""

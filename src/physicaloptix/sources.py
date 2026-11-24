@@ -11,6 +11,7 @@ wavelength projects every slice onto one fixed angular grid.
 import equinox as eqx
 import jax.numpy as jnp
 from hwoutils.conversions import arcsec_to_lambda_d
+from hwoutils.leaves import as_float_leaf
 from jaxtyping import Array
 
 from physicaloptix.core import Field
@@ -124,7 +125,7 @@ class PointSource(eqx.Module):
     """
 
     position_arcsec: Array = eqx.field(converter=jnp.asarray)
-    flux: Array = eqx.field(default=1.0, converter=jnp.asarray)
+    flux: Array = eqx.field(default=1.0, converter=as_float_leaf)
     spectral_weights: Array | None = eqx.field(default=None, converter=_optional_array)
 
     def __check_init__(self):

@@ -6,6 +6,7 @@ from typing import Self
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.leaves import as_complex_leaf, as_float_leaf
 from hwoutils.transforms import shift_image
 from jaxtyping import Array
 from optixstuff.grids import PixelGrid
@@ -65,6 +66,15 @@ class AbstractCommandableElement(Element):
         """
 
 
+def _amplitude_leaf(value):
+    """An amplitude as a strong leaf: complex stays complex, real is float."""
+    return as_complex_leaf(value) if np.iscomplexobj(value) else as_float_leaf(value)
+
+
+def _optional_float_leaf(value):
+    return None if value is None else as_float_leaf(value)
+
+
 class SampledOptic(Element):
     """An ingested transmission array, stamped with the grid it was sampled on.
 
@@ -93,10 +103,10 @@ class SampledOptic(Element):
         shift_order: Interpolation order of the shift (static).
     """
 
-    transmission: Array
+    transmission: Array = eqx.field(converter=_amplitude_leaf)
     grid: PixelGrid
     plane: PlaneKind = eqx.field(static=True)
-    shift_px: Array | None = None
+    shift_px: Array | None = eqx.field(default=None, converter=_optional_float_leaf)
     shift_order: int = eqx.field(static=True, default=1)
 
     def spectral_breaks_nm(self) -> np.ndarray:

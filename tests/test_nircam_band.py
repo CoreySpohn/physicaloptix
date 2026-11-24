@@ -28,6 +28,8 @@ import hashlib
 import json
 from dataclasses import replace
 
+import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -474,6 +476,10 @@ class TestBandFromBundle:
         assert band.provenance["si_wfe_opd_sha256"] == _sha256(
             tmp_path / "si_wfe_opd.fits"
         )
+        leaves = jax.tree_util.tree_leaves(band)
+        assert all(isinstance(leaf, jax.Array) for leaf in leaves)
+        assert isinstance(hash(band.provenance), int)
+        assert float(eqx.filter_jit(lambda b: b.si_opd_nm.sum())(band)) != 0.0
 
     def test_bundle_without_si_gives_no_cube(self, tmp_path):
         bundle, _ = _write_band_bundle(tmp_path, si=False)

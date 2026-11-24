@@ -37,6 +37,7 @@ from typing import NamedTuple
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.leaves import as_leaf
 
 from physicaloptix.instruments._proper_beam import (
     PilotBeam,
@@ -139,7 +140,7 @@ def compile_train(steps, *, lam_m, n, beam_diameter_m, pupil_diam_pix):
 
 
 def _as_arrays(arrays):
-    return {k: jnp.asarray(v) for k, v in arrays.items()}
+    return {k: as_leaf(v) for k, v in arrays.items()}
 
 
 class RomanFull(eqx.Module):

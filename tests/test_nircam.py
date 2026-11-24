@@ -347,6 +347,12 @@ class TestFromBundle:
         assert inputs.provenance["files"]["ote_opd"]["sha256"] == _sha256(
             tmp_path / "ote_opd.fits"
         )
+        # Provenance is static metadata: every leaf is an array, the record
+        # hashes, and a jit over the module needs no hashing of the arrays.
+        leaves = jax.tree_util.tree_leaves(inputs)
+        assert all(isinstance(leaf, jax.Array) for leaf in leaves)
+        assert isinstance(hash(inputs.provenance), int)
+        assert float(eqx.filter_jit(lambda m: m.pupil_amplitude.sum())(inputs)) > 0
 
     def test_stpsf_opd_ramp_moves_image_toward_minus_x(self, tmp_path):
         """STPSF (POPPY) propagates with an e^{+2 pi i u x} forward kernel:

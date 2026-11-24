@@ -29,6 +29,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.leaves import as_float_leaf, as_leaf
 from hwoutils.map_coordinates import map_coordinates
 from jax.scipy.signal import fftconvolve
 from jaxtyping import Array
@@ -317,6 +318,14 @@ def dm_median_volts(volts, *, volt_quantum, live):
     return jnp.nanmedian(jnp.where(jnp.asarray(live), quantized, jnp.nan))
 
 
+def _optional_leaf(value):
+    return None if value is None else as_leaf(value)
+
+
+def _optional_float_leaf(value):
+    return None if value is None else as_float_leaf(value)
+
+
 class RomanCompact(eqx.Module):
     """Monochromatic compact Roman coronagraph train on prescription grids.
 
@@ -350,8 +359,8 @@ class RomanCompact(eqx.Module):
 
     pupil: Array = eqx.field(converter=jnp.asarray)
     lyot: Array = eqx.field(converter=jnp.asarray)
-    pupil_mask: Array | None
-    fpm: Array | None
+    pupil_mask: Array | None = eqx.field(converter=_optional_leaf)
+    fpm: Array | None = eqx.field(converter=_optional_leaf)
     kind: str = eqx.field(static=True)
     n_small: int = eqx.field(static=True)
     n_big: int = eqx.field(static=True)
@@ -362,10 +371,14 @@ class RomanCompact(eqx.Module):
     primary_diameter_m: float = eqx.field(static=True, default=2.4)
     beam_diameter_m: float = eqx.field(static=True, default=0.0463)
     dm_separation_m: float = eqx.field(static=True, default=1.0)
-    dm1_surface_m: Array | None = None
-    dm2_surface_m: Array | None = None
-    dm1_wfe_m: Array | None = None
-    dm2_wfe_m: Array | None = None
+    dm1_surface_m: Array | None = eqx.field(
+        default=None, converter=_optional_float_leaf
+    )
+    dm2_surface_m: Array | None = eqx.field(
+        default=None, converter=_optional_float_leaf
+    )
+    dm1_wfe_m: Array | None = eqx.field(default=None, converter=_optional_float_leaf)
+    dm2_wfe_m: Array | None = eqx.field(default=None, converter=_optional_float_leaf)
 
     def __check_init__(self):
         """Validate grid shapes and the mask kind."""
