@@ -1712,7 +1712,8 @@ def test_fields_run_on_their_own_clock(chromatic, x64):
 
     Truth: the same field anchored at zero. Two fields that differ only in
     ``epoch_d`` (0 and 60000.123) give bitwise equal coefficients and images
-    at each elapsed second, eagerly and compiled, and ``peak_contrast``
+    at each elapsed second, eagerly and compiled, for a Python list, a NumPy
+    array and a JAX array on both sides, and ``peak_contrast``
     agrees. The kernel is the interface's own, and a positional time or a
     ``time_d`` keyword raises. Eager against ``eqx.filter_jit``: tolerance
     basis floating-point, 8 eps of the sum over frequencies of amplitude
@@ -1746,20 +1747,19 @@ def test_fields_run_on_their_own_clock(chromatic, x64):
             :, None, None
         ] + np.asarray(zero.phases)
         scale = np.sum(np.abs(np.asarray(zero.amplitudes)) * (1 + np.abs(argument)), -1)
-        eager = zero.coefficients(elapsed_s=times)
-        np.testing.assert_array_equal(anchored.coefficients(elapsed_s=times), eager)
-        compiled = coefficients(zero, jnp.asarray(times))
-        np.testing.assert_array_equal(
-            coefficients(anchored, jnp.asarray(times)), compiled
-        )
-        np.testing.assert_array_less(np.abs(compiled - eager), 8 * eps * scale)
-        np.testing.assert_array_equal(
-            anchored.realize(wavelength_nm=wavelength_nm, elapsed_s=times).data,
-            zero.realize(wavelength_nm=wavelength_nm, elapsed_s=times).data,
-        )
-        np.testing.assert_array_equal(
-            realize(anchored, jnp.asarray(times)), realize(zero, jnp.asarray(times))
-        )
+        reference = zero.coefficients(elapsed_s=times)
+        for t in (times.tolist(), times, jnp.asarray(times)):
+            eager = zero.coefficients(elapsed_s=t)
+            np.testing.assert_array_equal(eager, reference)
+            np.testing.assert_array_equal(anchored.coefficients(elapsed_s=t), eager)
+            compiled = coefficients(zero, t)
+            np.testing.assert_array_equal(coefficients(anchored, t), compiled)
+            np.testing.assert_array_less(np.abs(compiled - eager), 8 * eps * scale)
+            np.testing.assert_array_equal(
+                anchored.realize(wavelength_nm=wavelength_nm, elapsed_s=t).data,
+                zero.realize(wavelength_nm=wavelength_nm, elapsed_s=t).data,
+            )
+            np.testing.assert_array_equal(realize(anchored, t), realize(zero, t))
         peak = dict(telescope_peak=2.0, wavelength_nm=wavelength_nm, elapsed_s=7.0)
         np.testing.assert_array_equal(
             anchored.peak_contrast(**peak), zero.peak_contrast(**peak)
