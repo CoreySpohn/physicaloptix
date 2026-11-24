@@ -12,6 +12,7 @@ from optixstuff.grids import PixelGrid
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.ifs import (
     LensletChain,
+    _check_stop_band,
     detector_scene,
     pixel_integrate,
     psflet_pack,
@@ -273,12 +274,31 @@ class TestShiftTheoremAndWavecal:
         """The shifted render may not sample beyond the stop grid's band.
 
         At 3 px per diffraction unit the stop grid bounds the detector at
-        +/-128 px. A +/-128 px window sits exactly on the bound for the first
-        render; the 0.3 px centroid shift pushes the second render past it.
+        +/-128 px. The positive endpoint sits on the bound for the first
+        render. The positive x shift pushes that endpoint past the bound.
         """
-        offsets = np.arange(-128.0, 128.0)
-        with pytest.raises(ValueError, match="shifted render"):
+        offsets = np.arange(-127.0, 129.0)
+        with pytest.raises(ValueError, match=r"shifted render at 1000 nm"):
             psflet_template(tilted_chain, LAM_REF, offsets, n_quad=1)
+
+    @pytest.mark.parametrize("limit_px", [128.1, 128.0], ids=["inside", "boundary"])
+    def test_stop_band_accepts_asymmetric_offsets(self, limit_px):
+        chain = make_chain(stop_halfwidth=0.75 * 128.0 / limit_px)
+        fine = np.arange(-127.0, 129.0)
+        ppd = chain.px_per_diffraction(LAM_REF)
+        # The x shift moves the positive endpoint inward. The y endpoint at
+        # 128 px sets the extent, including when it lands exactly on the limit.
+        _check_stop_band(chain, LAM_REF, fine, -0.3, 0.0, ppd)
+
+    @pytest.mark.parametrize(
+        ("cx", "cy"), [(-1.25, 0.0), (0.0, 0.25)], ids=["x-low", "y-high"]
+    )
+    def test_stop_band_rejects_out_of_band_endpoint(self, cx, cy):
+        chain = make_chain()
+        fine = np.arange(-127.0, 129.0)
+        ppd = chain.px_per_diffraction(LAM_REF)
+        with pytest.raises(ValueError, match=r"shifted render at 1000 nm.*Nyquist"):
+            _check_stop_band(chain, LAM_REF, fine, cx, cy, ppd)
 
 
 class TestPixelIntegrate:
@@ -345,16 +365,29 @@ class TestPixelIntegrate:
 
 
 class TestPack:
+    def test_legacy_constructor_requires_template_origin(self):
+        """The current pack class rejects an emitter that omits the origin."""
+        with pytest.raises(TypeError, match="template_origin"):
+            PsfletPack(
+                templates=np.ones((1, 1, 3, 3)),
+                offsets=np.arange(-1.0, 2.0),
+                wavelengths_nm=[LAM_REF],
+                field_xy=np.zeros((1, 2)),
+            )
+
     def test_save_load_roundtrip(self, tmp_path):
         """Serialization performs no arithmetic, so every field is lossless."""
         pack = psflet_pack(
             make_chain(), [900.0, 1100.0], half_extent=1.0, step=0.5, n_quad=2
         )
+        assert pack.template_origin == "centroid"
         path = tmp_path / "physical.npz"
         save_psflet_pack(path, pack)
         with np.load(path, allow_pickle=False) as data:
             assert data["format_version"] == 2
+            assert data["template_origin"] == "centroid"
         loaded = load_psflet_pack(path)
+        assert loaded.template_origin == "centroid"
         for name in ("templates", "offsets", "wavelengths_nm", "field_xy", "centroids"):
             np.testing.assert_array_equal(getattr(loaded, name), getattr(pack, name))
         assert loaded.meta_json == pack.meta_json
@@ -439,6 +472,13 @@ class TestPack:
         chain = make_chain(n_stop=8)
         with pytest.raises(ValueError, match="Nyquist"):
             psflet_pack(chain, [1000.0], half_extent=8.0, step=0.25, n_quad=4)
+
+    def test_pack_nyquist_preflight_uses_shortest_wavelength(self):
+        chain = make_chain(n_stop=8)
+        # The full 7.5 px extent exceeds the 7.2 px blue limit and fits the
+        # 8.8 px red limit. The 7.0 px midpoint samples fit at both wavelengths.
+        with pytest.raises(ValueError, match=r"detector extent .* at 900 nm"):
+            psflet_pack(chain, [900.0, 1100.0], half_extent=7.0, step=1.0, n_quad=1)
 
     def test_wavelength_wings_grow_in_pack(self):
         """Chromatic morphology: red planes put more energy at large offsets
