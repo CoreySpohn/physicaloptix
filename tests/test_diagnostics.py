@@ -179,6 +179,7 @@ class TestQuadratureAudit:
                 ),
                 1.0,
                 500.0,
+                wavelength_law="opd",
             ),
             rms,
             1e-3,

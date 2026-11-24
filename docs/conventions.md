@@ -311,7 +311,9 @@ to retain the pinning cross term.
 `peak_contrast` accepts the telescope peak density and converts it to
 peak-pixel energy using the field's grid.
 
-Mono fields use reference/wavelength phase scaling. Propagated chromatic
+Mono fields inherit their basis kind's wavelength law. OPD sensitivities
+scale by reference wavelength divided by wavelength, and fractional-amplitude
+sensitivities are achromatic. Propagated chromatic
 processes draw `ChromaticAnalyticSpeckleField`, retaining every stored
 complex `e_nom` and `G` node and input energy. Queries interpolate amplitudes
 linearly with clamped endpoints, then delegate to the shared law. At stored

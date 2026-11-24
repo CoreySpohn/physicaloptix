@@ -108,6 +108,7 @@ class TestMonteCarloConsistency:
                 speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
                 0.25**2,
                 1000.0,
+                wavelength_law="opd",
             ),
             per_mode_rms=rms,
             knee_hz=1e-3,

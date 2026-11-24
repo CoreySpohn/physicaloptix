@@ -61,7 +61,12 @@ def _process(npix=8, m=3, knee_hz=1e-4, slope=-2.0, **kwargs):
     )
     return SpeckleProcess(
         FocalResponse(
-            e_nom, g, speckle_grid((e_nom).shape[-2:], 0.25, 500.0), 1.0, 500.0
+            e_nom,
+            g,
+            speckle_grid((e_nom).shape[-2:], 0.25, 500.0),
+            1.0,
+            500.0,
+            wavelength_law="opd",
         ),
         per_mode_rms=1.0,
         knee_hz=knee_hz,

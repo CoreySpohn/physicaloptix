@@ -246,7 +246,14 @@ def analytic_from_density(
     from physicaloptix.speckle import SpeckleProcess
 
     process = SpeckleProcess(
-        FocalResponse(e_nom, G, grid, input_energy, reference_wavelength_nm),
+        FocalResponse(
+            e_nom,
+            G,
+            grid,
+            input_energy,
+            reference_wavelength_nm,
+            wavelength_law=None if wavelengths_nm is not None else "opd",
+        ),
         1.0,
         1e-3,
         epoch_d=epoch_d,
