@@ -1,6 +1,9 @@
 """Tests for OpticalPath.linearize: the unified (E_nom, G) entry point."""
 
+from dataclasses import replace
+
 import equinox as eqx
+import ineedvalidation as vv
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -22,7 +25,7 @@ from physicaloptix.elements import (
 from physicaloptix.linearize import linearity_residual, linearize, linearize_stages
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.sources import broadcast_to_spectrum
-from physicaloptix.speckle import SpeckleProcess
+from physicaloptix.speckle import AnalyticSpeckleField, SpeckleProcess
 from physicaloptix.trains import MirrorSpec, build_mirror_train, synthesize_psd_surface
 from physicaloptix.transforms import Fraunhofer
 
@@ -231,6 +234,67 @@ def test_realize_is_flux_fraction_end_to_end(setup):
     )
 
 
+@vv.seam("physicaloptix.linearize", "optixstuff.FocalResponse")
+@pytest.mark.parametrize("kind", ["amplitude", "opd"])
+def test_mono_response_matches_perturbed_pupil_at_1000_nm(setup, kind, record_property):
+    """Direct propagation of a clear pupil at fixed native lambda/D is truth.
+
+    Swapping the basis laws mis-scales the coherent excess at twice the
+    reference wavelength. The analytic amplitude bound is 1e-4 of the
+    largest linear intensity term (squared 1% ripple). The OPD spike gave
+    1.975e-5 of nominal peak intensity. Its exact-algebra bound allows
+    1.1 times the squared phase (2 pi * 1 nm / 1000 nm)^2 for the omitted
+    quadratic term.
+    """
+    path, field, _ = setup
+    x, _ = field.grid.coordinates()
+    ripple = jnp.cos(4 * jnp.pi * x + jnp.pi / 4)
+    opd_phase = 2 * jnp.pi / 1000.0
+    if kind == "amplitude":
+        mode = 0.01 * ripple
+        transmission = 1 + mode
+    else:
+        mode = ripple  # nm of OPD at unit coefficient
+        transmission = jnp.exp(1j * opd_phase * mode)
+    basis = ModeBasis(B=mode[None], coeffs=jnp.zeros(1), kind=kind)
+    lin = path.linearize(field, basis, wavelength_nm=500.0)
+    process = lin.to_speckle_process(per_mode_rms=1.0, knee_hz=1e-3, coherent=True)
+    frozen = AnalyticSpeckleField(
+        process.response, jnp.ones((1, 1)), jnp.zeros(1), jnp.zeros((1, 1))
+    )
+    got = frozen.realize(wavelength_nm=1000.0).data
+
+    # The fixture's Fraunhofer has no fixed angular reference: its kernel
+    # samples the same native lambda/D coordinates for both wavelengths.
+    nominal, _ = path.propagate(field)
+    perturbed = Field(field.data * transmission, field.grid, field.plane)
+    direct, _ = path.propagate(perturbed)
+    norm = nominal.grid.pixel_area / field.energy()
+    expected = (abs(direct.data) ** 2 - abs(nominal.data) ** 2) * norm
+    error = jnp.max(abs(got - expected))
+    if kind == "amplitude":
+        linear_term = 2 * jnp.real(nominal.data.conj() * (direct.data - nominal.data))
+        scale = jnp.max(abs(linear_term)) * norm
+        bound = 1e-4
+    else:
+        scale = jnp.max(abs(nominal.data) ** 2) * norm
+        bound = 1.1 * opd_phase**2
+    record_property("max_flux_fraction_error", float(error))
+    record_property("normalized_error", float(error / scale))
+    assert error / scale < bound
+
+
+def test_mono_process_requires_known_basis_kind(setup):
+    """Basis metadata defines the mono law (mutation, exact exception).
+
+    Fails if a stage with unknown kind silently acquires an amplitude law.
+    """
+    path, field, basis = setup
+    lin = path.linearize(field, basis, wavelength_nm=500.0)
+    with pytest.raises(ValueError, match="wavelengths_nm"):
+        replace(lin, kind=None).to_speckle_process(per_mode_rms=1.0, knee_hz=1e-3)
+
+
 def test_rejects_chromatic_field(setup):
     """linearize is monochromatic; a chromatic field must raise, not silently
     apply the design-wavelength phase factor to every channel."""
@@ -353,6 +417,9 @@ class TestChromaticLinearize:
             atol=64 * np.finfo(float).eps * float(jnp.max(jnp.abs(parent))),
         )
         reference = field.at_wavelength(field.response.reference_wavelength_nm)
+        reference = replace(
+            reference, response=replace(reference.response, wavelength_law="opd")
+        )
         scaled = reference.realize(wavelength_nm=wavelengths[-1]).data
         relative = float(
             jnp.linalg.norm(exact_node - scaled) / jnp.linalg.norm(exact_node)
@@ -384,6 +451,8 @@ class TestChromaticLinearize:
             wavelengths_nm=wavelengths,
             dispersion=screen.kernel_at(wavelengths),
         )
+        process = lin.to_speckle_process(per_mode_rms=1.0, knee_hz=1e-3)
+        assert process.response.wavelength_law is None
 
         def run(coeffs):
             p = eqx.tree_at(lambda q: q.stages[0].op, path, screen.with_command(coeffs))
@@ -395,6 +464,42 @@ class TestChromaticLinearize:
         np.testing.assert_allclose(
             np.asarray(lin.G), np.asarray(g_ad), rtol=0, atol=1e-12
         )
+
+    def test_dispersive_stage_has_no_monochromatic_law(
+        self, small_path, mono_field, chromatic_field, opd_basis
+    ):
+        """A dispersion kernel sets its own wavelength law (mutation, exact).
+
+        The kernel here is a coating log-amplitude, achromatic, on an
+        OPD-tagged basis, so the basis tag would scale it as a phase off the
+        design wavelength. Fails if the stage route records the basis kind, if
+        the mono product exports a law, or if a tabulated merge with a phase
+        screen is refused.
+        """
+        wavelengths = chromatic_field.spectrum.nodes_nm[0]
+        kernel_row = jnp.full(wavelengths.shape, 0.01 + 0.0j)
+        path = _dispersive_path(small_path, wavelengths, kernel_row)
+        mono = linearize(
+            path,
+            mono_field,
+            wavelength_nm=500.0,
+            method="jacfwd",
+            perturbation_stage="coating",
+        )
+        assert mono.kind is None
+        with pytest.raises(ValueError, match="wavelengths_nm"):
+            mono.to_speckle_process(per_mode_rms=1.0, knee_hz=1e-3)
+
+        screen = PhaseScreen(opd_basis, path.stages[0].op.grid, wavelength_nm=500.0)
+        mixed = OpticalPath(
+            stages=(path.stages[0], Stage("drift", screen), *path.stages[1:])
+        )
+        merged, _ = linearize_stages(
+            mixed, chromatic_field, ("coating", "drift"), wavelengths_nm=wavelengths
+        )
+        assert merged.kind is None
+        process = merged.to_speckle_process(per_mode_rms=1.0, knee_hz=1e-3)
+        assert process.response.wavelength_law is None
 
     def test_dispersion_table_matches_jacfwd(
         self, small_path, chromatic_field, opd_basis

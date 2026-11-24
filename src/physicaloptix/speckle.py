@@ -110,9 +110,8 @@ def _check_wavelength_layout(response, wavelengths_nm):
 class AnalyticSpeckleField(LinearSpeckleField):
     """Frozen spectral synthesis using the shared per-pixel field law.
 
-    A pure halo uses a zero nominal response. The inherited chromatic
-    model holds e_nom fixed and scales G by reference_wavelength_nm /
-    wavelength_nm.
+    A pure halo uses a zero nominal response. The caller's response supplies
+    the wavelength law for its sensitivity.
 
     Attributes:
         amplitudes: Spectral-synthesis amplitudes, shape (m, f), in mode-coefficient
@@ -125,6 +124,23 @@ class AnalyticSpeckleField(LinearSpeckleField):
     amplitudes: Array
     frequencies_hz: Array
     phases: Array
+
+    def __check_init__(self):
+        """Require one spectral row per response mode and one phase per line."""
+        n_modes = self.response.G.shape[-3]
+        shape = jnp.shape(self.amplitudes)
+        phase_shape = jnp.shape(self.phases)
+        if len(shape) != 2 or shape[0] != n_modes or phase_shape != shape:
+            raise ValueError(
+                f"amplitudes {shape} and phases {phase_shape} must both have "
+                f"shape ({n_modes}, f) for a response with {n_modes} modes"
+            )
+        freq_shape = jnp.shape(self.frequencies_hz)
+        if freq_shape not in ((shape[1],), shape):
+            raise ValueError(
+                f"frequencies_hz has shape {freq_shape}; "
+                f"expected ({shape[1]},) or {shape}"
+            )
 
     def coefficients(self, *, elapsed_s):
         """Synthesize ``(*time_shape, n_modes)`` coefficients at ``elapsed_s``.
@@ -222,9 +238,8 @@ class ChromaticAnalyticSpeckleField(AnalyticSpeckleField):
     def at_wavelength(self, wavelength_nm):
         """A mono field whose shared law equals the interpolated node law.
 
-        The sensitivity is precompensated for the parent's phase scaling;
-        no phase factor is applied twice. The returned e_nom is also the
-        correct nominal floor for visualization at this wavelength.
+        The interpolated G already includes the node's chromatic response
+        and is used as given. The interpolated e_nom supplies its nominal floor.
 
         Args:
             wavelength_nm: Wavelength in nanometers at which the tables are
@@ -242,10 +257,11 @@ class ChromaticAnalyticSpeckleField(AnalyticSpeckleField):
         return AnalyticSpeckleField(
             response=FocalResponse(
                 e,
-                g * (wavelength_nm / response.reference_wavelength_nm),
+                g,
                 self.grid,
                 energy,
                 response.reference_wavelength_nm,
+                wavelength_law="amplitude",
             ),
             epoch_d=self.epoch_d,
             amplitudes=self.amplitudes,
@@ -866,6 +882,7 @@ class SpeckleProcess(eqx.Module):
     def draw(self, key, *, renormalize=True) -> AnalyticSpeckleField:
         """Sample one frozen realization of the process.
 
+        The drawn field inherits the wavelength law of the caller's response.
         Phases are uniform on ``[0, 2 pi)`` and independent realizations come
         from independent keys. ``renormalize`` selects the draw statistics:
 

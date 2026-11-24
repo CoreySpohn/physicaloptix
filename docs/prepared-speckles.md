@@ -133,6 +133,7 @@ class DriftingSpeckles:
             self.grid,
             N_PIX**2 / pupil.sum(),
             self.grid.frame.reference_wavelength_nm,
+            wavelength_law="opd",
         )
         self.calls = 0
 

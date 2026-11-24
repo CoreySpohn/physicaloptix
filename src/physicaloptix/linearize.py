@@ -9,7 +9,9 @@ on a linear chain.
 
 Amplitude bases (``kind="amplitude"``) linearize the fractional-amplitude
 map ``E * (1 + B . eps)``: their columns are ``Path(B_k * E_in)`` with no
-phase factor, so G is achromatic for them.
+phase factor, so G is achromatic for them. A single-plane focal response
+carries the basis kind as its wavelength law. A chromatic response carries
+``wavelength_law=None`` because each node already includes its dispersion.
 
 Memory policy: mode stacks at pupil resolution are the wall (a dense basis at
 2048^2 in complex128 is tens of MB per mode), so the analytic method streams
@@ -55,7 +57,9 @@ class Linearization(eqx.Module):
     is ``(m, y, x)``, per unit mode coefficient (an OPD basis in the same
     length unit as ``wavelength_nm``). Chromatic (``wavelengths_nm`` set):
     ``e_nom`` is ``(w, y, x)`` and ``G`` is ``(w, m, y, x)`` -- one column
-    stack per wavelength band.
+    stack per wavelength band. A mono product needs a known basis kind to
+    supply the focal response's wavelength law. A chromatic product supplies
+    a tabulated response with no additional scaling.
 
     Attributes:
         e_nom: Complex nominal focal field, shape ``(y, x)`` mono or
@@ -136,6 +140,9 @@ class Linearization(eqx.Module):
         Returns:
             The parameter object whose ``draw(key)`` yields
             ``AnalyticSpeckleField`` realizations.
+
+        Raises:
+            ValueError: A monochromatic product lacks a known basis kind.
         """
         grid = kwargs.pop("grid", self.grid)
         reference_wavelength_nm = kwargs.pop(
@@ -144,12 +151,21 @@ class Linearization(eqx.Module):
             if self.wavelengths_nm is None
             else grid.frame.reference_wavelength_nm,
         )
+        law = None
+        if self.wavelengths_nm is None:
+            if self.kind not in ("opd", "amplitude"):
+                raise ValueError(
+                    f"unknown monochromatic basis kind {self.kind!r}; linearize "
+                    "with wavelengths_nm to obtain a tabulated response"
+                )
+            law = self.kind
         response = FocalResponse(
             self.e_nom,
             self.G,
             grid,
             jnp.asarray(kwargs.pop("input_energy", self.input_energy), dtype=float),
             reference_wavelength_nm,
+            wavelength_law=law,
         )
         kwargs.setdefault("wavelengths_nm", self.wavelengths_nm)
         if decorr_hours is not None:
@@ -501,7 +517,9 @@ def linearize_stages(
         every ``linearize_stages`` output is stage-route by construction --
         and honest provenance of which stages contributed) and
         ``dispersion=None`` (no single per-mode table is coherent once
-        stages with different mode counts / kinds are concatenated).
+        stages with different mode counts / kinds are concatenated). Stages
+        of different kinds merge only on wavelength nodes, where the merged
+        ``kind`` is ``None``; a monochromatic merge requires one kind.
     """
     parts = [
         linearize(
@@ -518,7 +536,9 @@ def linearize_stages(
     for part in parts[1:]:
         if part.method != first.method:
             raise ValueError("linearize_stages: stage parts disagree on method")
-        if part.kind != first.kind:
+        # A tabulated product carries each column's own wavelength response,
+        # so stages of different kinds merge on wavelength nodes only.
+        if part.kind != first.kind and wavelengths_nm is None:
             raise ValueError("linearize_stages: stage parts disagree on kind")
         if part.wavelength_nm != first.wavelength_nm:
             raise ValueError("linearize_stages: stage parts disagree on wavelength_nm")
@@ -546,7 +566,7 @@ def linearize_stages(
         G=g,
         wavelength_nm=first.wavelength_nm,
         method=first.method,
-        kind=first.kind,
+        kind=first.kind if all(part.kind == first.kind for part in parts) else None,
         grid=first.grid,
         input_energy=first.input_energy,
         wavelengths_nm=first.wavelengths_nm,

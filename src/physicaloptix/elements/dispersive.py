@@ -115,9 +115,14 @@ class DispersiveScreen(AbstractCommandableElement, AbstractChromaticOp):
         return self.basis.coeffs
 
     @property
-    def command_kind(self) -> str:
-        """The underlying mode basis kind."""
-        return self.basis.kind
+    def command_kind(self) -> None:
+        """None: the kernel, not the basis kind, sets the wavelength law.
+
+        A per-mode dispersion kernel has no single monochromatic wavelength
+        law, so a linearization of this command is tabulated on wavelength
+        nodes before it becomes a speckle response.
+        """
+        return None
 
     def with_command(self, command: Array) -> Self:
         """Return a screen with the specified command.

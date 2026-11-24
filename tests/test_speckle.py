@@ -63,6 +63,34 @@ def _field(coherent=False):
     )
 
 
+@pytest.mark.parametrize(
+    ("amp_shape", "phase_shape", "freq_shape", "message"),
+    [
+        ((3, 4), (3, 4), (4,), r"\(3, 4\).*2 modes"),
+        ((1, 4), (1, 4), (4,), r"\(1, 4\).*2 modes"),
+        ((2, 4), (1, 4), (4,), r"phases \(1, 4\).*2 modes"),
+        ((2,), (2,), (4,), r"amplitudes \(2,\).*2 modes"),
+        ((2, 4), (2, 4), (1, 4), r"frequencies_hz.*\(1, 4\).*\(2, 4\)"),
+        ((2, 4), (2, 4), (3,), r"frequencies_hz.*\(3,\).*\(4,\)"),
+    ],
+)
+def test_synthesis_requires_one_row_per_mode(
+    amp_shape, phase_shape, freq_shape, message
+):
+    """The mode-by-frequency layout is the truth (mutation, exact shapes).
+
+    Fails if malformed coefficient or frequency rows broadcast at realization.
+    """
+    grid = speckle_grid((1, 1))
+    response = FocalResponse(
+        jnp.zeros((1, 1)), jnp.ones((2, 1, 1)), grid, 1, 500, wavelength_law="opd"
+    )
+    with pytest.raises(ValueError, match=message):
+        AnalyticSpeckleField(
+            response, jnp.ones(amp_shape), jnp.zeros(freq_shape), jnp.zeros(phase_shape)
+        )
+
+
 class TestSpeckleProcess:
     """The parameter object (one parameter set) and its draw(key) view."""
 
@@ -82,6 +110,7 @@ class TestSpeckleProcess:
             speckle_grid((_DIMS, _DIMS), reference=1000.0),
             _e_in(10.0),
             1000.0,
+            wavelength_law="opd",
         )
         defaults = dict(
             response=response, per_mode_rms=0.1, knee_hz=1e-4, epoch_d=_EPOCH_D
@@ -156,6 +185,7 @@ class TestSpeckleProcess:
                 speckle_grid((proc.response.e_nom).shape[-2:], 0.25, 1000.0),
                 proc.response.input_energy,
                 1000.0,
+                wavelength_law="opd",
             ),
             decorr_hours=10.0,
             total_rms=0.3,
@@ -208,7 +238,12 @@ def _small_process(m=_M, dims=_DIMS, **kwargs):
         k4, (m, dims, dims)
     )
     response = FocalResponse(
-        e_nom, g, speckle_grid((dims, dims), reference=1000.0), _e_in(10.0), 1000.0
+        e_nom,
+        g,
+        speckle_grid((dims, dims), reference=1000.0),
+        _e_in(10.0),
+        1000.0,
+        wavelength_law="opd",
     )
     defaults = dict(per_mode_rms=0.1, knee_hz=1e-4)
     defaults.update(kwargs)
@@ -390,7 +425,12 @@ def _oracle_process(coherent, m=6, dims=8):
     rms = jnp.asarray(np.linspace(0.02, 0.08, m))
     return SpeckleProcess(
         FocalResponse(
-            e_nom, g, speckle_grid((e_nom).shape[-2:], 0.25, 1000.0), _e_in(5.0), 1000.0
+            e_nom,
+            g,
+            speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
+            _e_in(5.0),
+            1000.0,
+            wavelength_law="opd",
         ),
         per_mode_rms=rms,
         knee_hz=1e-3,
@@ -514,6 +554,7 @@ class TestMoments:
                 speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
                 _e_in(1.0),
                 1000.0,
+                wavelength_law="opd",
             ),
             per_mode_rms=0.1,
             knee_hz=1e-3,
@@ -827,6 +868,31 @@ _UNIT_E_IN = 0.25**2
 
 
 class TestChromaticProcess:
+    def test_interpolated_sensitivity_is_used_as_given(self):
+        """Linear interpolation gives G=3 (exact-algebra halo of 9).
+
+        Fails if a frozen node carries an OPD law or precompensates G.
+        """
+        grid = speckle_grid((1, 1))
+        process = SpeckleProcess(
+            FocalResponse(
+                jnp.zeros((2, 1, 1)),
+                jnp.array([2.0, 4.0]).reshape(2, 1, 1, 1),
+                grid,
+                grid.pixel_area,
+                500.0,
+                wavelength_law=None,
+            ),
+            1.0,
+            1e-3,
+            wavelengths_nm=jnp.array([500.0, 1500.0]),
+            n_freq=2,
+        )
+        node = process.draw(jax.random.PRNGKey(0)).at_wavelength(1000.0)
+        coeff = node.coefficients(elapsed_s=0.0)[0]
+        halo = node.realize(wavelength_nm=jnp.array([500.0, 1000.0])).data / coeff**2
+        np.testing.assert_allclose(halo, 9.0, rtol=8 * np.finfo(float).eps, atol=0)
+
     def test_draw_interpolates_complex_amplitudes(self):
         """Chromatic draw passes wavelengths through, and realize uses the
         interpolated complex amplitudes, pinned at value level."""
@@ -842,6 +908,7 @@ class TestChromaticProcess:
                 speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
                 _UNIT_E_IN,
                 1000.0,
+                wavelength_law=None,
             ),
             100.0,
             1e-4,
@@ -878,6 +945,7 @@ class TestChromaticProcess:
                 speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
                 _UNIT_E_IN,
                 1000.0,
+                wavelength_law=None,
             ),
             100.0,
             1e-4,
@@ -890,6 +958,7 @@ class TestChromaticProcess:
                 speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
                 energies,
                 1000.0,
+                wavelength_law=None,
             ),
             100.0,
             1e-4,
@@ -917,6 +986,7 @@ class TestChromaticProcess:
                 speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
                 _UNIT_E_IN,
                 1000.0,
+                wavelength_law=None,
             ),
             decorr_hours=10.0,
             total_rms=0.3,
@@ -938,6 +1008,7 @@ class TestChromaticProcess:
                 speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
                 _UNIT_E_IN,
                 1000.0,
+                wavelength_law=None,
             ),
             100.0,
             1e-4,
@@ -959,6 +1030,7 @@ class TestChromaticProcess:
                     speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
                     _UNIT_E_IN,
                     1000.0,
+                    wavelength_law="opd",
                 ),
                 100.0,
                 1e-4,
@@ -977,6 +1049,7 @@ class TestChromaticProcess:
                 speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
                 _UNIT_E_IN,
                 1000.0,
+                wavelength_law="opd",
             ),
             100.0,
             1e-4,
@@ -1071,7 +1144,12 @@ def _chromatic_process(coherent, e_scale=0.5, seed=0):
     e = e_scale * (jax.random.normal(k2, (w, ny, nx, 2)) @ jnp.array([1.0, 1j]))
     return SpeckleProcess(
         FocalResponse(
-            e, g, speckle_grid((e).shape[-2:], 0.25, 1000.0), _e_in(1.0), 1000.0
+            e,
+            g,
+            speckle_grid((e).shape[-2:], 0.25, 1000.0),
+            _e_in(1.0),
+            1000.0,
+            wavelength_law=None,
         ),
         1.0,
         1e-3,
@@ -1105,6 +1183,7 @@ class TestCrossBandMoments:
                     speckle_grid((proc.response.e_nom[i]).shape[-2:], 0.25, 1000.0),
                     _e_in(1.0),
                     1000.0,
+                    wavelength_law="amplitude",
                 ),
                 proc.per_mode_rms,
                 proc.knee_hz,
@@ -1210,6 +1289,7 @@ class TestCrossBandMoments:
                 speckle_grid((e_stack).shape[-2:], 0.25, 1000.0),
                 _e_in(1.0),
                 1000.0,
+                wavelength_law=None,
             ),
             1.0,
             1e-3,
@@ -1289,6 +1369,7 @@ class TestCrossBandMoments:
                 ),
                 _e_in(1.0),
                 1000.0,
+                wavelength_law="amplitude",
             ),
             1.0,
             1e-3,
@@ -1326,6 +1407,7 @@ class TestCrossBandViews:
                 speckle_grid((e_stack).shape[-2:], 0.25, 1000.0),
                 _e_in(1.0),
                 1000.0,
+                wavelength_law=None,
             ),
             1.0,
             1e-3,
@@ -1423,6 +1505,7 @@ class TestCrossBandViews:
                 speckle_grid((proc.response.e_nom[0]).shape[-2:], 0.25, 1000.0),
                 _e_in(1.0),
                 1000.0,
+                wavelength_law="amplitude",
             ),
             proc.per_mode_rms,
             proc.knee_hz,
@@ -1455,6 +1538,7 @@ class TestSingleBandImpropriety:
                 speckle_grid((e_nom).shape[-2:], 0.25, 1000.0),
                 _e_in(1.0),
                 1000.0,
+                wavelength_law="opd",
             ),
             rms,
             1e-3,
@@ -1538,6 +1622,7 @@ class TestPhotometryReport:
                 speckle_grid((e_nom).shape[-2:], du, 1000.0),
                 input_energy,
                 1000.0,
+                wavelength_law="opd",
             ),
             1.0,
             1e-3,
@@ -1596,6 +1681,7 @@ class TestPhotometryReport:
                 speckle_grid((e_stack).shape[-2:], 0.25, 1000.0),
                 jnp.array([1.0, 2.0]),
                 1000.0,
+                wavelength_law=None,
             ),
             1.0,
             1e-3,

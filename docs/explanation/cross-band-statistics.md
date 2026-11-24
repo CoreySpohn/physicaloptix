@@ -273,16 +273,15 @@ terms are not needed.
 
 An achromatic optical path in native $\lambda/D$ coordinates is the sanity
 anchor for all of the above, and it is worth deriving in full because it also
-explains a real subtlety in the inherited reference/wavelength scaling law.
-On such a path the response scales as $G(\lambda) = c_\lambda\,G(\lambda_0)$
+explains a subtlety of the OPD wavelength law.
+On such a path the OPD response scales as $G(\lambda) = c_\lambda\,G(\lambda_0)$
 with $c_\lambda = \lambda_0/\lambda$, so both kernels inherit the same scale
 factor at each channel, $\Gamma_{ij} = c_i c_j\,\Gamma_{00}$ and
 $P_{ij} = c_i c_j\,P_{00}$ (writing $c_i \equiv c_{\lambda_i}$ and
 $\Gamma_{00}$, $P_{00}$ for the reference-band values). Write
 $K_2 = |\Gamma_{00}|^2 + |P_{00}|^2$ for the speckle-only weight at the
 reference band and, for a `coherent` process with a **frozen** nominal field
-$A_i \equiv A_0$ (the default the inherited reference/wavelength scaling law
-behavior, which does not rescale $E_{\mathrm{nom}}$ with wavelength), write
+$A_i \equiv A_0$ (as in a single-plane response), write
 $K_1 = 2\,\mathrm{Re}\!\left[|A_0|^2\,\Gamma_{00} + \overline{A_0}^2\,P_{00}\right]$
 for the heterodyne weight. Substituting into the joint law gives, up to the
 overall (wavelength-independent, so canceling in a ratio) normalization,
