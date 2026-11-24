@@ -27,6 +27,7 @@ midpoint rule; the measured orders are listed in that test.
 import hashlib
 import json
 import re
+from collections import UserDict
 from dataclasses import replace
 from decimal import Decimal
 
@@ -534,10 +535,13 @@ class TestBandFromBundle:
         Truth source: the hashing contract of a static field (equal content,
         equal hash and ``==``, from separately built records, so an identity
         hash fails) and the input mapping itself for ``to_dict``. A record is
-        never equal to a plain mapping, so ``{"v": True}`` cannot equal both
-        the ``1`` record and the ``True`` record. Scalars of
+        never equal to a plain mapping, a ``dict`` or a ``UserDict``, in
+        either operand order, so ``{"v": True}`` cannot equal both the ``1``
+        record and the ``True`` record (a record that is a ``Mapping``, or
+        whose ``__eq__`` defers, fails the ``UserDict`` cases). Scalars of
         different types stay distinct so one record never stands in for
-        another under ``jax.jit``. Exact comparisons, no tolerance.
+        another under ``jax.jit``. The record still reads by key. Exact
+        comparisons, no tolerance.
         """
         content = {"k": [1, 2.5], "s": "x", "n": None, "f": {"b": True, "a": "y"}}
         first = _Provenance(content)
@@ -549,8 +553,14 @@ class TestBandFromBundle:
             assert _Provenance({"v": a}) != _Provenance({"v": b})
             # A record equals only a record; a plain mapping compares through
             # to_dict, so no mapping is equal to two records that differ.
-            assert _Provenance({"v": a}) != {"v": b}
+            for other in ({"v": b}, UserDict({"v": b})):
+                assert _Provenance({"v": a}) != other
+                assert other != _Provenance({"v": a})
+                assert not other == _Provenance({"v": a})
             assert _Provenance({"v": a}).to_dict() == {"v": a}
+        assert first["f"]["a"] == "y" and first.get("absent") is None
+        assert "s" in first and list(first.keys()) == sorted(content)
+        assert dict(first.items())["s"] == "x" and len(first) == len(content)
         plain = first.to_dict()
         assert plain == content
         assert type(plain["f"]) is dict and type(plain["k"]) is list
@@ -608,6 +618,36 @@ class TestBandFromBundle:
                 pupil_diameter_m=6.5,
                 provenance=provenance,
             )
+
+    def test_subclass_adds_a_static_field_by_keyword(self):
+        """Fails if a subclass cannot add a field and set it by keyword.
+
+        Truth source: the generated initializer a subclass of a module gets,
+        which takes every declared field by name and fills the left-out ones
+        from their defaults. Both public constructors are written out (to
+        freeze provenance first), so they must forward the added fields; an
+        unknown keyword still raises. Exact comparisons, no compile.
+        """
+
+        class Inputs(NIRCamInputs):
+            extra: int = eqx.field(static=True, default=0)
+            tags: tuple = eqx.field(static=True, default_factory=tuple)
+
+        class Band(NIRCamBand):
+            extra: int = eqx.field(static=True, default=0)
+
+        pupil = {"pupil_amplitude": np.ones((4, 4)), "pupil_diameter_m": 6.5}
+        inputs = Inputs(**pupil, extra=3, provenance={"s": "x"})
+        assert inputs.extra == 3 and inputs.tags == ()
+        assert inputs.provenance == _Provenance({"s": "x"})
+        assert Inputs(**pupil).extra == 0
+        band = Band(wavelengths_nm=(3300.0,), weights=(1.0,), extra=4)
+        assert band.extra == 4 and band.weights == (1.0,)
+        assert Band((3300.0,), (1.0,)).extra == 0
+        with pytest.raises(TypeError, match="unexpected keyword argument 'bogus'"):
+            Inputs(**pupil, bogus=1)
+        with pytest.raises(TypeError, match="unexpected keyword argument 'bogus'"):
+            NIRCamBand(wavelengths_nm=(3300.0,), weights=(1.0,), bogus=1)
 
     def test_bundle_without_si_gives_no_cube(self, tmp_path):
         bundle, _ = _write_band_bundle(tmp_path, si=False)

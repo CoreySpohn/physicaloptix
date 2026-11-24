@@ -365,7 +365,7 @@ class NIRCamConfig(eqx.Module):
             )
 
 
-class _Provenance(Mapping):
+class _Provenance:
     """A read-only, hashable record of where an input came from.
 
     Holds the sorted items of a mapping, nested mappings and lists frozen
@@ -380,9 +380,11 @@ class _Provenance(Mapping):
     NaN and infinite floats, sets and frozensets, and objects whose hashing or
     equality the record cannot vouch for. Equality also tells the scalar types
     apart, so ``1``, ``1.0`` and ``True`` make different records. A record
-    compares equal only to another record; compare with a plain mapping
-    through :meth:`to_dict`, which returns plain dicts and lists, for example
-    for JSON.
+    reads like a mapping (``record[key]``, ``keys``, ``items``, ``get``, ``in``)
+    but is not a ``Mapping``, so it compares equal only to another record and
+    never to a dict or any other mapping, in either operand order; compare
+    with a plain mapping through :meth:`to_dict`, which returns plain dicts
+    and lists, for example for JSON.
 
     Args:
         items: A mapping or pairs to freeze.
@@ -418,10 +420,25 @@ class _Provenance(Mapping):
     def __len__(self):
         return len(self._items)
 
+    def __contains__(self, key):
+        return key in self._lookup
+
+    def keys(self):
+        return self._lookup.keys()
+
+    def values(self):
+        return self._lookup.values()
+
+    def items(self):
+        return self._lookup.items()
+
+    def get(self, key, default=None):
+        return self._lookup.get(key, default)
+
     def __eq__(self, other):
-        if isinstance(other, _Provenance):
-            return self._key == other._key
-        return NotImplemented
+        # Not NotImplemented: a Mapping on the other side would then compare
+        # its items and call a record equal to a plain mapping.
+        return isinstance(other, _Provenance) and self._key == other._key
 
     def __hash__(self):
         return hash(self._key)
@@ -497,6 +514,43 @@ def _thaw(value):
     return value
 
 
+def _init_added_fields(module, base, added):
+    """Set the fields a subclass adds, as a generated initializer would.
+
+    A public constructor here is written out (to freeze provenance before
+    anything walks the arguments), so a subclass inherits it instead of
+    getting a generated one. The fields the subclass declares arrive here by
+    keyword; a declared field left out takes its default.
+
+    Args:
+        module: The module being initialized.
+        base: The class whose written-out constructor sets its own fields.
+        added: The extra keyword arguments.
+
+    Raises:
+        TypeError: If a keyword names no added field, or an added field
+            without a default is left out.
+    """
+    own = {f.name for f in dataclasses.fields(base)}
+    fields = {
+        f.name: f for f in dataclasses.fields(module) if f.init and f.name not in own
+    }
+    name = type(module).__name__
+    for key, value in added.items():
+        if key not in fields:
+            raise TypeError(f"{name}() got an unexpected keyword argument {key!r}")
+        setattr(module, key, value)
+    for key, field in fields.items():
+        if key in added:
+            continue
+        if field.default is not dataclasses.MISSING:
+            setattr(module, key, field.default)
+        elif field.default_factory is not dataclasses.MISSING:
+            setattr(module, key, field.default_factory())
+        else:
+            raise TypeError(f"{name}() missing required keyword argument {key!r}")
+
+
 class NIRCamInputs(eqx.Module):
     """The optical prescription arrays, their physical sampling and provenance.
 
@@ -545,11 +599,13 @@ class NIRCamInputs(eqx.Module):
         si_support=None,
         si_wavelength_nm=None,
         provenance=None,
+        **added,
     ):
         """Assign the fields; the field converters then run as declared.
 
         The provenance is frozen first, so a value it refuses is reported
-        with its key path before anything else walks the arguments.
+        with its key path before anything else walks the arguments. A
+        subclass that adds fields passes them by keyword.
 
         Args:
             pupil_amplitude: See the class attributes.
@@ -561,6 +617,7 @@ class NIRCamInputs(eqx.Module):
             si_support: See the class attributes.
             si_wavelength_nm: See the class attributes.
             provenance: See the class attributes; None records nothing.
+            **added: Fields a subclass adds, by name.
         """
         self.provenance = _Provenance({} if provenance is None else provenance)
         self.pupil_amplitude = pupil_amplitude
@@ -571,6 +628,7 @@ class NIRCamInputs(eqx.Module):
         self.si_opd_nm = si_opd_nm
         self.si_support = si_support
         self.si_wavelength_nm = si_wavelength_nm
+        _init_added_fields(self, NIRCamInputs, added)
 
     def __check_init__(self):
         """Validate array shapes and the pupil diameter."""
@@ -1071,22 +1129,27 @@ class NIRCamBand(eqx.Module):
         static=True, default_factory=dict, converter=_Provenance
     )
 
-    def __init__(self, wavelengths_nm, weights, si_opd_nm=None, provenance=None):
+    def __init__(
+        self, wavelengths_nm, weights, si_opd_nm=None, provenance=None, **added
+    ):
         """Assign the fields; the field converters then run as declared.
 
         The provenance is frozen first, so a value it refuses is reported
-        with its key path before anything else walks the arguments.
+        with its key path before anything else walks the arguments. A
+        subclass that adds fields passes them by keyword.
 
         Args:
             wavelengths_nm: See the class attributes.
             weights: See the class attributes.
             si_opd_nm: See the class attributes.
             provenance: See the class attributes; None records nothing.
+            **added: Fields a subclass adds, by name.
         """
         self.provenance = _Provenance({} if provenance is None else provenance)
         self.wavelengths_nm = wavelengths_nm
         self.weights = weights
         self.si_opd_nm = si_opd_nm
+        _init_added_fields(self, NIRCamBand, added)
 
     def __check_init__(self):
         """Validate node counts, wavelengths, weights and the SI cube."""
