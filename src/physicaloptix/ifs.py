@@ -52,6 +52,7 @@ from optixstuff.grids import (
     footprint_overlap,
     integrate_footprints,
 )
+from optixstuff.psflet_pack import TEMPLATE_ORIGIN
 
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.transforms.cmft import cmft_fwd
@@ -553,6 +554,31 @@ def _fine_axis(offsets, n_quad):
     return start + fine * np.arange(n_fine), stride
 
 
+def _check_stop_band(chain, wavelength_nm, fine, cx, cy, ppd):
+    """Check the shifted endpoints on both detector axes.
+
+    Args:
+        chain: The ``LensletChain`` that defines the stop grid.
+        wavelength_nm: Wavelength [nm].
+        fine: Ascending axis of fine sample offsets [px].
+        cx: Accumulated x shift [px].
+        cy: Accumulated y shift [px].
+        ppd: Detector pixels per diffraction unit.
+
+    Raises:
+        ValueError: A shifted endpoint exceeds the stop grid's Nyquist half-band.
+    """
+    lo, hi = float(fine[0]), float(fine[-1])
+    u_max = max(abs(lo + cx), abs(hi + cx), abs(lo + cy), abs(hi + cy)) / float(ppd)
+    u_nyquist = chain.n_stop / (4.0 * chain.stop_halfwidth)
+    if u_max > u_nyquist:
+        raise ValueError(
+            f"shifted render at {wavelength_nm:g} nm samples out to {u_max:.2f} "
+            "diffraction units, beyond the stop grid's Nyquist half-band "
+            f"{u_nyquist:.2f}. Raise n_stop or shrink half_extent."
+        )
+
+
 def psflet_template(chain, wavelength_nm, offsets, pupil=None, n_quad=8):
     """Pixel-integrated PSFlet template plane and its intensity centroid.
 
@@ -565,22 +591,52 @@ def psflet_template(chain, wavelength_nm, offsets, pupil=None, n_quad=8):
 
     Returns:
         ``(template, centroid)``: the ``(n_off, n_off)`` template plane
-        (rows dy, columns dx) and the ``(cx, cy)`` intensity centroid [px]
-        measured on the fine grid (the wavecal residual when aberrations
-        shift the PSFlet off the geometric centroid).
+        (rows dy, columns dx) about its own centroid and the accumulated
+        offset from the geometric origin in detector pixels, ordered (cx, cy).
+
+    Raises:
+        RuntimeError: The centroid did not converge in five renders.
+        ValueError: The offset step is incompatible with ``n_quad``, a required
+            pupil slice is missing, or a shifted render exceeds the stop grid's
+            Nyquist half-band.
+
+    The centroid iteration runs on the host, so the wavelength and offsets
+    must be concrete (the function cannot be traced by ``jit`` or ``vmap``),
+    and ``(cx, cy)`` are NumPy scalars.
     """
     fine, stride = _fine_axis(np.asarray(offsets), n_quad)
-    intensity = chain.psflet_intensity(wavelength_nm, jnp.asarray(fine), pupil)
-    template = pixel_integrate(intensity, n_quad, stride)
-    total = jnp.sum(intensity)
-    fx = jnp.asarray(fine)
-    cx = jnp.sum(intensity * fx[None, :]) / total
-    cy = jnp.sum(intensity * fx[:, None]) / total
-    return template, (cx, cy)
+    fine = jnp.asarray(fine)
+    offsets = jnp.asarray(offsets)
+    stop = chain.stop_field(wavelength_nm, pupil)
+    x_stop = jnp.asarray(_grid_axis(chain.stop_grid))
+    ppd = chain.px_per_diffraction(wavelength_nm)
+    cx = cy = 0.0
+    for render in range(5):
+        _check_stop_band(chain, wavelength_nm, fine, cx, cy, ppd)
+        field = cmft_fwd(stop, x_stop, (fine + cy) / ppd, (fine + cx) / ppd)
+        template = pixel_integrate(field.real**2 + field.imag**2, n_quad, stride)
+        # Measure on the stored pixel integrals in their local coordinates.
+        moment = (
+            jnp.stack((template.sum(axis=0) @ offsets, template.sum(axis=1) @ offsets))
+            / template.sum()
+        )
+        dx, dy = np.asarray(moment)
+        if render and np.hypot(dx, dy) < 1e-3:
+            return template, (cx, cy)
+        cx += dx
+        cy += dy
+
+    raise RuntimeError(
+        f"PSFlet centroid at {wavelength_nm:g} nm did not converge in five passes"
+    )
 
 
 def psflet_pack(chain, wavelengths_nm, *, half_extent=6.0, step=0.125, n_quad=8):
     """Tabulate the chain into a PSFlet template pack.
+
+    Each template is centered on its own centroid, and ``centroids`` gives its
+    offset from the dispersion-model centroid in detector pixels.
+    The pack declares this origin as ``template_origin="centroid"``.
 
     Write the pack with ``optixstuff.save_psflet_pack(path, pack)``.
 
@@ -598,6 +654,12 @@ def psflet_pack(chain, wavelengths_nm, *, half_extent=6.0, step=0.125, n_quad=8)
     Returns:
         An :class:`optixstuff.PsfletPack` whose ``meta_json`` provenance
         carries the chain configuration and per-wavelength capture fractions.
+
+    Raises:
+        RuntimeError: A template's centroid did not converge.
+        ValueError: The wavelength grid or chromatic pupil slice count is invalid,
+            the offset step is incompatible with ``n_quad``, or the detector
+            samples exceed the stop grid's Nyquist half-band.
     """
     lams = np.atleast_1d(np.asarray(wavelengths_nm, dtype=float))
     if lams.ndim != 1 or (len(lams) > 1 and not np.all(np.diff(lams) > 0)):
@@ -607,16 +669,18 @@ def psflet_pack(chain, wavelengths_nm, *, half_extent=6.0, step=0.125, n_quad=8)
             f"chromatic pupil_field has {chain.pupil_field.shape[0]} slices "
             f"but {len(lams)} wavelengths were requested"
         )
-    # stop -> detector kernel: the hard aliasing bound of the stop-grid sum
-    # is |u_det| < n_stop / (4 * stop_halfwidth); the reddest wavelength has
-    # the smallest px_per_diffraction, so it needs the widest u_det extent.
-    u_det_max = (half_extent + 0.5) / float(chain.px_per_diffraction(lams.max()))
+    # The shortest wavelength has the fewest pixels per diffraction unit,
+    # so the full pixel extent spans the most diffraction units there.
+    shortest_wavelength_nm = lams.min()
+    u_det_max = (half_extent + 0.5) / float(
+        chain.px_per_diffraction(shortest_wavelength_nm)
+    )
     u_det_nyquist = chain.n_stop / (4.0 * chain.stop_halfwidth)
     if u_det_max > u_det_nyquist:
         raise ValueError(
-            f"detector extent {u_det_max:.2f} diffraction units exceeds the "
-            f"stop grid's Nyquist half-band {u_det_nyquist:.2f}; raise n_stop "
-            "or shrink half_extent"
+            f"detector extent {u_det_max:.2f} diffraction units at "
+            f"{shortest_wavelength_nm:g} nm exceeds the stop grid's Nyquist "
+            f"half-band {u_det_nyquist:.2f}. Raise n_stop or shrink half_extent."
         )
     n_off = round(2.0 * half_extent / step) + 1
     offsets = np.linspace(-half_extent, half_extent, n_off)
@@ -658,6 +722,7 @@ def psflet_pack(chain, wavelengths_nm, *, half_extent=6.0, step=0.125, n_quad=8)
         offsets=offsets,
         wavelengths_nm=lams,
         field_xy=np.zeros((1, 2)),
+        template_origin=TEMPLATE_ORIGIN,
         centroids=np.asarray(cents, dtype=float)[None],
         meta_json=json.dumps(meta),
     )
