@@ -162,6 +162,26 @@ def _shifted_slices(k, n):
     return sl_a, sl_b
 
 
+@pytest.fixture(scope="module")
+def tilted_chain():
+    base = make_chain(illumination="flat", pinhole_radius=1.5)
+    # The Fourier shift theorem gives dx = OPD slope / wavelength * px per unit.
+    slope = 0.3 * LAM_REF / base.px_per_diffraction(LAM_REF)
+    x = _grid_axis(base.stop_grid)
+    opd = np.broadcast_to(slope * x, base.stop_grid.shape)
+    return make_chain(illumination="flat", pinhole_radius=1.5, stop_opd_nm=opd)
+
+
+@pytest.fixture(scope="module")
+def tilted_pack(tilted_chain):
+    return psflet_pack(tilted_chain, [LAM_REF], half_extent=6.0, step=0.1, n_quad=10)
+
+
+def first_moment(image, x, y):
+    image = np.asarray(image)
+    return np.array([image.sum(axis=0) @ x, image.sum(axis=1) @ y]) / image.sum()
+
+
 class TestShiftTheoremAndWavecal:
     def test_stop_tilt_is_an_exact_shift(self):
         """A linear OPD across the stop translates the PSFlet by exactly
@@ -202,20 +222,63 @@ class TestShiftTheoremAndWavecal:
             i_shift[ay, ax], i_base[by, bx], rtol=1e-7, atol=1e-9 * i_base.max()
         )
 
-    def test_pack_records_tilt_in_centroids(self):
-        """The wavecal seam: an aberration-shifted PSFlet lands in the pack's
-        centroids field (a pinhole keeps the windowed centroid honest)."""
-        base = make_chain(illumination="flat", pinhole_radius=1.5)
-        ppd = float(base.px_per_diffraction(LAM_REF))
-        grad_nm = 0.3 * LAM_REF / ppd
-        x_s = np.asarray(_grid_axis(base.stop_grid))
-        opd = jnp.asarray(np.broadcast_to(grad_nm * x_s[None, :], (128, 128)))
-        tilted = make_chain(illumination="flat", pinhole_radius=1.5, stop_opd_nm=opd)
-        pack = psflet_pack(tilted, [LAM_REF], half_extent=6.0, step=0.25)
-        cx, cy = pack.centroids[0, 0]
-        assert 0.2 < cx < 0.4
-        assert abs(cy) < 0.02
-        assert json.loads(pack.meta_json)["aberrated"] is True
+    def test_pack_records_tilt_in_centroids(self, tilted_pack):
+        """The stop tilt translates the PSFlet by 0.3 px on an infinite plane.
+
+        The first render measures 0.299566 px in the +/-6 px window and
+        0.299945 px at +/-12 px; the stored template is the second render,
+        whose residual moment is below the 1e-3 px stopping rule.
+        """
+        offsets = np.asarray(tilted_pack.offsets)
+        moment = first_moment(tilted_pack.templates[0, 0], offsets, offsets)
+        assert np.hypot(*np.asarray(moment)) < 1e-3
+        np.testing.assert_allclose(
+            tilted_pack.centroids[0, 0], [0.3, 0.0], atol=2e-3, rtol=0
+        )
+        assert json.loads(tilted_pack.meta_json)["aberrated"] is True
+
+    def test_placed_template_matches_direct_image(self, tilted_chain, tilted_pack):
+        """Compare flux and absolute moment on the same fine detector lattice."""
+        geometric = (12.0, 8.0)
+        cx, cy = geometric + np.asarray(tilted_pack.centroids[0, 0])
+        offsets = np.asarray(tilted_pack.offsets)
+        plane = np.asarray(tilted_pack.templates[0, 0])
+        # Leave half a pixel around the comparison window for interpolation.
+        q = 10
+        axis = np.arange(-55, 56) / q
+        x, y = geometric[0] + axis, geometric[1] + axis
+        rows = [np.interp(x, cx + offsets, row) for row in plane]
+        placed = np.stack(
+            [np.interp(y, cy + offsets, col) for col in np.asarray(rows).T], axis=1
+        )
+
+        # Propagate about the geometric origin, then integrate each detector pixel.
+        fine = axis[0] - 0.5 + (np.arange(len(axis) + q - 1) + 0.5) / q
+        raw = np.asarray(tilted_chain.psflet_intensity(LAM_REF, fine))
+        direct = np.lib.stride_tricks.sliding_window_view(raw, (q, q)).mean(
+            axis=(-2, -1)
+        )
+        np.testing.assert_allclose(
+            first_moment(placed, x, y), first_moment(direct, x, y), atol=2e-3, rtol=0
+        )
+        np.testing.assert_allclose(placed.sum(), direct.sum(), rtol=1e-6, atol=0)
+
+    def test_centroid_iteration_limit(self, tilted_chain):
+        """Clipping the wings slows convergence: five passes suffice at 2 px."""
+        psflet_pack(tilted_chain, [LAM_REF], half_extent=2.0, step=0.1, n_quad=10)
+        with pytest.raises(RuntimeError, match=r"1000(?:\.0)? nm"):
+            psflet_pack(tilted_chain, [LAM_REF], half_extent=1.8, step=0.1, n_quad=10)
+
+    def test_shifted_render_respects_stop_nyquist(self, tilted_chain):
+        """The shifted render may not sample beyond the stop grid's band.
+
+        At 3 px per diffraction unit the stop grid bounds the detector at
+        +/-128 px. A +/-128 px window sits exactly on the bound for the first
+        render; the 0.3 px centroid shift pushes the second render past it.
+        """
+        offsets = np.arange(-128.0, 128.0)
+        with pytest.raises(ValueError, match="shifted render"):
+            psflet_template(tilted_chain, LAM_REF, offsets, n_quad=1)
 
 
 class TestPixelIntegrate:
@@ -289,6 +352,8 @@ class TestPack:
         )
         path = tmp_path / "physical.npz"
         save_psflet_pack(path, pack)
+        with np.load(path, allow_pickle=False) as data:
+            assert data["format_version"] == 2
         loaded = load_psflet_pack(path)
         for name in ("templates", "offsets", "wavelengths_nm", "field_xy", "centroids"):
             np.testing.assert_array_equal(getattr(loaded, name), getattr(pack, name))
@@ -311,14 +376,37 @@ class TestPack:
         assert len(meta["capture"]) == 3
         assert all(0.0 < c["stop_capture"] <= 1.001 for c in meta["capture"])
 
-    def test_templates_are_nonnegative_and_centered(self):
-        chain = make_chain()
-        pack = psflet_pack(chain, [1000.0], half_extent=4.0, step=0.25, n_quad=4)
+    @pytest.mark.parametrize("dy", [0.0, -0.3], ids=["unaberrated", "negative-y-tilt"])
+    def test_templates_are_nonnegative_and_centered(self, dy):
+        base = make_chain()
+        chain = base
+        if dy:
+            y = _grid_axis(base.stop_grid)
+            slope = dy * LAM_REF / base.px_per_diffraction(LAM_REF)
+            opd = np.broadcast_to(slope * y[:, None], base.stop_grid.shape)
+            chain = make_chain(stop_opd_nm=opd)
+        pack = psflet_pack(chain, [LAM_REF], half_extent=4.0, step=0.25, n_quad=4)
         plane = pack.templates[0, 0]
         assert plane.min() >= 0.0
         peak = np.unravel_index(plane.argmax(), plane.shape)
         assert peak == (16, 16)
-        np.testing.assert_allclose(pack.centroids[0, 0], 0.0, atol=1e-6)
+        cx, cy = pack.centroids[0, 0]
+        # Version 1 rendered the unaberrated chain once on this midpoint lattice.
+        fine = -4.5 + (np.arange(36) + 0.5) / 4
+        if dy == 0:
+            np.testing.assert_allclose([cx, cy], 0.0, atol=1e-6)
+            raw = np.asarray(base.psflet_intensity(LAM_REF, fine))
+        else:
+            # A negative y tilt probes the sign that a symmetric PSF cannot resolve.
+            field = base.detector_patch(
+                base.local_field(LAM_REF), LAM_REF, fine + cy - dy, fine + cx
+            )
+            raw = np.abs(np.asarray(field)) ** 2
+        reference = np.lib.stride_tricks.sliding_window_view(raw, (4, 4)).mean(
+            axis=(-2, -1)
+        )
+        assert plane.dtype == reference.dtype == np.float64
+        np.testing.assert_allclose(plane, reference, rtol=1e-10, atol=0)
 
     def test_chromatic_pupil_slices(self):
         pupil, grid = disk_pupil()

@@ -52,6 +52,7 @@ from optixstuff.grids import (
     footprint_overlap,
     integrate_footprints,
 )
+from optixstuff.psflet_pack import PACK_FORMAT_VERSION
 
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.transforms.cmft import cmft_fwd
@@ -565,22 +566,57 @@ def psflet_template(chain, wavelength_nm, offsets, pupil=None, n_quad=8):
 
     Returns:
         ``(template, centroid)``: the ``(n_off, n_off)`` template plane
-        (rows dy, columns dx) and the ``(cx, cy)`` intensity centroid [px]
-        measured on the fine grid (the wavecal residual when aberrations
-        shift the PSFlet off the geometric centroid).
+        (rows dy, columns dx) about its own centroid and the accumulated
+        offset from the geometric origin in detector pixels, ordered (cx, cy).
+
+    Raises:
+        RuntimeError: The centroid did not converge in five renders.
+        ValueError: A shifted render samples beyond the stop grid's Nyquist
+            half-band.
+
+    The centroid iteration runs on the host, so the wavelength and offsets
+    must be concrete (the function cannot be traced by ``jit`` or ``vmap``),
+    and ``(cx, cy)`` are NumPy scalars.
     """
     fine, stride = _fine_axis(np.asarray(offsets), n_quad)
-    intensity = chain.psflet_intensity(wavelength_nm, jnp.asarray(fine), pupil)
-    template = pixel_integrate(intensity, n_quad, stride)
-    total = jnp.sum(intensity)
-    fx = jnp.asarray(fine)
-    cx = jnp.sum(intensity * fx[None, :]) / total
-    cy = jnp.sum(intensity * fx[:, None]) / total
-    return template, (cx, cy)
+    fine = jnp.asarray(fine)
+    offsets = jnp.asarray(offsets)
+    stop = chain.stop_field(wavelength_nm, pupil)
+    x_stop = jnp.asarray(_grid_axis(chain.stop_grid))
+    ppd = chain.px_per_diffraction(wavelength_nm)
+    cx = cy = 0.0
+    u_nyquist = chain.n_stop / (4.0 * chain.stop_halfwidth)
+    for render in range(5):
+        u_max = (float(np.max(np.abs(fine))) + max(abs(cx), abs(cy))) / float(ppd)
+        if u_max > u_nyquist:
+            raise ValueError(
+                f"shifted render at {wavelength_nm:g} nm samples out to {u_max:.2f} "
+                f"diffraction units, beyond the stop grid's Nyquist half-band "
+                f"{u_nyquist:.2f}; raise n_stop or shrink half_extent"
+            )
+        field = cmft_fwd(stop, x_stop, (fine + cy) / ppd, (fine + cx) / ppd)
+        template = pixel_integrate(field.real**2 + field.imag**2, n_quad, stride)
+        # Measure on the stored pixel integrals in their local coordinates.
+        moment = (
+            jnp.stack((template.sum(axis=0) @ offsets, template.sum(axis=1) @ offsets))
+            / template.sum()
+        )
+        dx, dy = np.asarray(moment)
+        if render and np.hypot(dx, dy) < 1e-3:
+            return template, (cx, cy)
+        cx += dx
+        cy += dy
+
+    raise RuntimeError(
+        f"PSFlet centroid at {wavelength_nm:g} nm did not converge in five passes"
+    )
 
 
 def psflet_pack(chain, wavelengths_nm, *, half_extent=6.0, step=0.125, n_quad=8):
     """Tabulate the chain into a PSFlet template pack.
+
+    Each template is centered on its own centroid, and ``centroids`` gives its
+    offset from the dispersion-model centroid in detector pixels.
 
     Write the pack with ``optixstuff.save_psflet_pack(path, pack)``.
 
@@ -599,6 +635,8 @@ def psflet_pack(chain, wavelengths_nm, *, half_extent=6.0, step=0.125, n_quad=8)
         An :class:`optixstuff.PsfletPack` whose ``meta_json`` provenance
         carries the chain configuration and per-wavelength capture fractions.
     """
+    if PACK_FORMAT_VERSION != 2:
+        raise ValueError("centroid-centered templates require optixstuff pack format 2")
     lams = np.atleast_1d(np.asarray(wavelengths_nm, dtype=float))
     if lams.ndim != 1 or (len(lams) > 1 and not np.all(np.diff(lams) > 0)):
         raise ValueError("wavelengths_nm must be 1D ascending")
