@@ -107,7 +107,10 @@ class OpticalPath(eqx.Module):
         Plain attribute access over the static stage names, so it can be
         used inside the selector of ``eqx.tree_at`` (for example
         ``eqx.tree_at(lambda p: p.stage("lyot_stop").transmission, path,
-        new)``) without reaching into ``stages[i]``.
+        new)``) without reaching into ``stages[i]``. ``eqx.tree_at`` skips
+        the field's converter, so pass a value already converted (for
+        example ``hwoutils.leaves.as_float_leaf(new)``), or rebuild the op
+        through its constructor.
 
         Args:
             name: The stage name.
