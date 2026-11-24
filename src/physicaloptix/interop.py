@@ -78,6 +78,9 @@ class PathCalibration(eqx.Module):
     ):
         """Measure aperture photometry and uniform-sky transmission.
 
+        Every record carries the radial sky profile, so a record alone gives
+        the sky transmission of extended sources.
+
         Args:
             core_path: Optical train ending at the Lyot pupil.
             input_field: Untilted entrance field with its build spectrum.
@@ -105,17 +108,6 @@ class PathCalibration(eqx.Module):
         images = {
             s: _native_psf(core_path, science, place((s, 0.0)), energy) for s in seps
         }
-        records = tuple(
-            performance_curves(
-                images.__getitem__,
-                images[0.0],
-                rule,
-                separations_lod=seps,
-                leakage_rule=leakage_rule,
-                stellar_diameter_lod=0.0,
-            )
-            for rule in rules
-        )
         # A uniform radiance illuminates solid angle. The angular area per
         # native lambda/D cell scales as wavelength squared at each node.
         sky_data = input_field.data / jnp.sqrt(energy)
@@ -132,11 +124,20 @@ class PathCalibration(eqx.Module):
             n_screens=n_sky_screens,
             seed=seed,
         )
-        return cls(
-            jax.tree.map(jnp.asarray, records),
-            sky,
-            jax.tree.map(jnp.asarray, SampledProfile.from_uniform_sky(sky)),
+        profile = jax.tree.map(jnp.asarray, SampledProfile.from_uniform_sky(sky))
+        records = tuple(
+            performance_curves(
+                images.__getitem__,
+                images[0.0],
+                rule,
+                separations_lod=seps,
+                leakage_rule=leakage_rule,
+                stellar_diameter_lod=0.0,
+                uniform_sky=profile,
+            )
+            for rule in rules
         )
+        return cls(jax.tree.map(jnp.asarray, records), sky, profile)
 
 
 class PathCoronagraph(AbstractImagingCoronagraph):

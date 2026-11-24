@@ -873,3 +873,87 @@ def test_uniform_sky_transmission_uses_sky_area(square_telescope):
         rtol=1e-12,
         atol=0,
     )
+
+
+@pytest.mark.medium
+@vv.case("record-uniform-sky-rate", "code-verification", basis="floating-point")
+def test_local_zodi_rate_reads_the_record_sky(vortex_coronagraph):
+    """A local zodi rated on the default record uses the adapter's sky.
+
+    Truth: the hand product of the collecting area, the optics throughput,
+    the zodi radiance, the adapter's own ``uniform_sky_response`` and the
+    record's core area times (lambda/D)**2 in steradians at the band centre.
+    Basis: float64 roundoff over a few products, rtol 1e-12.
+    """
+    jaxedith = pytest.importorskip("jaxedith")
+    pytest.importorskip("skyscapes")
+    from hwoutils.conversions import arcsec_to_rad
+    from hwoutils.epoch import Epoch
+    from optixstuff import ConstantThroughput, IdealDetector, Instrument
+    from optixstuff.spectral import Resolution
+    from skyscapes import AYOZodi
+    from skyscapes.physical_model import GridPhysicalModel
+    from skyscapes.scene import FlatStar, Planet, Scene
+
+    c = vortex_coronagraph
+    record = c.performance_record
+    optics = 0.4
+    east, north = 0.018, 0.024
+    scene = Scene.from_classical(
+        FlatStar(flux_phot_per_nm_m2=1e6, fixed_diameter_arcsec=0.0),
+        (
+            Planet(
+                jnp.ones(1),
+                GridPhysicalModel(
+                    jnp.array([300.0, 900.0]),
+                    jnp.array([0.0, 180.0]),
+                    jnp.full((1, 2, 2), 1e-10),
+                ),
+            ),
+        ),
+        star_mass_Msun=1.0,
+        planet_mass_Msun=3e-6,
+        dist_pc=10.0,
+        epoch=Epoch(2451545.0),
+        ra_deg=100.0,
+        dec_deg=-20.0,
+        a_AU=jnp.array([1.0]),
+        e=0.0,
+        W_rad=0.0,
+        i_rad=0.0,
+        w_rad=0.0,
+        M0_rad=0.0,
+        local_zodi=AYOZodi(),
+    )
+    quadrature = Quadrature.build((Band(550.0, 650.0),), order=1)
+    sources = scene.sources(
+        quadrature, Resolution.build(quadrature, *scene.spectral_tables()), 0.0
+    )
+    rates = jaxedith.rates(
+        record,
+        scene,
+        Instrument(
+            PRIMARY,
+            (ConstantThroughput(optics),),
+            None,
+            IdealDetector(pixel_scale_arcsec=0.01, shape=(8, 8)),
+        ),
+        quadrature,
+        east,
+        north,
+        contrast=1e-10,
+        time_d=0.0,
+        sources=sources,
+    )
+    node = quadrature.nodes_nm[0, 0]
+    separation = np.hypot(east, north) * arcsec_to_rad(1.0) / _lod_rad(600.0)
+    expected = (
+        PRIMARY.collecting_area_m2
+        * optics
+        * scene.local_zodi.photon_radiance(node, scene.sky_frame, 0.0)
+        * c.uniform_sky_response(separation)
+        * record.evaluate("core_area_lod2", separation)
+        * _lod_rad(600.0) ** 2
+    )
+    assert 0 < float(c.uniform_sky_response(separation)) < 1
+    np.testing.assert_allclose(rates.local_zodi[0, 0], expected, rtol=1e-12, atol=0)
