@@ -148,7 +148,8 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         input_field: Entrance field, optionally with a one-band spectrum.
         grid: Native sky-angle grid in reference-wavelength lambda/D.
         wavelength_nm: Monochromatic build wavelength when supplied.
-        low_nm: Shortest wavelength admitted by the native sampling, in nm.
+        low_nm: Shortest active build wavelength used to check native sampling,
+            in nm. Single-wavelength models also use it to check serving wavelengths.
         max_separation_lod: Largest separation requested for aperture photometry.
         separation_step_lod: Spacing of the calibrated source offsets in lambda/D.
         fov_margin_lod: Extra half field of view beyond the largest separation.
@@ -178,6 +179,12 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         """Entrance wavelength band, or None for an untagged field."""
         spectrum = self.input_field.spectrum
         return None if spectrum is None else spectrum.bands[0]
+
+    @property
+    def band_averaged(self) -> bool:
+        """Return whether the build spectrum spans a nonzero wavelength interval."""
+        band = self.bandpass
+        return band is not None and band.width_nm > 0
 
     @classmethod
     def from_path(
@@ -354,7 +361,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
             This model, whose propagation uses its build spectrum.
 
         Raises:
-            ValueError: The concrete wavelength is shorter than low_nm.
+            ValueError: A single-wavelength model is served below low_nm.
         """
         self._check_wavelength(wavelength_nm)
         return self
@@ -363,14 +370,14 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         """Return the product grids of the build spectrum.
 
         Args:
-            wavelength_nm: Serving wavelength in nanometers, at least low_nm.
+            wavelength_nm: Serving wavelength in nanometers.
 
         Returns:
             Product grids, with the native grid for the stellar and source images and
             the sky map grid for the uniform sky.
 
         Raises:
-            ValueError: The concrete wavelength is shorter than low_nm.
+            ValueError: A single-wavelength model is served below low_nm.
         """
         self._check_wavelength(wavelength_nm)
         return ProductGrids(self.grid, self.grid, self.calibration.sky.grid)
@@ -405,16 +412,17 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         )
 
     def _check_wavelength(self, wavelength_nm):
-        """Check the sampling limit when the serving wavelength is concrete.
+        """Check the lower sampling limit of a single-wavelength model.
 
         Args:
             wavelength_nm: Requested serving wavelength in nanometers.
 
         Raises:
-            ValueError: The wavelength falls below the shortest active node.
+            ValueError: A single-wavelength model is served below low_nm.
         """
         if (
-            not isinstance(wavelength_nm, jax.core.Tracer)
+            not self.band_averaged
+            and not isinstance(wavelength_nm, jax.core.Tracer)
             and float(wavelength_nm) < self.low_nm
         ):
             raise ValueError(
@@ -441,7 +449,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         """Point-star flux fraction; reject concrete or mark traced finite stars NaN.
 
         Args:
-            wavelength_nm: Serving wavelength in nanometers, at least low_nm.
+            wavelength_nm: Serving wavelength in nanometers.
             stellar_diameter_lod: Stellar angular diameter in lambda/D; only zero is
                 supported, and a traced nonzero value yields NaN.
             grid: Target grid; None keeps the native grid.
@@ -451,7 +459,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
             the target grid.
 
         Raises:
-            ValueError: The concrete wavelength is shorter than low_nm or the
+            ValueError: A single-wavelength model is served below low_nm, or the
                 concrete stellar diameter is nonzero.
         """
         if (
@@ -479,7 +487,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         False and an all-zero image, and the other sources are unaffected.
 
         Args:
-            wavelength_nm: Serving wavelength in nanometers, at least low_nm.
+            wavelength_nm: Serving wavelength in nanometers.
             x_lod: Source offsets along x in lambda/D, broadcast with y_lod.
             y_lod: Source offsets along y in lambda/D, broadcast with x_lod.
             grid: Target grid; None keeps the native grid.
@@ -489,7 +497,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
             all-zero images.
 
         Raises:
-            ValueError: The concrete wavelength is shorter than low_nm.
+            ValueError: A single-wavelength model is served below low_nm.
         """
         self._check_wavelength(wavelength_nm)
         science, place = self._camera()
@@ -518,14 +526,14 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         """Dimensionless extended-illumination transmission on the requested grid.
 
         Args:
-            wavelength_nm: Serving wavelength in nanometers, at least low_nm.
+            wavelength_nm: Serving wavelength in nanometers.
             grid: Target grid of the map.
 
         Returns:
             Dimensionless uniform-sky transmission image on the target grid.
 
         Raises:
-            ValueError: The concrete wavelength is shorter than low_nm.
+            ValueError: A single-wavelength model is served below low_nm.
         """
         self._check_wavelength(wavelength_nm)
         sky = self.calibration.sky

@@ -129,6 +129,31 @@ def _lod_rad(wavelength_nm):
 
 
 class TestConformance:
+    def test_band_average_uses_one_native_stellar_map(
+        self, small_path, chromatic_field
+    ):
+        """The build spectrum fixes one map on the reference lambda/D grid.
+
+        The three-node flat illumination spans 450 to 550 nm. Serving
+        wavelengths select the same propagation, so both the native pixel
+        values and the scale selection must agree exactly.
+        """
+        coro = PathCoronagraph.from_path(
+            OpticalPath(stages=small_path.stages[:1]),
+            chromatic_field,
+            primary=PRIMARY,
+            reference_wavelength_nm=500.0,
+            max_separation_lod=1.0,
+            pixel_scale_lod=0.4,
+            fov_margin_lod=2.0,
+            n_sky_screens=1,
+        )
+        assert coro.band_averaged
+        assert coro.scale_wavelength_nm(450.0, 485.0) == 485.0
+        blue = np.asarray(coro.stellar_map(450.0, 0.0).data)
+        assert np.isfinite(blue).all() and blue.max() > 0
+        np.testing.assert_array_equal(blue, coro.stellar_map(550.0, 0.0).data)
+
     def test_imaging_capabilities(self, vortex_coronagraph):
         """Fails if the live path advertises disk rendering or hides native frames."""
         c = vortex_coronagraph
@@ -551,11 +576,21 @@ class TestChromaticBuild:
         np.testing.assert_allclose(ratio, (900.0 / 450.0) ** 2, rtol=0.05)
 
     def test_wavelength_metadata_recorded(self):
+        """A tagged single-wavelength build uses its exact input wavelength.
+
+        Integer wavelengths and boolean metadata permit exact equality, and
+        a shorter concrete read must still hit the monochromatic sampling limit.
+        """
         fixed = self._aberrated(700.0)
+        assert not fixed.band_averaged
+        assert fixed.scale_wavelength_nm(710.0, 700.0) == 710.0
         assert fixed.wavelength_nm == 700.0
         assert fixed.bandpass == Band(700.0, 700.0)
+        with pytest.raises(ValueError, match="below the shortest"):
+            fixed.at_wavelength(699.0)
         np.testing.assert_array_equal(np.unique(fixed.spectral_breaks_nm()), [700.0])
         untagged = self._aberrated(None)
+        assert not untagged.band_averaged
         assert untagged.wavelength_nm is None
         assert untagged.bandpass is None
         assert untagged.spectral_breaks_nm().size == 0

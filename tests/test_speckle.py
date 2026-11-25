@@ -1,5 +1,7 @@
 """Tests for AnalyticSpeckleField (the linear generator as an optixstuff field)."""
 
+from typing import ClassVar
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -27,10 +29,11 @@ def _e_in(norm, du=0.25):
 
 
 class _MockCoronagraph(ox.AbstractCoronagraph):
-    """A slot occupant that declares only a frame."""
+    """A monochromatic slot occupant with a frame."""
 
     frame: object
     bandpass: object = None
+    band_averaged: ClassVar[bool] = False
 
 
 def _mock_coro():

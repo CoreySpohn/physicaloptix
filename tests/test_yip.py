@@ -82,6 +82,31 @@ def emitted(vortex_setup, tmp_path_factory):
 
 
 class TestEmittedPackage:
+    def test_monochromatic_writer_declares_equal_band_edges(
+        self, vortex_setup, tmp_path
+    ):
+        """The single input wavelength is both FITS band edges in nm.
+
+        Both science headers store the input in nm, so the integer
+        wavelength is exactly representable and equality is exact.
+        """
+        core, field = vortex_setup
+        emit_yip(
+            tmp_path,
+            core,
+            field,
+            science_grid=PixelGrid.focal(16, 0.5, YIP_FRAME),
+            spectrum=Quadrature.monochromatic(REF_NM),
+            reference_wavelength_nm=REF_NM,
+            offsets_x_lod=[2.0],
+            stellar_diameters_lod=[0.0],
+            n_sky_screens=1,
+            diameter_m=DIAMETER_M,
+        )
+        for filename in ("offax_psf.fits", "stellar_intens.fits"):
+            header = fits.getheader(tmp_path / filename)
+            assert header["MINLAM"] == header["MAXLAM"] == REF_NM
+
     def test_all_files_written(self, emitted):
         out_dir, _ = emitted
         for name in (
