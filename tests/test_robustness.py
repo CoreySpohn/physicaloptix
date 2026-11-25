@@ -7,8 +7,6 @@ import pytest
 
 from physicaloptix.robustness import SensitivityOperators, pastis_matrix
 
-jax.config.update("jax_enable_x64", True)
-
 _DIMS, _M = 12, 5
 
 
@@ -139,6 +137,7 @@ class TestSensitivityBudget:
         # Every mode costs contrast, so relaxing any allocation costs more.
         assert bool(jnp.all(grad > 0.0))
 
+    @pytest.mark.float64_only(reason="contrast gradient finite differences at 1e-6")
     def test_gradient_matches_finite_differences(self):
         e_nom, g, mask = _ingredients()
         ops = SensitivityOperators.build(e_nom, g, mask)

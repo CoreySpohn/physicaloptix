@@ -9,6 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TEST_FRAME
+from hwoutils.precision import like
 from optixstuff import SimplePrimary
 from optixstuff.coronagraph import (
     AbstractImagingCoronagraph,
@@ -616,24 +617,26 @@ class TestSamplingExplicitContract:
 class TestChromaticBuild:
     """from_path(wavelength_nm=...): the OPD conversion at the true wavelength."""
 
+    @pytest.mark.float32_only(
+        reason="checks a decimal wavelength at float32 resolution"
+    )
     def test_float32_serves_decimal_build_wavelength(self):
-        with jax.enable_x64(False):
-            grid = PixelGrid.pupil(12)
-            pupil = jnp.ones(grid.shape)
-            stop = SampledOptic(transmission=pupil, grid=grid, plane=PlaneKind.PUPIL)
-            coro = PathCoronagraph.from_path(
-                OpticalPath(stages=(Stage("stop", stop),)),
-                Field(data=pupil, grid=grid, plane=PlaneKind.PUPIL),
-                primary=PRIMARY,
-                reference_wavelength_nm=600.2,
-                wavelength_nm=600.2,
-                max_separation_lod=1.0,
-                fov_margin_lod=2.0,
-                n_sky_screens=1,
-            )
-            assert coro.stellar_map(600.2, 0.0).data.max() > 0
-            with pytest.raises(ValueError, match="below the shortest"):
-                coro.at_wavelength(600.1)
+        grid = PixelGrid.pupil(12)
+        pupil = jnp.ones(grid.shape)
+        stop = SampledOptic(transmission=pupil, grid=grid, plane=PlaneKind.PUPIL)
+        coro = PathCoronagraph.from_path(
+            OpticalPath(stages=(Stage("stop", stop),)),
+            Field(data=pupil, grid=grid, plane=PlaneKind.PUPIL),
+            primary=PRIMARY,
+            reference_wavelength_nm=600.2,
+            wavelength_nm=600.2,
+            max_separation_lod=1.0,
+            fov_margin_lod=2.0,
+            n_sky_screens=1,
+        )
+        assert coro.stellar_map(600.2, 0.0).data.max() > 0
+        with pytest.raises(ValueError, match="below the shortest"):
+            coro.at_wavelength(600.1)
 
     def _aberrated(
         self, build_wavelength_nm, screen_wavelength_nm=600.0, amplitude_nm=3.0
@@ -888,7 +891,9 @@ def test_detector_aperture_matches_throughput_at_three_pitches(vortex_coronagrap
         )
         detector = lod.to_arcsec(600.0)
         image = c.off_axis_psf(600.0, separation, detector)
-        weights = rule.weights(replace(image, grid=lod), (separation, 0.0))
+        weights = like(
+            rule.weights(replace(image, grid=lod), (separation, 0.0)), image.data
+        )
         aperture_sum = jnp.sum(image.data * weights)
         np.testing.assert_allclose(aperture_sum, expected, rtol=0.004, atol=0)
         # Negative control pins sensitivity to the reconstruction declaration.

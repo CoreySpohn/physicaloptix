@@ -28,7 +28,12 @@ from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.transforms import Fraunhofer, cmft_fwd
 
 # Full-resolution comparisons require external reference data and a larger machine.
-pytestmark = pytest.mark.slow
+pytestmark = [
+    pytest.mark.slow,
+    pytest.mark.float64_only(
+        reason="external pupil and coronagraph validation reference values"
+    ),
+]
 
 _FITS_CANDIDATES = (Path(__file__).parents[1] / "data" / "pupil_eac1_2048.fits.gz",)
 

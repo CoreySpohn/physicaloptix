@@ -25,7 +25,10 @@ from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.transforms import Fraunhofer, cmft_fwd
 
 # Full-resolution comparisons require external reference data and a larger machine.
-pytestmark = pytest.mark.slow
+pytestmark = [
+    pytest.mark.slow,
+    pytest.mark.float64_only(reason="external coronagraph validation reference values"),
+]
 
 
 def scale_fit_residual(ours, reference):

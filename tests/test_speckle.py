@@ -17,8 +17,6 @@ from physicaloptix.core.grid import _grid_axis
 from physicaloptix.linearize import linearize, perturbed_map
 from physicaloptix.speckle import SpeckleProcess, ou_exposure_neff
 
-jax.config.update("jax_enable_x64", True)
-
 _DIMS, _M, _F = 8, 3, 4
 _EPOCH_D = 0.0
 
@@ -1795,8 +1793,7 @@ def test_synthesis_clock_origin_and_time_axes():
 
 
 @pytest.mark.parametrize("chromatic", [False, True], ids=["analytic", "chromatic"])
-@pytest.mark.parametrize("x64", [False, True], ids=["x32", "x64"])
-def test_fields_run_on_their_own_clock(chromatic, x64):
+def test_fields_run_on_their_own_clock(chromatic, precision):
     """Fails if a field reads ``epoch_d``, overrides the kernel or takes days.
 
     Truth: the same field anchored at zero. Two fields that differ only in
@@ -1818,50 +1815,49 @@ def test_fields_run_on_their_own_clock(chromatic, x64):
     import equinox as eqx
     from optixstuff.speckle import AbstractSpeckleField
 
-    with jax.enable_x64(x64):
-        if chromatic:
-            zero = _chromatic_process(True).draw(jax.random.PRNGKey(0))
-            wavelength_nm = _CROSS_WLS[1]
-        else:
-            zero = _field(coherent=True)
-            wavelength_nm = 1000.0
-        anchored = replace(zero, epoch_d=60000.123)
-        assert anchored.epoch_d == 60000.123
-        assert type(anchored).elapsed_s is AbstractSpeckleField.elapsed_s
-        coefficients = eqx.filter_jit(lambda f, t: f.coefficients(elapsed_s=t))
-        realize = eqx.filter_jit(
-            lambda f, t: f.realize(wavelength_nm=wavelength_nm, elapsed_s=t).data
-        )
-        eps = float(jnp.finfo(jnp.float64 if x64 else jnp.float32).eps)
-        times = np.array([0.0, 7.1, 130.3])
-        argument = 2 * np.pi * np.asarray(zero.frequencies_hz) * times[
-            :, None, None
-        ] + np.asarray(zero.phases)
-        scale = np.sum(np.abs(np.asarray(zero.amplitudes)) * (1 + np.abs(argument)), -1)
-        reference = zero.coefficients(elapsed_s=times)
-        for t in (times.tolist(), times, jnp.asarray(times)):
-            eager = zero.coefficients(elapsed_s=t)
-            np.testing.assert_array_equal(eager, reference)
-            np.testing.assert_array_equal(anchored.coefficients(elapsed_s=t), eager)
-            compiled = coefficients(zero, t)
-            np.testing.assert_array_equal(coefficients(anchored, t), compiled)
-            np.testing.assert_array_less(np.abs(compiled - eager), 8 * eps * scale)
-            image = zero.realize(wavelength_nm=wavelength_nm, elapsed_s=t).data
-            np.testing.assert_array_equal(
-                anchored.realize(wavelength_nm=wavelength_nm, elapsed_s=t).data, image
-            )
-            compiled_image = realize(zero, t)
-            np.testing.assert_array_equal(realize(anchored, t), compiled_image)
-            floor = 64 * eps * np.max(np.abs(image))
-            np.testing.assert_allclose(compiled_image, image, rtol=0, atol=floor)
-        peak = dict(telescope_peak=2.0, wavelength_nm=wavelength_nm, elapsed_s=7.0)
+    if chromatic:
+        zero = _chromatic_process(True).draw(jax.random.PRNGKey(0))
+        wavelength_nm = _CROSS_WLS[1]
+    else:
+        zero = _field(coherent=True)
+        wavelength_nm = 1000.0
+    anchored = replace(zero, epoch_d=60000.123)
+    assert anchored.epoch_d == 60000.123
+    assert type(anchored).elapsed_s is AbstractSpeckleField.elapsed_s
+    coefficients = eqx.filter_jit(lambda f, t: f.coefficients(elapsed_s=t))
+    realize = eqx.filter_jit(
+        lambda f, t: f.realize(wavelength_nm=wavelength_nm, elapsed_s=t).data
+    )
+    eps = float(np.finfo(precision).eps)
+    times = np.array([0.0, 7.1, 130.3])
+    argument = 2 * np.pi * np.asarray(zero.frequencies_hz) * times[
+        :, None, None
+    ] + np.asarray(zero.phases)
+    scale = np.sum(np.abs(np.asarray(zero.amplitudes)) * (1 + np.abs(argument)), -1)
+    reference = zero.coefficients(elapsed_s=times)
+    for t in (times.tolist(), times, jnp.asarray(times)):
+        eager = zero.coefficients(elapsed_s=t)
+        np.testing.assert_array_equal(eager, reference)
+        np.testing.assert_array_equal(anchored.coefficients(elapsed_s=t), eager)
+        compiled = coefficients(zero, t)
+        np.testing.assert_array_equal(coefficients(anchored, t), compiled)
+        np.testing.assert_array_less(np.abs(compiled - eager), 8 * eps * scale)
+        image = zero.realize(wavelength_nm=wavelength_nm, elapsed_s=t).data
         np.testing.assert_array_equal(
-            anchored.peak_contrast(**peak), zero.peak_contrast(**peak)
+            anchored.realize(wavelength_nm=wavelength_nm, elapsed_s=t).data, image
         )
-        with pytest.raises(TypeError):
-            anchored.coefficients(1.0)
-        with pytest.raises(TypeError):
-            anchored.realize(wavelength_nm=wavelength_nm, time_d=1.0)
+        compiled_image = realize(zero, t)
+        np.testing.assert_array_equal(realize(anchored, t), compiled_image)
+        floor = 64 * eps * np.max(np.abs(image))
+        np.testing.assert_allclose(compiled_image, image, rtol=0, atol=floor)
+    peak = dict(telescope_peak=2.0, wavelength_nm=wavelength_nm, elapsed_s=7.0)
+    np.testing.assert_array_equal(
+        anchored.peak_contrast(**peak), zero.peak_contrast(**peak)
+    )
+    with pytest.raises(TypeError):
+        anchored.coefficients(1.0)
+    with pytest.raises(TypeError):
+        anchored.realize(wavelength_nm=wavelength_nm, time_d=1.0)
 
 
 def test_broadened_equals_explicit_node_sum():

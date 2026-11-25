@@ -126,6 +126,7 @@ class TestMultiMirrorPhysics:
         c_l = _focal_contrast(grid, field, e_l, mask)
         np.testing.assert_allclose(c_h, c_l, rtol=0.02)
 
+    @pytest.mark.float64_only(reason="wavefront correction below the float32 floor")
     def test_achromatic_phase_conjugation_floor(self, setup):
         grid, _aperture, field, spectrum, honest, ap, lumped_opd, _ = setup
         mask = _annulus(NFOC, PSCALE)

@@ -80,6 +80,7 @@ def test_fractional_shift_of_a_ramp_is_the_ramp_at_the_shifted_index(shift):
     np.testing.assert_allclose(out[interior], expected[interior], rtol=1e-12)
 
 
+@pytest.mark.float64_only(reason="finite-difference check_grads")
 def test_shift_gradient_matches_finite_differences_at_a_non_integer_shift():
     """Reverse-mode ``check_grads`` (order 1) of a weighted sum of the shifted
     stop, at (0.3, -0.4). Within a cell the bilinear map is exactly bilinear

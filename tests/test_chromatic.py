@@ -90,6 +90,7 @@ class TestAtWavelength:
         assert [s.name for s in bound.stages] == [s.name for s in path.stages]
         assert bound.stage("stop") is path.stage("stop")
 
+    @pytest.mark.float64_only(reason="finite differences of a 1e-4 nm OPD perturbation")
     def test_gradient_flows_to_the_shared_leaf_through_the_bound_path(self):
         """Central difference on the OPD coefficient, step 1e-4 on a quantity
         of order 1 (basis in nm, so a 1e-4 step is a 1e-4 nm change): the

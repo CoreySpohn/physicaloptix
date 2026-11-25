@@ -11,9 +11,8 @@ from physicaloptix.random_fields import StationaryGaussianField, radial_frequenc
 
 
 @pytest.fixture(autouse=True, scope="module")
-def precision():
-    with jax.enable_x64():
-        yield
+def clear_jax_caches():
+    yield
     jax.clear_caches()
 
 
@@ -46,6 +45,7 @@ def test_radial_psd_variance_matches_closed_form_integral():
     )
 
 
+@pytest.mark.float64_only(reason="finite-difference check of the coloring operator")
 def test_field_coloring_inverse_support_and_psd_validation():
     """Fails if real-field symmetry, support, inverse or white prior breaks.
 

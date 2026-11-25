@@ -90,15 +90,12 @@ def test_unknown_step_rejected():
         )
 
 
+@pytest.mark.float32_only(reason="checks complex64 propagation with x64 disabled")
 def test_runs_without_x64():
-    jax.config.update("jax_enable_x64", False)
-    try:
-        _, model = _model()
-        end = model()["end"]
-        assert end.dtype == jnp.complex64
-        assert bool(jnp.all(jnp.isfinite(end)))
-    finally:
-        jax.config.update("jax_enable_x64", True)
+    _, model = _model()
+    end = model()["end"]
+    assert end.dtype == jnp.complex64
+    assert bool(jnp.all(jnp.isfinite(end)))
 
 
 def test_detector_image_orientation_and_zoom():
@@ -140,6 +137,9 @@ def test_build_helpers_are_public_on_roman_full():
         assert callable(getattr(roman_full, name))
 
 
+@pytest.mark.float64_only(
+    reason="wavefront command finite differences at a 1e-11 m step"
+)
 def test_dm_height_jacobian_matches_finite_differences():
     """A directional derivative through one actuator equals central differences."""
     inf_dx, pitch = 0.2e-3, 1e-3

@@ -33,7 +33,7 @@ SPACING, NODES = 0.3, 33
 
 
 @pytest.mark.slow(reason="about a thousand coronagraph propagations, 33 s")
-def test_reads_match_direct_vortex_propagation():
+def test_reads_match_direct_vortex_propagation(precision):
     """Fails if prefiltered reads of a real coronagraph leave their design scale.
 
     A charge-6 vortex with a 90 percent Lyot stop is propagated on a 33 x 33
@@ -48,12 +48,12 @@ def test_reads_match_direct_vortex_propagation():
     pupil = PixelGrid.pupil(PUPIL_SAMPLES)
     focal = PixelGrid.focal(DETECTOR, PIXEL_LOD, Frame(500.0, 6.0, "circumscribed"))
     u, v = pupil.coordinates()
-    aperture = (jnp.hypot(u, v) <= 0.5).astype(jnp.float64)
+    aperture = (jnp.hypot(u, v) <= 0.5).astype(precision)
     vortex = MultiScaleVortex.build(
         charge=6, npup=PUPIL_SAMPLES, q=64, scaling_factor=4, window_size=16
     )
     lyot = SampledOptic(
-        transmission=(jnp.hypot(u, v) <= 0.45).astype(jnp.float64),
+        transmission=(jnp.hypot(u, v) <= 0.45).astype(precision),
         grid=pupil,
         plane=PlaneKind.PUPIL,
     )

@@ -109,6 +109,7 @@ def _lyot_contrast(charge, supersample):
 
 
 class TestEvenChargeNull:
+    @pytest.mark.float64_only(reason="validation of the deep vortex null")
     @pytest.mark.parametrize(
         ("charge", "mean_bound"), [(2, 5e-12), (4, 1e-11), (6, 1e-11)]
     )
@@ -128,6 +129,7 @@ class TestEvenChargeNull:
         mean, _, _, _ = _lyot_contrast(1, supersample=16)
         assert mean > 1e-6
 
+    @pytest.mark.float64_only(reason="validation of the deep vortex null")
     def test_floor_is_set_by_the_aperture_edge(self):
         """A binary-edge pupil floors far shallower than 16x gray edges
         (measured 1.0e-10 vs 1.7e-13, ~600x): the null converges with

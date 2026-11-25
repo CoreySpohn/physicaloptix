@@ -58,7 +58,12 @@ _HCIPY_TAPER_XFAIL_REASON = (
 _REFERENCE_CANDIDATES = ("tests/data/cds_eac1_yip_reduced.npz",)
 # The module's `emitted` fixture rebuilds a full yield package (pointings x
 # sky screens x band), which is the single largest cost in the suite.
-pytestmark = pytest.mark.slow
+pytestmark = [
+    pytest.mark.slow,
+    pytest.mark.float64_only(
+        reason="external coronagraph package validation reference values"
+    ),
+]
 
 
 @pytest.fixture(scope="module")

@@ -171,6 +171,7 @@ class TestSampledPhaseScreen:
         with pytest.raises(ValueError, match="does not match grid"):
             SampledPhaseScreen(jnp.zeros((4, 4)), PixelGrid.pupil(self.NPIX))
 
+    @pytest.mark.float64_only(reason="finite-difference check_grads")
     def test_opd_gradient_matches_central_differences(self):
         """``check_grads`` (order 1, reverse mode) of a real functional of the
         output field with respect to the OPD leaf. Tolerance basis:

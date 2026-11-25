@@ -92,6 +92,7 @@ class TestFromMask:
 class TestEnergySplit:
     @pytest.mark.parametrize("reflectance", [0.2, 0.5])
     def test_lossless_split_at_float32_precision(self, reflectance):
+        """Accept float32 energy roundoff when rebuilding the split under x64."""
         grid = PixelGrid.pupil(2)
         with jax.enable_x64(False):
             split = BeamSplitter.energy(reflectance, grid=grid, plane=PlaneKind.PUPIL)
@@ -580,46 +581,45 @@ def _wide(value):
     return np.asarray(value, complex if np.iscomplexobj(value) else float)
 
 
-@pytest.mark.parametrize(
-    ("x64", "cast"), [(False, _wide), (True, _narrow)], ids=["x32", "x64"]
-)
 @pytest.mark.parametrize("case", list(_leaf_cases(_wide)))
-def test_converted_fields_are_strong_leaves(case, x64, cast):
+def test_converted_fields_are_strong_leaves(case, precision):
     """NumPy arrays and scalars given at construction are stored as strongly
     typed arrays of the active dtype whatever their own width: float32 (a
     complex value complex64) under x32 from float64 input, float64 (complex128)
     under x64 from float32 input. Truth source: the leaf rule; dtypes are
     exact, so there is no tolerance."""
-    with jax.enable_x64(x64):
-        module, names, kind = _leaf_cases(cast)[case]
-        expected = {
-            "float": jnp.float64 if x64 else jnp.float32,
-            "complex": jnp.complex128 if x64 else jnp.complex64,
-        }[kind]
-        for name in names:
-            leaf = getattr(module, name)
-            assert isinstance(leaf, jax.Array), name
-            assert leaf.dtype == expected, name
-            assert not leaf.weak_type, name
+    x64 = precision == np.dtype("float64")
+    module, names, kind = _leaf_cases(_narrow if x64 else _wide)[case]
+    expected = {
+        "float": jnp.float64 if x64 else jnp.float32,
+        "complex": jnp.complex128 if x64 else jnp.complex64,
+    }[kind]
+    for name in names:
+        leaf = getattr(module, name)
+        assert isinstance(leaf, jax.Array), name
+        assert leaf.dtype == expected, name
+        assert not leaf.weak_type, name
 
 
+@pytest.mark.float32_only(
+    reason="checks narrowing of host floats and phasors to float32 and complex64"
+)
 def test_roman_full_arrays_are_strong_leaves_of_their_kind_under_x32():
     """Each array keeps its kind (a phasor stays complex, a mask stays boolean)
     in the active precision. Truth source: the leaf rule; exact dtypes."""
-    with jax.enable_x64(False):
-        model = RomanFull(
-            arrays={
-                "tilt": np.ones((2, 2), complex),
-                "map": np.zeros((2, 2)),
-                "mask": np.ones((2, 2), bool),
-            },
-            program=(),
-            n=2,
-            lam_m=5e-7,
-            pupil_diam_pix=1.0,
-            final_dx_m=1e-5,
-        )
-        want = {"tilt": jnp.complex64, "map": jnp.float32, "mask": jnp.bool_}
-        for key, dtype in want.items():
-            assert model.arrays[key].dtype == dtype, key
-            assert not model.arrays[key].weak_type, key
+    model = RomanFull(
+        arrays={
+            "tilt": np.ones((2, 2), complex),
+            "map": np.zeros((2, 2)),
+            "mask": np.ones((2, 2), bool),
+        },
+        program=(),
+        n=2,
+        lam_m=5e-7,
+        pupil_diam_pix=1.0,
+        final_dx_m=1e-5,
+    )
+    want = {"tilt": jnp.complex64, "map": jnp.float32, "mask": jnp.bool_}
+    for key, dtype in want.items():
+        assert model.arrays[key].dtype == dtype, key
+        assert not model.arrays[key].weak_type, key

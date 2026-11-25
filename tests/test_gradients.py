@@ -177,6 +177,7 @@ def _fresnel_relay_path(npix, alpha=3e-3):
     )
 
 
+@pytest.mark.float64_only(reason="finite-difference check_grads")
 class TestCheckGrads:
     """Autodiff (fwd and rev) vs second-order finite differences."""
 

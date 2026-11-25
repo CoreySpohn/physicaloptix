@@ -104,6 +104,7 @@ def test_defaults_and_validation():
 
 
 @vv.case("point-source-position", "code-verification", basis="floating-point")
+@pytest.mark.float64_only(reason="finite differences at a 1e-5 lambda/D displacement")
 def test_point_source_peak_has_a_traced_position_gradient():
     """The zero ramp is unity bitwise; a central difference checks the gradient.
 

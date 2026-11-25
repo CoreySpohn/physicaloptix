@@ -42,6 +42,7 @@ def test_draw_moments():
     )
 
 
+@pytest.mark.float64_only(reason="finite differences of detector draws at a 1e-4 step")
 def test_draw_rate_gradient():
     """Fails if rate gradients are stopped or variance has a different model.
 
@@ -83,6 +84,7 @@ def test_photon_counting_is_refused():
         )
 
 
+@pytest.mark.float64_only(reason="float64 Gaussian log-density reference")
 def test_log_prob_is_the_gaussian_density_of_the_draws():
     """The draw moments match the Gaussian that log_prob scores.
 

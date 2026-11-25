@@ -13,8 +13,6 @@ from physicaloptix.instruments.roman import (
     volts_to_stroke,
 )
 
-jax.config.update("jax_enable_x64", True)
-
 N_SMALL, N_BIG, D_PIX = 256, 192, 100.0
 
 
