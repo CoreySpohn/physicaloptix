@@ -107,6 +107,9 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+addopts = "-p hwoutils.testing.precision"
+default_precision = "float32"
+
 # record_property (tests/test_speckle.py, tests/test_linearize.py) warns under the default xunit2 family.
 junit_family = "xunit1"
 filterwarnings = [
@@ -116,11 +119,10 @@ filterwarnings = [
     # JAX 0.8.1 dot_general reverse mode projects complex cotangents to real inputs.
     "ignore:Casting complex values to real discards the imaginary part:numpy.exceptions.ComplexWarning:jax[.]_src[.]lax[.]lax$:5518",
 ]
-# The default run is COMPLETE: the external-reference gates are the point of
-# this suite, so nothing is deselected without the caller asking. A handful of
-# gates rebuild a full yield package or a full EAC-1 chain and dominate the
-# wall clock, so they carry `slow` and the inner development loop opts out
-# with `-m "not slow"`. Note that `-n auto` is deliberately NOT set: the
+# The default run includes the slow tier in the selected precision lane.
+# A handful of gates rebuild a full yield package or a full EAC-1 chain and
+# dominate the wall clock, so the quick tier uses `-m "not slow"`.
+# Note that `-n auto` is deliberately NOT set: the
 # gates hold large x64 EAC-1 arrays and one worker per core exhausts memory
 # long before parallelism pays.
 markers = [

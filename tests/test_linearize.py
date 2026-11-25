@@ -32,22 +32,22 @@ from physicaloptix.transforms import Fraunhofer
 WL_NM = 500.0
 
 
+@pytest.mark.float64_only(reason="finite differences of the wavefront command JVP")
 def test_command_response_jvp_has_correct_tangent_derivative(mono_field, opd_basis):
     """Fails if the command JVP's forward or reverse derivative is wrong."""
     screen = PhaseScreen(opd_basis, mono_field.grid, wavelength_nm=WL_NM)
     screen = screen.with_command(jnp.zeros_like(screen.command, dtype=int))
     path = OpticalPath(stages=(Stage("screen", screen),))
-    with jax.enable_x64():
-        response = command_response(path, mono_field, "screen")
-        check_grads(
-            response.jvp,
-            (jnp.array([0.5, -1.0, 0.75, 1.5]),),
-            order=2,
-            modes=("fwd", "rev"),
-            eps=1e-4,
-            atol=1e-4,
-            rtol=1e-4,
-        )
+    response = command_response(path, mono_field, "screen")
+    check_grads(
+        response.jvp,
+        (jnp.array([0.5, -1.0, 0.75, 1.5]),),
+        order=2,
+        modes=("fwd", "rev"),
+        eps=1e-4,
+        atol=1e-4,
+        rtol=1e-4,
+    )
 
 
 @pytest.fixture
@@ -752,6 +752,9 @@ class TestPerturbationStage:
             np.asarray(lin_stage.G), np.asarray(lin_input.G), atol=1e-10
         )
 
+    @pytest.mark.float64_only(
+        reason="finite differences of downstream wavefront commands"
+    )
     def test_downstream_stage_matches_finite_difference(self):
         path, field = _train_and_field()
         lin = linearize(

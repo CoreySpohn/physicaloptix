@@ -62,7 +62,10 @@ from physicaloptix.instruments import (
 )
 
 # Full-resolution comparisons require external reference data and a larger machine.
-pytestmark = pytest.mark.slow
+pytestmark = [
+    pytest.mark.slow,
+    pytest.mark.float64_only(reason="external STPSF validation reference values"),
+]
 
 fits = pytest.importorskip("astropy.io.fits")
 

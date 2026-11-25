@@ -111,6 +111,7 @@ _DM_NFOC = 64
 _DM_FX0 = 12.0
 
 
+@pytest.mark.float64_only(reason="wavefront control with two deformable mirrors")
 class TestTwoDeformableMirrorControl:
     """The payoff: a two-DM relay Jacobian via jacfwd, with the out-of-pupil DM
     adding Fresnel-enabled control the pupil DM cannot reach."""

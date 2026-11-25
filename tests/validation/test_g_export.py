@@ -26,7 +26,12 @@ from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.transforms import Fraunhofer, cmft_fwd
 
 # Full-resolution comparisons require external reference data and a larger machine.
-pytestmark = pytest.mark.slow
+pytestmark = [
+    pytest.mark.slow,
+    pytest.mark.float64_only(
+        reason="external electric-field and Jacobian validation reference values"
+    ),
+]
 
 WL_NM = 1000.0
 KR_LO, KR_HI = 3.0, 25.0

@@ -7,6 +7,7 @@ import pytest
 from physicaloptix.coatings import multilayer_response
 
 
+@pytest.mark.float64_only(reason="external HCIPy validation reference values")
 def test_bare_interface_matches_hcipy_fresnel():
     """Normal-incidence Fresnel coefficient vs hcipy's, several index pairs."""
     hcipy = pytest.importorskip("hcipy")

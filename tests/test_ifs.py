@@ -410,7 +410,7 @@ class TestPack:
         assert all(0.0 < c["stop_capture"] <= 1.001 for c in meta["capture"])
 
     @pytest.mark.parametrize("dy", [0.0, -0.3], ids=["unaberrated", "negative-y-tilt"])
-    def test_templates_are_nonnegative_and_centered(self, dy):
+    def test_templates_are_nonnegative_and_centered(self, dy, precision):
         base = make_chain()
         chain = base
         if dy:
@@ -438,7 +438,7 @@ class TestPack:
         reference = np.lib.stride_tricks.sliding_window_view(raw, (4, 4)).mean(
             axis=(-2, -1)
         )
-        assert plane.dtype == reference.dtype == np.float64
+        assert plane.dtype == reference.dtype == precision
         np.testing.assert_allclose(plane, reference, rtol=1e-10, atol=0)
 
     def test_chromatic_pupil_slices(self):

@@ -32,7 +32,7 @@ def _setup():
     grid = PixelGrid.pupil(16)
     focal = PixelGrid.focal(16, 0.5, TEST_FRAME)
     field = Field(
-        data=jnp.ones((16, 16), dtype=jnp.complex128), grid=grid, plane=PlaneKind.PUPIL
+        data=jnp.ones((16, 16), dtype=complex), grid=grid, plane=PlaneKind.PUPIL
     )
     path = OpticalPath(stages=(Stage("cam", Fraunhofer(grid_in=grid, grid_out=focal)),))
     return path, field

@@ -90,6 +90,7 @@ class TestSellmeier:
 
 
 class TestThicknessKernel:
+    @pytest.mark.float64_only(reason="finite differences of the log coating response")
     def test_matches_finite_differences(self):
         wl = jnp.linspace(500.0, 600.0, 5)
         layers, thicknesses = [2.35, 1.38], [60.0, 95.0]

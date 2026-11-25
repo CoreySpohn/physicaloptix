@@ -7,7 +7,7 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from hwoutils import enable_x64, set_platform
+from hwoutils import set_platform
 from hypothesis import settings
 from optixstuff import FocalResponse
 from optixstuff.grids import Frame, PixelGrid
@@ -30,11 +30,8 @@ settings.register_profile("quick", max_examples=25, deadline=None)
 settings.register_profile("nightly", max_examples=200, deadline=None)
 settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "quick"))
 
-# The deep-contrast path is x64-mandatory (f32 floors the dark hole at ~3e-4),
-# and the suite must be deterministic: pin tests to CPU x64. Builder runs opt
-# into GPU explicitly outside the test suite.
+# Pin tests to CPU for determinism. Builder runs can opt into GPU separately.
 set_platform("cpu")
-enable_x64()
 
 TEST_FRAME = Frame(500.0, 1.0, "circumscribed")
 

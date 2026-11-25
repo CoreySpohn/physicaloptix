@@ -158,6 +158,7 @@ def _pixel_pdf_chunked(x_grid, i_c_p, gamma_p, p_p, phi_c_p, norm, n_theta, chun
     return out
 
 
+@pytest.mark.float64_only(reason="float64 probability and tail laws")
 def test_pixel_pdf_normalizes():
     x = _delta_grid()
     p = _pixel_pdf_chunked(
@@ -166,6 +167,7 @@ def test_pixel_pdf_normalizes():
     assert np.trapezoid(p, x) == pytest.approx(1.0, abs=2e-3)
 
 
+@pytest.mark.float64_only(reason="float64 probability and tail laws")
 def test_pixel_pdf_rician_limit():
     # p -> 0 must recover the modified Rician after the delta change of
     # variables: p_delta(d) = norm * p_I(i_c + d * norm; Ic=i_c, Is=gamma).
@@ -179,6 +181,7 @@ def test_pixel_pdf_rician_limit():
     assert np.allclose(p_beck[core], p_ric[core], rtol=2e-3)
 
 
+@pytest.mark.float64_only(reason="float64 probability and tail laws")
 def test_pixel_sf_matches_pdf_tail_integral():
     x = _delta_grid()
     p = _pixel_pdf_chunked(
@@ -198,6 +201,7 @@ def test_pixel_sf_matches_pdf_tail_integral():
         assert s == pytest.approx(tail, rel=5e-3)
 
 
+@pytest.mark.float64_only(reason="float64 probability and tail laws")
 def test_pixel_sf_below_zero_intensity_is_one():
     thresholds = np.array([-2.0 * I_C / NORM])  # total intensity < 0
     sf = pixel_sf(
@@ -211,12 +215,14 @@ def test_pixel_sf_below_zero_intensity_is_one():
     assert sf[0, 0] == 1.0
 
 
+@pytest.mark.float64_only(reason="float64 probability and tail laws")
 def test_pixel_functions_return_numpy_float64():
     x = _delta_grid(100)
     p = pixel_pdf(x, I_C, GAMMA, P_STRONG, PHI_C, NORM, n_theta=256)
     assert type(p) is np.ndarray and p.dtype == np.float64
 
 
+@pytest.mark.float64_only(reason="float64 probability and tail laws")
 def test_genchi2_cumulants_match_integrated_moments():
     lam = np.array([3.0, -1.0, 0.5])
     beta = np.array([0.7, 0.2, 0.0])
@@ -303,6 +309,7 @@ def _genchi2_pdf_tail_gl(
 
 
 @pytest.mark.slow
+@pytest.mark.float64_only(reason="float64 probability and tail laws")
 def test_genchi2_sf_matches_pdf_tail_integral():
     # Evidence hierarchy for the tolerances below: genchi2_sf's own accuracy
     # is established independently of this test, by
@@ -351,6 +358,7 @@ def test_genchi2_sf_matches_pdf_tail_integral():
         assert s == pytest.approx(tail, rel=1e-6, abs=atol)
 
 
+@pytest.mark.float64_only(reason="float64 probability and tail laws")
 def test_genchi2_sf_exact_single_chisquare():
     # One term, beta=0: Q = lam z^2, so sf(x) = 2 (1 - Phi(sqrt(x / lam))).
     # This is the authoritative accuracy gate: the reference is closed-form
@@ -375,6 +383,7 @@ def test_genchi2_sf_exact_single_chisquare():
     assert np.allclose(sf, exact, rtol=1e-5)
 
 
+@pytest.mark.float64_only(reason="float64 probability and tail laws")
 def test_genchi2_sf_bounded():
     # The np.clip at the end of genchi2_sf makes this range assertion
     # unfailable as written -- it is a refactor guard (catches a future

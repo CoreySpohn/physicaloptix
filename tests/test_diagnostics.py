@@ -1,6 +1,5 @@
 """Tests for the model-level diagnostics (quadrature audit of a mode basis)."""
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -14,8 +13,6 @@ from physicaloptix.diagnostics import (
     quadrature_audit_from_jacobians,
     quadrature_partner,
 )
-
-jax.config.update("jax_enable_x64", True)
 
 _N = 48
 

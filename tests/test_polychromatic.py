@@ -287,6 +287,7 @@ def test_shared_leaf_gradient_is_the_sum_of_per_node_gradients():
 @pytest.mark.parametrize(
     "seam", [0, 1, 2, 3], ids=["offset", "lyot", "position", "flux"]
 )
+@pytest.mark.float64_only(reason="finite-difference check_grads")
 def test_check_grads_per_seam(seam):
     loss = _loss_fn(True)
 
