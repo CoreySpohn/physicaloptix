@@ -5,6 +5,7 @@ propagation; use one adapter per band in MultiBandCoronagraph for that purpose.
 Time is in days from the scene epoch; this static model ignores its value.
 """
 
+import dataclasses
 from dataclasses import replace
 
 import equinox as eqx
@@ -138,6 +139,20 @@ class PathCalibration(eqx.Module):
             for rule in rules
         )
         return cls(jax.tree.map(jnp.asarray, records), sky, profile)
+
+
+def _has_tracer(value) -> bool:
+    """Whether a value or any nested dataclass field or sequence entry is traced."""
+    if isinstance(value, jax.core.Tracer):
+        return True
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return any(
+            _has_tracer(getattr(value, field.name))
+            for field in dataclasses.fields(value)
+        )
+    if isinstance(value, (tuple, list)):
+        return any(_has_tracer(item) for item in value)
+    return False
 
 
 class PathCoronagraph(AbstractImagingCoronagraph):
@@ -537,4 +552,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         """
         self._check_wavelength(wavelength_nm)
         sky = self.calibration.sky
-        return sky if sky.grid == grid else on_grid(sky, grid)
+        # Grid equality is a host comparison; a traced grid is resampled.
+        if not _has_tracer(grid) and sky.grid == grid:
+            return sky
+        return on_grid(sky, grid)

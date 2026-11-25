@@ -153,6 +153,19 @@ class TestConformance:
         blue = np.asarray(coro.stellar_map(450.0, 0.0).data)
         assert np.isfinite(blue).all() and blue.max() > 0
         np.testing.assert_array_equal(blue, coro.stellar_map(550.0, 0.0).data)
+        # A renderer places a band product at a traced band centre. The traced
+        # grid equals the native sky grid up to the round trip through arcsec,
+        # so it reads the native transmission to roundoff (1e-12 relative).
+        sky = coro.calibration.sky
+
+        @jax.jit
+        def traced_sky(scale_nm):
+            grid = sky.grid.to_arcsec(scale_nm).to_lod(scale_nm, sky.grid.frame)
+            return coro.uniform_sky_map(scale_nm, grid=grid).data
+
+        np.testing.assert_allclose(
+            traced_sky(485.0), sky.data, rtol=1e-12, atol=1e-12 * sky.data.max()
+        )
 
     def test_imaging_capabilities(self, vortex_coronagraph):
         """Fails if the live path advertises disk rendering or hides native frames."""
