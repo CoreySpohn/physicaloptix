@@ -21,7 +21,7 @@ from optixstuff.coronagraph import (
 )
 from optixstuff.grids import Image, PixelGrid
 from optixstuff.performance import SampledProfile, performance_curves
-from optixstuff.spectral import Band, Quadrature
+from optixstuff.spectral import Band, Quadrature, same_wavelength
 
 from physicaloptix._sky import (
     _require_inside_pupil_nyquist,
@@ -200,6 +200,25 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         """Return whether the build spectrum spans a nonzero wavelength interval."""
         band = self.bandpass
         return band is not None and band.width_nm > 0
+
+    def scale_wavelength_nm(self, wavelength_nm, band_center_nm):
+        """Scale the reference grid by the observing-to-build wavelength ratio.
+
+        A mono response scales with the node wavelength. A band average scales
+        once with the observing band's center relative to its build band center.
+
+        Args:
+            wavelength_nm: Node wavelength in nm.
+            band_center_nm: Center of the exposure's observing band in nm.
+
+        Returns:
+            The wavelength setting the angular scale of the native lambda/D grid.
+        """
+        scale_nm = super().scale_wavelength_nm(wavelength_nm, band_center_nm)
+        band = self.bandpass
+        if band is None:
+            return scale_nm
+        return scale_nm * (self.frame.reference_wavelength_nm / band.center_nm)
 
     @classmethod
     def from_path(
@@ -439,6 +458,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
             not self.band_averaged
             and not isinstance(wavelength_nm, jax.core.Tracer)
             and float(wavelength_nm) < self.low_nm
+            and not same_wavelength(wavelength_nm, self.low_nm)
         ):
             raise ValueError(
                 f"wavelength {float(wavelength_nm):g} nm is below the shortest "

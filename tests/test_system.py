@@ -90,6 +90,20 @@ class TestFromMask:
 
 
 class TestEnergySplit:
+    @pytest.mark.parametrize("reflectance", [0.2, 0.5])
+    def test_lossless_split_at_float32_precision(self, reflectance):
+        grid = PixelGrid.pupil(2)
+        with jax.enable_x64(False):
+            split = BeamSplitter.energy(reflectance, grid=grid, plane=PlaneKind.PUPIL)
+            assert split.t.dtype == jnp.complex64
+            assert split.energy_residual <= np.finfo(np.float32).eps
+
+        with jax.enable_x64(True):
+            widened = BeamSplitter(
+                t=split.t, r=split.r, grid=grid, plane=PlaneKind.PUPIL
+            )
+            assert widened.energy_residual <= np.finfo(np.float32).eps
+
     def test_conserves_and_uses_quadrature_phase(self):
         field, grid = _pupil_field()
         split = BeamSplitter.energy(0.3, grid=grid, plane=PlaneKind.PUPIL)

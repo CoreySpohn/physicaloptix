@@ -129,6 +129,31 @@ def _lod_rad(wavelength_nm):
 
 
 class TestConformance:
+    @pytest.mark.parametrize("band_average", [False, True], ids=["mono", "band"])
+    def test_detector_pitch_uses_native_reference(
+        self, small_path, mono_field, chromatic_field, band_average
+    ):
+        """A detector pixel matching the native pitch stays one pixel wide."""
+        coro = PathCoronagraph.from_path(
+            OpticalPath(stages=small_path.stages[:1]),
+            chromatic_field if band_average else mono_field,
+            primary=PRIMARY,
+            reference_wavelength_nm=600.0,
+            wavelength_nm=None if band_average else 500.0,
+            max_separation_lod=1.0,
+            pixel_scale_lod=0.375,
+            fov_margin_lod=2.0,
+            n_sky_screens=1,
+        )
+        for observed_nm, native_scale_nm in ((500.0, 600.0), (525.0, 630.0)):
+            node, center = (
+                (475.0, observed_nm) if band_average else (observed_nm, 510.0)
+            )
+            detector = coro.grid.to_arcsec(native_scale_nm)
+            scale_nm = coro.scale_wavelength_nm(node, center)
+            pixels = detector.to_lod(scale_nm, coro.frame)
+            np.testing.assert_allclose(pixels.step, coro.grid.step, rtol=1e-14)
+
     def test_band_average_uses_one_native_stellar_map(
         self, small_path, chromatic_field
     ):
@@ -511,6 +536,25 @@ class TestSamplingExplicitContract:
 
 class TestChromaticBuild:
     """from_path(wavelength_nm=...): the OPD conversion at the true wavelength."""
+
+    def test_float32_serves_decimal_build_wavelength(self):
+        with jax.enable_x64(False):
+            grid = PixelGrid.pupil(12)
+            pupil = jnp.ones(grid.shape)
+            stop = SampledOptic(transmission=pupil, grid=grid, plane=PlaneKind.PUPIL)
+            coro = PathCoronagraph.from_path(
+                OpticalPath(stages=(Stage("stop", stop),)),
+                Field(data=pupil, grid=grid, plane=PlaneKind.PUPIL),
+                primary=PRIMARY,
+                reference_wavelength_nm=600.2,
+                wavelength_nm=600.2,
+                max_separation_lod=1.0,
+                fov_margin_lod=2.0,
+                n_sky_screens=1,
+            )
+            assert coro.stellar_map(600.2, 0.0).data.max() > 0
+            with pytest.raises(ValueError, match="below the shortest"):
+                coro.at_wavelength(600.1)
 
     def _aberrated(
         self, build_wavelength_nm, screen_wavelength_nm=600.0, amplitude_nm=3.0
