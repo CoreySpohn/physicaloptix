@@ -7,7 +7,8 @@ FITS layout the table-backed readers consume. Recipes follow the design-survey
 reference implementation exactly:
 
 - Band images are the quadrature-weighted mean of per-wavelength intensities on ONE
-  fixed angular grid (reference-wavelength lambda/D).
+  fixed angular grid (native reference-wavelength lambda/D; the files state it
+  in build-centre lambda/D).
 - A stellar diameter is 50 pointings drawn area-uniformly over the stellar
   disk (radius ``sqrt(U)/2`` in diameter units, uniform azimuth, seeded per
   diameter), each applied as a fixed-angle 2D tilt, incoherently averaged.
@@ -88,12 +89,13 @@ def emit_yip(
             ``Quadrature.build((band,), core_path, order=4)``. Its dimensional
             weights define the mean; an explicit midpoint rule reproduces the
             survey sampling.
-        reference_wavelength_nm: Band-center wavelength defining the grid.
+        reference_wavelength_nm: Wavelength defining the input grid and source
+            angles in lambda/D, in nanometers.
         offsets_x_lod: 1D array of off-axis source offsets along +x, in
             reference lambda/D.
         diameter_m: Circumscribed telescope diameter (header metadata).
-        stellar_diameters_lod: Stellar angular diameters; defaults to the survey
-            list ``[0] + logspace(-3, 0, 11)``.
+        stellar_diameters_lod: Stellar angular diameters in reference lambda/D;
+            defaults to the survey list ``[0] + logspace(-3, 0, 11)``.
         n_pointings: Point sources per resolved stellar diameter.
         n_sky_screens: Stochastic screens for the sky transmission map.
         sky_band_nm: ``(min, max)`` wavelength range the sky screens draw
@@ -109,7 +111,8 @@ def emit_yip(
         time_multiplier_characterization: Header metadata.
 
     Returns:
-        Point densities, transmission and sample axes under the YIPPackage names.
+        Point densities, transmission and sample axes in build-centre lambda/D
+        under the YIPPackage names.
 
     Raises:
         ValueError: The quadrature has more than one band, or the science grid
@@ -180,10 +183,21 @@ def emit_yip(
     )
 
     # -- write the package ---------------------------------------------------
+    product_grid = science_grid
+    scale = reference_wavelength_nm / band.center_nm
+    if scale != 1.0:
+        frame = replace(science_grid.frame, reference_wavelength_nm=band.center_nm)
+        product_grid = science_grid.to_arcsec(reference_wavelength_nm).to_lod(
+            band.center_nm, frame
+        )
+        stellar_diameters_lod = stellar_diameters_lod * scale
+        offsets_x_lod = offsets_x_lod * scale
+        sky = replace(sky, grid=product_grid)
+
     products = {
         "stellar_intensity": Image(
             stellar,
-            science_grid,
+            product_grid,
             ("stellar_diameter",),
             Measure.integral(),
             "stellar_flux_fraction",
@@ -192,7 +206,7 @@ def emit_yip(
         "stellar_diameters_lod": stellar_diameters_lod,
         "offaxis_psfs": Image(
             offax,
-            science_grid,
+            product_grid,
             ("source",),
             Measure.integral(),
             "stellar_flux_fraction",
@@ -206,7 +220,7 @@ def emit_yip(
 
     def product_header(band_nm, n_wavelengths):
         return yip_header(
-            science_grid,
+            product_grid,
             design=design_name,
             inscribed_diameter_m=diameter_m
             if inscribed_diameter_m is None

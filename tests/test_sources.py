@@ -85,6 +85,14 @@ def test_source_at_plus_y_lands_on_plus_rows_and_parity_flips_it():
     )
 
 
+def test_point_source_accepts_traced_coordinate_pair():
+    @jax.jit
+    def position(x, y):
+        return PointSource((x, y)).position_arcsec
+
+    np.testing.assert_array_equal(position(0.25, -0.5), [0.25, -0.5])
+
+
 def test_defaults_and_validation():
     source = PointSource([0.0, 0.0])
     assert float(source.flux) == 1.0

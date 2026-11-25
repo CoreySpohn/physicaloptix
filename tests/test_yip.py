@@ -82,30 +82,66 @@ def emitted(vortex_setup, tmp_path_factory):
 
 
 class TestEmittedPackage:
-    def test_monochromatic_writer_declares_equal_band_edges(
+    def test_monochromatic_writer_uses_build_centre_geometry(
         self, vortex_setup, tmp_path
     ):
-        """The single input wavelength is both FITS band edges in nm.
+        """Fails if FITS geometry or sample axes use the propagation reference.
 
-        Both science headers store the input in nm, so the integer
-        wavelength is exactly representable and equality is exact.
+        Integer wavelengths are exact. The angular pitch and axes have only
+        float64 unit-conversion roundoff (1e-14 relative).
+
+        Args:
+            vortex_setup: Vortex train and entrance field.
+            tmp_path: Directory for the emitted FITS files.
         """
         core, field = vortex_setup
-        emit_yip(
+        reference_nm, center_nm = 600.0, 500.0
+        frame = Frame(reference_nm, DIAMETER_M, "circumscribed")
+        grid = PixelGrid.focal(8, 0.25, frame)
+        products = emit_yip(
             tmp_path,
             core,
             field,
-            science_grid=PixelGrid.focal(16, 0.5, YIP_FRAME),
-            spectrum=Quadrature.monochromatic(REF_NM),
-            reference_wavelength_nm=REF_NM,
-            offsets_x_lod=[2.0],
-            stellar_diameters_lod=[0.0],
+            science_grid=grid,
+            spectrum=Quadrature.monochromatic(center_nm),
+            reference_wavelength_nm=reference_nm,
+            offsets_x_lod=[0.5],
+            stellar_diameters_lod=[0.1],
+            n_pointings=1,
             n_sky_screens=1,
             diameter_m=DIAMETER_M,
         )
-        for filename in ("offax_psf.fits", "stellar_intens.fits"):
+        for key, filename in (
+            ("offaxis_psfs", "offax_psf.fits"),
+            ("stellar_intensity", "stellar_intens.fits"),
+            ("sky_transmission", "sky_trans.fits"),
+        ):
             header = fits.getheader(tmp_path / filename)
-            assert header["MINLAM"] == header["MAXLAM"] == REF_NM
+            assert header["MINLAM"] == header["MAXLAM"] == header["LAMBDA"] == center_nm
+            assert products[key].grid.frame.reference_wavelength_nm == center_nm
+            np.testing.assert_allclose(
+                [
+                    header["PIXSCALE"] * frame.lod_to_arcsec(center_nm),
+                    products[key].grid.to_arcsec(center_nm).step,
+                ],
+                grid.to_arcsec(reference_nm).step,
+                rtol=1e-14,
+                atol=0,
+            )
+            if key != "sky_transmission":
+                np.testing.assert_allclose(
+                    products[key].data * header["PIXSCALE"] ** 2,
+                    fits.getdata(tmp_path / filename),
+                    rtol=1e-14,
+                    atol=0,
+                )
+        package = open_yip(tmp_path)
+        for key, expected in (
+            ("offsets_xy_lod", [[0.6, 0.0]]),
+            ("stellar_diameters_lod", [0.12]),
+        ):
+            np.testing.assert_allclose(getattr(package, key), expected, rtol=1e-14)
+            np.testing.assert_allclose(products[key], expected, rtol=1e-14)
 
     def test_all_files_written(self, emitted):
         out_dir, _ = emitted

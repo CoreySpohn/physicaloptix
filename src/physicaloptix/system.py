@@ -103,6 +103,7 @@ class BeamSplitter(eqx.Module):
                 "provide either concrete (t, r) or a dichroic "
                 "(wavelengths_nm, transmit_table), not both or neither"
             )
+        tolerance = _ENERGY_TOL
         if concrete:
             for name, amp in (("t", t), ("r", r)):
                 if amp is None:
@@ -122,8 +123,13 @@ class BeamSplitter(eqx.Module):
                         f"{name} shape {jnp.shape(amp)} does not match grid "
                         f"({grid.shape[0]}, {grid.shape[0]})"
                     )
+                # Widening a supplied amplitude preserves its rounding error.
+                dtype = amp.dtype if hasattr(amp, "dtype") else np.asarray(amp).dtype
+                if np.issubdtype(dtype, np.inexact):
+                    tolerance = max(tolerance, 4 * np.finfo(dtype).eps)
             t = _amplitude_leaf(t)
             r = _amplitude_leaf(r)
+            tolerance = max(tolerance, 4 * np.finfo(t.dtype).eps)
         else:
             wavelengths_nm = as_float_leaf(wavelengths_nm)
             transmit_table = as_float_leaf(transmit_table)
@@ -145,10 +151,10 @@ class BeamSplitter(eqx.Module):
         # Host-side energy gate on concrete amplitudes (a dichroic conserves
         # by construction: amplitudes are derived from one transmittance).
         residual = float(self.energy_residual)
-        if residual > _ENERGY_TOL:
+        if residual > tolerance:
             message = (
                 f"BeamSplitter energy residual max||t|^2+|r|^2 - 1| = "
-                f"{residual:.3e} exceeds {_ENERGY_TOL:.0e}"
+                f"{residual:.3e} exceeds {tolerance:.3e}"
             )
             if on_violation == "raise":
                 raise ValueError(message)
