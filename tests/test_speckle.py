@@ -1867,8 +1867,16 @@ def test_fields_run_on_their_own_clock(chromatic, x64):
 def test_broadened_equals_explicit_node_sum():
     """Fails if broadband substitutes a center or coherently averages fields.
 
-    Basis: explicit weighted intensity sum, 32 float64 eps. Both mono phase
-    scaling and propagated node tables must use the same inherited integrator.
+    Basis: explicit weighted intensity sum, 64 float64 eps. The two sides
+    propagate each node through separately compiled FFT programs, so they agree
+    to a few ulp per transform stage rather than bitwise, and the three-node
+    weighted sum with its normalization adds about 5 eps (Higham 2002, the
+    bound gamma_n for an n-term sum). The first version of this bound, 32 eps,
+    was exceeded by a factor of 1.6 on one platform (about 51 eps), so 64 eps
+    keeps that case inside with a quarter of headroom; this machine sees under
+    2 eps. A wrong node, weight or coherent average moves the result by
+    orders of magnitude more. Both mono phase scaling and propagated node
+    tables must use the same inherited integrator.
     """
     from optixstuff.spectral import Band, Quadrature
 
@@ -1896,8 +1904,8 @@ def test_broadened_equals_explicit_node_sum():
         np.testing.assert_allclose(
             image.data,
             jnp.stack(expected),
-            rtol=32 * np.finfo(float).eps,
-            atol=32 * np.finfo(float).eps * np.max(np.abs(expected)),
+            rtol=64 * np.finfo(float).eps,
+            atol=64 * np.finfo(float).eps * np.max(np.abs(expected)),
         )
         assert image.grid == field.grid
         assert image.leading_axes == ("band", "time_0")
