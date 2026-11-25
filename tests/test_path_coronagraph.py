@@ -129,6 +129,85 @@ def _lod_rad(wavelength_nm):
 
 
 class TestConformance:
+    def test_records_use_build_band_geometry(self, small_path, chromatic_field):
+        """Fails if photometry uses the native reference for band-centre angles.
+
+        Aperture rules are stated in build-centre lambda/D, so the default
+        0.7 radius is the same sky aperture in both builds. The 8-pixel grid
+        encloses it one pixel off axis.
+        Both builds sample the same sky angles and apertures, so 1e-12 relative
+        allows float64 roundoff in propagation, aperture sums and profile fits.
+
+        Args:
+            small_path: Disk stop followed by a camera.
+            chromatic_field: Entrance field spanning 450 to 550 nm.
+        """
+        from optixstuff.apertures import Circular, HalfMaximum
+
+        path = OpticalPath(stages=small_path.stages[:1])
+
+        def build(reference_nm, pitch):
+            """Calibrate at fixed sky positions spaced by half a pixel.
+
+            Args:
+                reference_nm: Wavelength defining the native grid, in nm.
+                pitch: Pixel width in native lambda/D.
+
+            Returns:
+                The calibrated telescope.
+            """
+            return PathCoronagraph.from_path(
+                path,
+                chromatic_field,
+                primary=PRIMARY,
+                reference_wavelength_nm=reference_nm,
+                pixel_scale_lod=pitch,
+                separation_step_lod=pitch / 2,
+                max_separation_lod=pitch / 2,
+                fov_margin_lod=3.5 * pitch,
+                n_sky_screens=1,
+            )
+
+        center = build(500.0, 0.3)
+        native = build(600.0, 0.25)
+        assert native.curves() is native.performance_record
+        for expected, actual in (
+            (center.performance_record, native.curves(Circular(0.7))),
+            (center.curves(HalfMaximum(0.5)), native.curves(HalfMaximum(0.5))),
+        ):
+            angle = expected.separation_lod * expected.frame.lod_to_arcsec(500.0)
+            lod_arcsec = actual.frame.lod_to_arcsec(500.0)
+            np.testing.assert_allclose(
+                actual.separation_lod * lod_arcsec, angle, rtol=1e-12, atol=0
+            )
+            assert actual.frame == expected.frame
+            assert actual.rule == expected.rule
+            for quantity in expected.interpolation:
+                np.testing.assert_allclose(
+                    actual.evaluate(quantity, angle / lod_arcsec),
+                    expected.evaluate(quantity, expected.separation_lod),
+                    rtol=1e-12,
+                    atol=0,
+                )
+            for name in ("iwa_lod", "data_extent_lod", "stellar_diameters_lod"):
+                np.testing.assert_allclose(
+                    getattr(actual, name), getattr(expected, name), rtol=1e-12, atol=0
+                )
+            for profile in (actual.uniform_sky, native.uniform_sky_profile):
+                assert profile.frame == expected.frame
+                np.testing.assert_allclose(
+                    profile.separation_lod,
+                    expected.uniform_sky.separation_lod,
+                    rtol=1e-12,
+                    atol=0,
+                )
+                np.testing.assert_allclose(
+                    profile.evaluate(expected.uniform_sky.separation_lod),
+                    expected.uniform_sky.values,
+                    rtol=1e-12,
+                    atol=0,
+                )
+
     @pytest.mark.parametrize("band_average", [False, True], ids=["mono", "band"])
     def test_detector_pitch_uses_native_reference(
         self, small_path, mono_field, chromatic_field, band_average

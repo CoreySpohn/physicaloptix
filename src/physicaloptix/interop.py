@@ -12,7 +12,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from optixstuff.apertures import DEFAULT_APERTURE_RULE, HalfMaximum
+from optixstuff.apertures import DEFAULT_APERTURE_RULE, Circular, HalfMaximum
 from optixstuff.coronagraph import (
     AbstractImagingCoronagraph,
     ProductGrids,
@@ -49,11 +49,40 @@ def _native_psf(core_path, science, source, energy):
     return replace(power, data=power.data / energy, quantity="stellar_flux_fraction")
 
 
+def _record_in_band_frame(record, scale, profile, rule):
+    """Express native aperture measurements in the build band's lambda/D.
+
+    Args:
+        record: Performance curves measured on the native grid.
+        scale: Reference wavelength divided by the build band centre.
+        profile: Uniform-sky profile already expressed in the build frame.
+        rule: Aperture rule as requested, in build-centre lambda/D.
+
+    Returns:
+        The same aperture photometry with converted axes, areas and densities.
+    """
+    area_scale = scale**2
+    return replace(
+        record,
+        frame=profile.frame,
+        rule=rule,
+        separation_lod=record.separation_lod * scale,
+        stellar_diameters_lod=record.stellar_diameters_lod * scale,
+        iwa_lod=record.iwa_lod * scale,
+        data_extent_lod=record.data_extent_lod * scale,
+        core_area_lod2=record.core_area_lod2 * area_scale,
+        core_area_variance_lod2=record.core_area_variance_lod2 * area_scale,
+        leakage_density_lod2=record.leakage_density_lod2 / area_scale,
+        leakage_density_variance_lod2=record.leakage_density_variance_lod2 / area_scale,
+        uniform_sky=profile,
+    )
+
+
 class PathCalibration(eqx.Module):
     """Snapshot of a train's aperture photometry and uniform-sky response.
 
     Attributes:
-        records: Performance curves for the prepared aperture rules.
+        records: Performance curves in build-centre lambda/D for a tagged field.
         sky: Dimensionless uniform-sky transmission image.
         uniform_sky_profile: Annular means of the sky transmission.
     """
@@ -125,12 +154,23 @@ class PathCalibration(eqx.Module):
             n_screens=n_sky_screens,
             seed=seed,
         )
-        profile = jax.tree.map(jnp.asarray, SampledProfile.from_uniform_sky(sky))
+        profile = SampledProfile.from_uniform_sky(sky)
+        scale = 1.0
+        if input_field.spectrum is not None:
+            center_nm = input_field.spectrum.bands[0].center_nm
+            scale = grid.frame.reference_wavelength_nm / center_nm
+
+        def native(rule):
+            # Rules are stated in build-centre lambda/D; measure on the native grid.
+            if scale != 1.0 and isinstance(rule, Circular):
+                return replace(rule, radius_lod=rule.radius_lod / scale)
+            return rule
+
         records = tuple(
             performance_curves(
                 images.__getitem__,
                 images[0.0],
-                rule,
+                native(rule),
                 separations_lod=seps,
                 leakage_rule=leakage_rule,
                 stellar_diameter_lod=0.0,
@@ -138,7 +178,19 @@ class PathCalibration(eqx.Module):
             )
             for rule in rules
         )
-        return cls(jax.tree.map(jnp.asarray, records), sky, profile)
+        if scale != 1.0:
+            profile = replace(
+                profile,
+                separation_lod=profile.separation_lod * scale,
+                frame=replace(grid.frame, reference_wavelength_nm=center_nm),
+            )
+            records = tuple(
+                _record_in_band_frame(record, scale, profile, rule)
+                for record, rule in zip(records, rules, strict=True)
+            )
+        return cls(
+            jax.tree.map(jnp.asarray, records), sky, jax.tree.map(jnp.asarray, profile)
+        )
 
 
 def _has_tracer(value) -> bool:
@@ -266,7 +318,9 @@ class PathCoronagraph(AbstractImagingCoronagraph):
             wavelength_nm: Wavelength in nanometers that binds monochromatic OPD screens
                 when given.
             rules: Extra aperture rules to prepare, in addition to the default and
-                half-maximum rules.
+                half-maximum rules. With a build spectrum, circular radii and all
+                record geometry use build-centre lambda/D; otherwise the native
+                reference lambda/D.
             n_sky_screens: Number of independent screens used to estimate the
                 uniform-sky map.
             seed: Seed of the screen sequence.
@@ -366,7 +420,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         """Select an eagerly built record; unprepared rules raise.
 
         Args:
-            rule: Aperture rule of the record.
+            rule: Prepared aperture rule, as given at construction.
             leakage_rule: Leakage rule of the record.
 
         Returns:
@@ -375,14 +429,14 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         Raises:
             ValueError: The aperture and leakage rule pair was not prepared.
         """
-        for record in self.calibration.records:
-            if record.rule == rule and record.leakage_rule == leakage_rule:
+        for prepared, record in zip(self.rules, self.calibration.records, strict=True):
+            if prepared == rule and record.leakage_rule == leakage_rule:
                 return record
         raise ValueError("No prepared record for this rule and leakage_rule")
 
     @property
     def frame(self):
-        """Angular frame for performance separation queries."""
+        """Angular frame of the native image grid."""
         return self.grid.frame
 
     def coronagraph_at(self, wavelength_nm):
@@ -420,7 +474,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         """Annular mean of the uniform-sky map in the performance frame.
 
         Args:
-            separation_lod: Separations in lambda/D as dimensionless numeric values.
+            separation_lod: Numeric separations in the performance record's lambda/D.
 
         Returns:
             Annular mean of the uniform-sky map at those separations, dimensionless.
