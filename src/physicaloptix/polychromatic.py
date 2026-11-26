@@ -23,6 +23,8 @@ from physicaloptix.core import Field
 from physicaloptix.path import OpticalPath
 from physicaloptix.sources import PointSource
 
+_ANGULAR_GRID_RTOL = 1e-9  # tol: algorithm, 1 ppb relative registration of node grids
+
 
 def _floats(values):
     return tuple(float(v) for v in values)
@@ -162,11 +164,13 @@ class PolychromaticPath(eqx.Module):
                 elif (
                     grid.shape != first_grid.shape
                     or grid.orientation != first_grid.orientation
-                    or not np.allclose(grid.basis, first_grid.basis, rtol=1e-9, atol=0)
+                    or not np.allclose(
+                        grid.basis, first_grid.basis, rtol=_ANGULAR_GRID_RTOL, atol=0
+                    )
                     or not np.allclose(
                         (grid.center_x, grid.center_y),
                         (first_grid.center_x, first_grid.center_y),
-                        rtol=1e-9,
+                        rtol=_ANGULAR_GRID_RTOL,
                         atol=0,
                     )
                 ):

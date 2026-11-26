@@ -35,6 +35,7 @@ from physicaloptix.instruments._proper_ops import (
 )
 
 RAYLEIGH_FACTOR = 1.0
+_MIN_PLANAR_HOP_M = 1e-12  # tol: algorithm, PROPER's 1 pm no-op distance
 
 
 @dataclasses.dataclass(frozen=True)
@@ -138,7 +139,7 @@ def _op(kind, value, dx, forward):
 
 
 def _ptp(beam, dz):
-    if np.abs(dz) < 1e-12:
+    if np.abs(dz) < _MIN_PLANAR_HOP_M:
         return beam, ()
     if beam.reference != "PLANAR":
         raise ValueError("ptp: input reference surface is not planar")

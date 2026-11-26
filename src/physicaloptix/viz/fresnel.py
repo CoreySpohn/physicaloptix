@@ -22,7 +22,6 @@ import math
 from typing import NamedTuple
 
 import hwostyle
-import jax
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
@@ -30,6 +29,7 @@ from matplotlib.patches import Circle, Wedge
 from optixstuff.grids import PixelGrid
 from scipy.special import fresnel
 
+from physicaloptix.core.grid import _grid_axis
 from physicaloptix.viz import _require
 from physicaloptix.viz.fields import _resolved_phase_cmap
 from physicaloptix.viz.propagation import plot_propagation
@@ -417,8 +417,8 @@ def plot_fresnel_zones(
         _, ax = plt.subplots(layout="constrained")
     base = float(matplotlib.rcParams["lines.linewidth"])
     grid = PixelGrid.regular((samples, samples), 2.0 / (samples - 1), "pixel")
-    with jax.enable_x64():
-        rho = radius * np.asarray(grid.radius())
+    axis = _grid_axis(grid)
+    rho = radius * np.hypot(axis[None, :], axis[:, None])
 
     artists = {}
     if screen:

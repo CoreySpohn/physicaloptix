@@ -150,7 +150,8 @@ STPSF_PHASOR = "exp(+i*2*pi*OPD/lambda)"
 J1_SECOND_ZERO = 7.015586669815619
 # Largest |analytic - sampled| accepted when a bundle's sampled focal mask is
 # checked against its recorded analytic parameters (float64 evaluation noise).
-MASK_CHECK_ATOL = 1e-12
+MASK_CHECK_ATOL = 1e-12  # tol: algorithm, 1e-12 in amplitude transmission
+_WAVELENGTH_MATCH_RTOL = 1e-12  # tol: algorithm, 1e-12 of the metadata wavelength
 
 
 def _fits():
@@ -1034,7 +1035,9 @@ def build_nircam(
     if config.si_wfe:
         if inputs.si_opd_nm is None:
             raise ValueError("config.si_wfe is set but the inputs carry no SI OPD")
-        if not np.isclose(inputs.si_wavelength_nm, wavelength_nm, rtol=1e-12, atol=0):
+        if not np.isclose(
+            inputs.si_wavelength_nm, wavelength_nm, rtol=_WAVELENGTH_MATCH_RTOL, atol=0
+        ):
             raise ValueError(
                 f"the SI OPD applies at {inputs.si_wavelength_nm} nm, not at the "
                 f"configured wavelength {wavelength_nm} nm"
@@ -1277,7 +1280,7 @@ class NIRCamBand(eqx.Module):
             for k, wavelength_m in enumerate(wavelengths_m):
                 found = header.get(f"WAVE{k}")
                 if found is None or not np.isclose(
-                    float(found), wavelength_m, rtol=1e-12, atol=0
+                    float(found), wavelength_m, rtol=_WAVELENGTH_MATCH_RTOL, atol=0
                 ):
                     raise ValueError(
                         f"{entry['file']} {extname}: header WAVE{k} = {found} "

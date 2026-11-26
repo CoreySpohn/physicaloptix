@@ -41,6 +41,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from hwoutils.constants import two_pi
+from hwoutils.numerics import same
 from jaxtyping import Array
 from optixstuff import FocalResponse
 from optixstuff.grids import PixelGrid
@@ -163,7 +164,9 @@ class Linearization(eqx.Module):
             self.e_nom,
             self.G,
             grid,
-            jnp.asarray(kwargs.pop("input_energy", self.input_energy), dtype=float),
+            jnp.asarray(
+                kwargs.pop("input_energy", self.input_energy), dtype=self.G.real.dtype
+            ),
             reference_wavelength_nm,
             wavelength_law=law,
         )
@@ -183,16 +186,16 @@ def _replace_data(field, data):
     return Field(data=data, grid=field.grid, plane=field.plane, spectrum=field.spectrum)
 
 
-def _factors(basis, wavelength_nm, wavelengths_nm, dispersion):
+def _factors(basis, wavelength_nm, wavelengths_nm, dispersion, field_data):
     """Per-mode complex factors: shape (m,) mono or (m, w) chromatic."""
     if wavelengths_nm is None:
         if dispersion is not None:
             raise ValueError("dispersion requires wavelengths_nm")
         scalar = _phase_factor(wavelength_nm) if basis.kind == "opd" else 1.0
-        return jnp.full((basis.n_modes,), scalar, dtype=complex)
-    wavelengths = jnp.asarray(wavelengths_nm, dtype=float)
+        return jnp.full((basis.n_modes,), scalar, dtype=field_data.dtype)
+    wavelengths = jnp.asarray(wavelengths_nm, dtype=field_data.real.dtype)
     if dispersion is not None:
-        d = jnp.asarray(dispersion, dtype=complex)
+        d = jnp.asarray(dispersion, dtype=field_data.dtype)
         if d.shape != (basis.n_modes, wavelengths.shape[0]):
             raise ValueError(
                 f"dispersion shape {d.shape} must be (n_modes, n_wavelengths) "
@@ -203,7 +206,7 @@ def _factors(basis, wavelength_nm, wavelengths_nm, dispersion):
         return jnp.broadcast_to(
             _phase_factor(wavelengths), (basis.n_modes, wavelengths.shape[0])
         )
-    return jnp.ones((basis.n_modes, wavelengths.shape[0]), dtype=complex)
+    return jnp.ones((basis.n_modes, wavelengths.shape[0]), dtype=field_data.dtype)
 
 
 def perturbed_map(
@@ -238,7 +241,7 @@ def perturbed_map(
         propagated field data.
     """
     if wavelengths_nm is not None:
-        factors = _factors(basis, wavelength_nm, wavelengths_nm, dispersion)
+        factors = _factors(basis, wavelength_nm, wavelengths_nm, dispersion, field.data)
 
     def run(eps):
         if wavelengths_nm is None:
@@ -344,17 +347,17 @@ def linearize(
     if dispersion is not None and wavelengths_nm is None:
         raise ValueError("dispersion requires wavelengths_nm")
     if wavelengths_nm is not None:
-        wavelengths_nm = jnp.asarray(wavelengths_nm, dtype=float)
         if field.spectrum is None:
             raise ValueError(
                 "wavelengths_nm requires a chromatic field (with a spectrum)"
             )
         field_wavelengths = np.asarray(field.spectrum.nodes_nm[0])
         query_wavelengths = np.asarray(wavelengths_nm)
-        if field_wavelengths.shape != query_wavelengths.shape or not np.allclose(
-            field_wavelengths, query_wavelengths
+        if field_wavelengths.shape != query_wavelengths.shape or not np.all(
+            same(field_wavelengths, query_wavelengths)
         ):
             raise ValueError("wavelengths_nm must match field.spectrum.nodes_nm[0]")
+        wavelengths_nm = jnp.asarray(wavelengths_nm, dtype=field.data.real.dtype)
         if wavelength_nm is None:
             wavelength_nm = float(wavelengths_nm[0])
     else:
@@ -394,7 +397,7 @@ def linearize(
         # propagated fractional-amplitude modes themselves (achromatic).
         # Chunked in lockstep with B: a closed-over full-size factor table
         # would raise at chunked sizes.
-        factors = _factors(basis, wavelength_nm, wavelengths_nm, dispersion)
+        factors = _factors(basis, wavelength_nm, wavelengths_nm, dispersion, field.data)
         propagate_stack = jax.vmap(
             lambda data: path.propagate(_replace_data(field, data))[0].data
         )
@@ -433,11 +436,11 @@ def linearize(
             dispersion=dispersion,
         )
         n_modes = basis.n_modes
-        zero = jnp.zeros(n_modes)
+        zero = jnp.zeros(n_modes, dtype=field.data.real.dtype)
         if resolved == "jvp":
             g = jnp.stack(
                 [
-                    jax.jvp(run, (zero,), (jnp.zeros(n_modes).at[k].set(1.0),))[1]
+                    jax.jvp(run, (zero,), (zero.at[k].set(1.0),))[1]
                     for k in range(n_modes)
                 ]
             )
@@ -461,7 +464,7 @@ def linearize(
         resolved_dispersion = (
             None
             if perturbation_stage is not None
-            else _factors(basis, wavelength_nm, wavelengths_nm, dispersion)
+            else _factors(basis, wavelength_nm, wavelengths_nm, dispersion, field.data)
         )
 
     return Linearization(

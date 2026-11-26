@@ -208,7 +208,8 @@ class BeamSplitter(eqx.Module):
         science channel is unchanged; the reflect port is the exact Babinet
         complement (an occulting mask's reject is the occulted core -- the
         low-order-sensor feed). A non-binary (gray) mask is refused: an
-        absorbing apodizer has no coherent reject port.
+        absorbing apodizer has no coherent reject port. Endpoint checks allow
+        roundoff at unit transmission in the coarsest supported precision.
 
         Args:
             mask: Binary transmission mask, shape ``(npix, npix)``.
@@ -220,7 +221,8 @@ class BeamSplitter(eqx.Module):
             A ready ``BeamSplitter``.
         """
         arr = np.asarray(mask)
-        if not np.all((np.abs(arr) < 1e-12) | (np.abs(arr - 1.0) < 1e-12)):
+        tolerance = same_tolerance(1.0)
+        if not np.all((np.abs(arr) < tolerance) | (np.abs(arr - 1.0) < tolerance)):
             raise ValueError(
                 "from_mask requires a binary mask: an absorbing gray "
                 "apodizer has no coherent reject port (model it as a "

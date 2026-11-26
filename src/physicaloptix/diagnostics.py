@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.precision import like
 from jaxtyping import Array
 
 
@@ -125,11 +126,16 @@ def quadrature_partner(modes: Array) -> Array:
     if modes.ndim != 3:
         raise ValueError(f"modes must be a 3D stack (m, y, x), got {modes.shape}")
     ny, nx = modes.shape[-2:]
-    kx = jnp.fft.fftfreq(nx)[None, :] * nx
-    ky = jnp.fft.fftfreq(ny)[:, None] * ny
+    dtype = jnp.result_type(modes.real, 0.0)
+    kx = jnp.fft.fftfreq(nx, dtype=dtype)[None, :] * nx
+    ky = jnp.fft.fftfreq(ny, dtype=dtype)[:, None] * ny
     upper = (kx > 0) | ((kx == 0) & (ky > 0))
     dc = (kx == 0) & (ky == 0)
-    rot = jnp.where(upper, -1j, 0.0) + jnp.where(~upper & ~dc, 1j, 0.0)
+    quarter_turn = like(1j, modes)
+    zero = jnp.zeros_like(quarter_turn)
+    rot = jnp.where(upper, -quarter_turn, zero) + jnp.where(
+        ~upper & ~dc, quarter_turn, zero
+    )
     return jnp.real(
         jnp.fft.ifft2(jnp.fft.fft2(modes, axes=(-2, -1)) * rot, axes=(-2, -1))
     )
@@ -143,7 +149,7 @@ def _eta(g: Array, rms: Array, mask=None) -> float:
     audit needs only ``(G, rms)`` and not a nominal field or a photometric
     reference (``eta`` depends on neither).
     """
-    rms2 = jnp.asarray(rms, dtype=float) ** 2
+    rms2 = jnp.asarray(rms, dtype=jnp.result_type(g.real, 0.0)) ** 2
     gamma = jnp.einsum("k,kyx->yx", rms2, jnp.abs(g) ** 2)
     p = jnp.einsum("k,kyx->yx", rms2, g**2)
     live = gamma > 0
@@ -240,7 +246,9 @@ def quadrature_audit_from_jacobians(
             f"{g_as_built.shape} to match the basis under audit"
         )
     n = g_as_built.shape[0]
-    rms_in = jnp.asarray(per_mode_rms, dtype=float)
+    rms_in = jnp.asarray(
+        per_mode_rms, dtype=jnp.result_type(g_as_built.real, g_partners.real, 0.0)
+    )
     if rms_in.ndim > 0 and rms_in.shape != (n,):
         raise ValueError(
             f"per_mode_rms has shape {rms_in.shape}; expected ({n},) "
@@ -308,7 +316,7 @@ def quadrature_audit(
     if modes.ndim != 3:
         raise ValueError(f"modes must be a 3D stack (m, y, x), got {modes.shape}")
     n = modes.shape[0]
-    rms_in = jnp.asarray(per_mode_rms, dtype=float)
+    rms_in = jnp.asarray(per_mode_rms, dtype=jnp.result_type(modes.real, 0.0))
     if rms_in.ndim > 0 and rms_in.shape != (n,):
         raise ValueError(
             f"per_mode_rms has shape {rms_in.shape}; expected ({n},) "
