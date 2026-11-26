@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 from conftest import TEST_FRAME
 from hwoutils.leaves import canonical
-from hwoutils.numerics import eps
+from hwoutils.numerics import eps, roundoff
 from hwoutils.precision import like
 from hwoutils.testing import assert_precision_closed, precision_pair, ulps
 from optixstuff import SimplePrimary
@@ -529,9 +529,13 @@ class TestSamplingExplicitContract:
     ):
         """Fails if a rejected source keeps the on-axis image or moves its neighbours.
 
-        A source at 1.3 pupil Nyquist radii and a NaN source each have
-        valid False and exact zeros; the inside source in the same call equals
-        its single-source render to 1e-12.
+        Outside and NaN sources have valid False and exact zeros. The valid
+        source's renders can round differently with different batch sizes.
+        At peak pixel flux, count both routes: four pupil-width and two
+        longest-level focal-width MFT dots (two real terms per complex term),
+        level additions and six phase, mask and scale operations. Squaring
+        doubles the field error. Two native-width footprint integration dots
+        and four operations for intensity and flux scaling finish each route.
         """
         c = vortex_coronagraph
         grid = _grid((32, 32), 0.5)
@@ -550,9 +554,15 @@ class TestSamplingExplicitContract:
         assert np.isfinite(data).all()
         assert (data[1:] == 0.0).all()
         assert data[0].max() > 0
-        np.testing.assert_allclose(
-            data[0], np.asarray(alone.image.data)[0], rtol=1e-12, atol=1e-12
-        )
+        single = np.asarray(alone.image.data)[0]
+        vortex = c.core_path.stages[0].op
+        mft_terms = 4 * NPUP + 2 * max(u.size for u, _ in vortex.levels)
+        field_ops = 2 * mft_terms + len(vortex.levels) + 6
+        n_ops = 2 * (2 * field_ops + sum(c.grid.shape) + 4)
+        atol = roundoff(
+            np.abs(single).max(), n_ops=n_ops
+        )  # tol: algorithm, PSF roundoff
+        np.testing.assert_allclose(data[0], single, rtol=0, atol=float(atol))
 
     def test_source_admission_at_the_nyquist_boundary(self, bare_telescope):
         """Fails if rounding an offset or the open Nyquist limit drops a source.

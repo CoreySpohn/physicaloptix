@@ -24,6 +24,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TEST_FRAME
+from hwoutils.numerics import roundoff
 from hwoutils.testing import ulps
 from jax.test_util import check_grads
 from optixstuff.grids import PixelGrid
@@ -284,19 +285,29 @@ class TestLinearizeAnchors:
         )
 
     def test_analytic_matches_jvp_through_the_vortex(self):
-        """The analytic linearization equals jvp autodiff on a chain
-        containing the multi-scale vortex (the existing methods-agree tests
-        use a mask-only chain; this is the coronagraph-bearing version)."""
+        """The batched analytic columns and single-column JVPs agree at roundoff.
+
+        Budget each route at the peak Jacobian amplitude. The longest vortex
+        branch has two pupil-width and two focal-width dot products, and the
+        camera has two more pupil-width dots. Count two real product terms
+        per complex term, the level additions, and eight operations for the
+        tangent injection, masks, and transform scales.
+        """
         path = _vortex_path(NPUP)
         field = _pupil_field(NPUP)
         basis = zernike_basis(PixelGrid.pupil(NPUP), 4, rms_nm=1.0)
         lin_analytic = linearize(path, field, basis, wavelength_nm=WL)
         lin_jvp = linearize(path, field, basis, wavelength_nm=WL, method="jvp")
-        scale = float(jnp.abs(lin_analytic.G).max())
+        vortex = path.stages[1].op
+        mft_terms = 4 * NPUP + 2 * max(u.size for u, _ in vortex.levels)
+        n_ops = 2 * (2 * mft_terms + len(vortex.levels) + 8)
+        scale = jnp.abs(lin_analytic.G).max()
+        atol = roundoff(scale, n_ops=n_ops)  # tol: algorithm, MFT roundoff
         np.testing.assert_allclose(
             np.asarray(lin_jvp.G),
             np.asarray(lin_analytic.G),
-            atol=1e-11 * scale,
+            rtol=0,
+            atol=float(atol),
         )
 
 

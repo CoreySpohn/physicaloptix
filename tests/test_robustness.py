@@ -4,6 +4,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hwoutils.numerics import roundoff
 from hwoutils.testing import ulps
 
 from physicaloptix.robustness import SensitivityOperators, pastis_matrix
@@ -56,11 +57,24 @@ def _assert_exact_budget(e_nom, g, mask, r2):
 
 class TestPastisMatrix:
     def test_is_real_symmetric(self):
+        """The real Gram entries can round differently across the diagonal.
+
+        Two real product terms per dark-zone pixel and one division per
+        entry set the budget. The mean absolute Gram-term magnitude sets
+        the scale even when the signed off-diagonal terms cancel.
+        """
         e_nom, g, mask = _ingredients()
-        p = pastis_matrix(e_nom, g, mask)
+        p = np.asarray(pastis_matrix(e_nom, g, mask))
         assert p.shape == (_M, _M)
-        assert jnp.isrealobj(p)
-        np.testing.assert_allclose(np.asarray(p), np.asarray(p).T, rtol=1e-12)
+        assert np.isrealobj(p)
+        g_abs = np.abs(np.asarray(g)[:, np.asarray(mask)])
+        n_dz = g_abs.shape[1]
+        scale = g_abs @ g_abs.T / n_dz
+        n_ops = 2 * (2 * n_dz + 1)
+        atol = roundoff(
+            scale, n_ops=n_ops, dtype=p.dtype
+        )  # tol: algorithm, Gram roundoff
+        np.testing.assert_array_less(np.abs(p - p.T), atol)
 
     def test_quadratic_form_is_the_incoherent_mean_intensity(self):
         """a^T P a is the mean dark-zone intensity of the residual field
