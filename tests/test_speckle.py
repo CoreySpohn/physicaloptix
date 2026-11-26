@@ -10,6 +10,7 @@ import optixstuff as ox
 import pytest
 from conftest import TEST_FRAME, analytic_from_density, speckle_grid
 from hwoutils.constants import d2s, s2d
+from hwoutils.numerics import roundoff
 from hwoutils.testing import precision_pair, ulps
 from optixstuff import FocalResponse
 from optixstuff.grids import Measure
@@ -1193,6 +1194,15 @@ def _chromatic_process(coherent, e_scale=0.5, seed=0):
     )
 
 
+def _cross_band_covariance_scale(proc, equal_time):
+    """Bound the absolute covariance terms using equal-time modal power."""
+    gamma = np.real(np.einsum("iiyx->iyx", np.asarray(equal_time.gamma_pixel_map)))
+    bound = np.sqrt(gamma[:, None] * gamma[None, :])
+    e, _ = proc.response.per_pixel()
+    norm = proc.response.input_energy
+    return (2 * bound**2 + 4 * np.abs(e[:, None] * e[None, :]) * bound) / norm**2
+
+
 class TestCrossBandMoments:
     """The exact joint two-wavelength law, validated against moments() and MC."""
 
@@ -1391,11 +1401,7 @@ class TestCrossBandMoments:
         proc = _chromatic_process(coherent=True)
         jitted = jax.jit(lambda p: p.cross_band_moments().cov_map)
         cbm = proc.cross_band_moments()
-        gamma = np.real(np.einsum("iiyx->iyx", np.asarray(cbm.gamma_pixel_map)))
-        bound = np.sqrt(gamma[:, None] * gamma[None, :])
-        e, _ = proc.response.per_pixel()
-        norm = proc.response.input_energy
-        scale = (2 * bound**2 + 4 * np.abs(e[:, None] * e[None, :]) * bound) / norm**2
+        scale = _cross_band_covariance_scale(proc, cbm)
         n_ops = 2 * (2 * proc.per_mode_rms.size + 14)
         assert np.all(np.abs(jitted(proc) - cbm.cov_map) <= ulps(n_ops, scale))
 
@@ -1501,15 +1507,27 @@ class TestCrossBandViews:
                 view()
 
     def test_joint_covariance_blocks_match_per_pixel_maps(self):
-        """The coincident-pixel blocks of the joint object equal the map route
-        -- two independent einsum paths to the same numbers."""
+        """Two einsum layouts can order the coincident-pixel mode sums differently.
+
+        Count two real terms per complex mode and fourteen operations for
+        weighting, squares, heterodyne and normalization on each route.
+        Bound the sum of absolute covariance terms via Cauchy-Schwarz so
+        covariance cancellation does not shrink the roundoff scale.
+        """
         proc = _chromatic_process(coherent=True)
         mask = jnp.zeros((1, 12), dtype=bool).at[0, 2:7].set(True)
         joint = np.asarray(proc.joint_covariance(mask))  # (w, 5, w, 5)
-        cov_map = np.asarray(proc.cross_band_moments().cov_map)
+        cbm = proc.cross_band_moments()
+        cov_map = np.asarray(cbm.cov_map)
+        scale = _cross_band_covariance_scale(proc, cbm)
+        n_ops = 2 * (2 * proc.per_mode_rms.size + 14)
+        atol = roundoff(
+            scale, n_ops=n_ops, dtype=cov_map.dtype
+        )  # tol: algorithm, covariance roundoff
         for sel, pix in enumerate(range(2, 7)):
-            np.testing.assert_allclose(
-                joint[:, sel, :, sel], cov_map[:, :, 0, pix], rtol=1e-12, atol=0
+            np.testing.assert_array_less(
+                np.abs(joint[:, sel, :, sel] - cov_map[:, :, 0, pix]),
+                atol[:, :, 0, pix],
             )
 
     def test_joint_covariance_blocks_match_per_pixel_maps_at_nonzero_tau(self):
@@ -1531,16 +1549,7 @@ class TestCrossBandViews:
         cbm = proc.cross_band_moments(tau_s=tau)
         host = proc.cross_band_moments(tau_s=50.0)
         np.testing.assert_array_equal(cbm.cov_map, host.cov_map)
-        gamma = np.real(
-            np.einsum(
-                "iiyx->iyx", np.asarray(proc.cross_band_moments().gamma_pixel_map)
-            )
-        )
-        bound = np.sqrt(gamma[:, None] * gamma[None, :])
-        e, _ = proc.response.per_pixel()
-        scale = (
-            2 * bound**2 + 4 * np.abs(e[:, None] * e[None, :]) * bound
-        ) / proc.response.input_energy**2
+        scale = _cross_band_covariance_scale(proc, proc.cross_band_moments())
         tolerance = ulps(2 * (2 * proc.per_mode_rms.size + 14), scale)
         for value in (joint(tau), jax.jit(joint)(tau)):
             assert value.dtype == cbm.cov_map.dtype

@@ -12,6 +12,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from conftest import TEST_FRAME
+from hwoutils.numerics import roundoff
 from hwoutils.testing import ulps
 from optixstuff.grids import PixelGrid
 
@@ -130,8 +131,14 @@ class TestVmapMatchesLoop:
         np.testing.assert_allclose(np.asarray(vmapped), np.asarray(looped), atol=1e-15)
 
     def test_dm_command_batch_through_the_coronagraph(self):
-        """vmap over a batch of DM commands reproduces the per-command loop
-        through the full vortex chain (the ensemble/scan usage pattern)."""
+        """Batched DM commands agree with the loop up to contraction roundoff.
+
+        Batching can reorder the DM and MFT sums. At peak focal amplitude
+        per command, budget the real DM mode sum and the longest vortex
+        branch: four pupil-width MFT dots including the camera, and two
+        focal-width dots, with two real terms per complex term. Count level
+        additions and eight phase, mask and scale operations on each route.
+        """
         path = _coronagraph_path(NPUP)
         field = _pupil_field(NPUP)
         commands = jnp.asarray(np.random.default_rng(0).standard_normal((3, 6)) * 0.5)
@@ -145,4 +152,9 @@ class TestVmapMatchesLoop:
 
         vmapped = jax.vmap(focal)(commands)
         looped = jnp.stack([focal(commands[k]) for k in range(3)])
-        np.testing.assert_allclose(np.asarray(vmapped), np.asarray(looped), atol=1e-15)
+        vortex = path.stages[1].op
+        mft_terms = 4 * NPUP + 2 * max(u.size for u, _ in vortex.levels)
+        n_ops = 2 * (commands.shape[-1] + 2 * mft_terms + len(vortex.levels) + 8)
+        scale = jnp.abs(looped).max(axis=(-2, -1))
+        atol = roundoff(scale, n_ops=n_ops)  # tol: algorithm, DM and MFT roundoff
+        np.testing.assert_array_less(jnp.abs(vmapped - looped).max(axis=(-2, -1)), atol)

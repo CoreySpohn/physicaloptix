@@ -4,6 +4,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hwoutils.numerics import roundoff
 from hwoutils.testing import ulps
 from optixstuff.grids import PixelGrid
 
@@ -167,6 +168,13 @@ def test_run_ops_jits_and_differentiates():
 
 
 def test_batched_fields_match_one_at_a_time():
+    """Batched FFTs can use a different butterfly order from the single FFTs.
+
+    At peak output amplitude, count three 2D FFTs per route (one for stw and
+    two for ptp), with six roundings per radix-2 stage per axis and two
+    normalization operations per FFT. Three complex phasor multiplications
+    (lens, stw, ptp) add three component roundings each.
+    """
     n, dx = 32, 0.01 / 16
     ops = (
         Op("lens", 2.0, dx, True),
@@ -176,4 +184,8 @@ def test_batched_fields_match_one_at_a_time():
     a = _corner(_gaussian(n, dx, 0.003))
     stack = jnp.stack([a, 2 * a])
     out = run_ops(stack, ops, LAM)
-    assert jnp.max(jnp.abs(out[1] - run_ops(2 * a, ops, LAM))) < 1e-14
+    single = run_ops(2 * a, ops, LAM)
+    fft_depth = (n - 1).bit_length()
+    n_ops = 2 * (3 * (2 * 6 * fft_depth + 2) + 3 * 3)
+    atol = roundoff(jnp.abs(single).max(), n_ops=n_ops)  # tol: algorithm, FFT roundoff
+    np.testing.assert_allclose(out[1], single, rtol=0, atol=float(atol))
