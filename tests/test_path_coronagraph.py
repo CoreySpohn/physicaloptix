@@ -1283,29 +1283,8 @@ def test_coronagraph_precision(bare_telescope, read):
         assert_precision_closed(read, *canonical(args, precision="float32"))
 
 
-class _SkyResamplingWidening(AssertionError):
-    """A shared resampling coordinate or fill value widened to float64."""
-
-
 @pytest.mark.float64_only(reason="trace a float32 sky map with x64 available")
-@pytest.mark.xfail(
-    strict=True,
-    raises=_SkyResamplingWidening,
-    reason="the shared resampler creates float64 grid coordinates and a float64 fill",
-)
 def test_resampled_sky_precision_closure(bare_telescope):
     """Fails if resampling a float32 sky introduces a wide coordinate or fill."""
     model = canonical(bare_telescope, precision="float32")
-    try:
-        assert_precision_closed(_resampled_sky, model)
-    except AssertionError as error:
-        sites = (
-            "/optixstuff/grids.py:343:24 (PixelGrid.coordinates)",
-            "/hwoutils/map_coordinates.py:127:11 (_map_coordinates)",
-        )
-        if any(
-            str(error).endswith(f"{site}: precision widened to float64")
-            for site in sites
-        ):
-            raise _SkyResamplingWidening(str(error)) from error
-        raise
+    assert_precision_closed(_resampled_sky, model)
