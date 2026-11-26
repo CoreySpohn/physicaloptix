@@ -4,6 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import speckle_grid
+from hwoutils.numerics import eps
 from optixstuff import FocalResponse
 
 from physicaloptix import SpeckleProcess
@@ -47,21 +48,39 @@ class TestQuadraturePartner:
     """The half-plane Hilbert operator that builds the missing quadrature."""
 
     def test_maps_cosine_to_sine(self):
+        """Two 2D FFTs allow six roundings per axis per butterfly on a unit ripple."""
         partner = np.asarray(quadrature_partner(jnp.asarray([_ripple(6.0, 0.0)])))[0]
         expected = _ripple(6.0, 0.0, phase=-np.pi / 2)  # cos(a - pi/2) = sin(a)
-        np.testing.assert_allclose(partner, expected, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(
+            partner,
+            expected,
+            rtol=0,
+            atol=24 * int(np.ceil(np.log2(_N))) * eps(partner.dtype),
+        )
 
     def test_maps_diagonal_ripple(self):
+        """Two 2D FFTs allow six roundings per axis per butterfly on a unit ripple."""
         partner = np.asarray(quadrature_partner(jnp.asarray([_ripple(4.0, 3.0)])))[0]
         expected = _ripple(4.0, 3.0, phase=-np.pi / 2)
-        np.testing.assert_allclose(partner, expected, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(
+            partner,
+            expected,
+            rtol=0,
+            atol=24 * int(np.ceil(np.log2(_N))) * eps(partner.dtype),
+        )
 
     def test_applied_twice_negates(self):
-        """H^2 = -1: the defining property of a quadrature operator."""
+        """H^2 = -1: the defining property of a quadrature operator.
+
+        Four 2D FFTs allow six roundings per axis per butterfly on a unit ripple.
+        """
         m = jnp.asarray([_ripple(5.0, 2.0, phase=0.7)])
         twice = quadrature_partner(quadrature_partner(m))
         np.testing.assert_allclose(
-            np.asarray(twice), -np.asarray(m), rtol=0, atol=1e-12
+            np.asarray(twice),
+            -np.asarray(m),
+            rtol=0,
+            atol=48 * int(np.ceil(np.log2(_N))) * eps(twice.dtype),
         )
 
     def test_preserves_stack_shape(self):

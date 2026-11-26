@@ -7,11 +7,13 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TEST_FRAME, speckle_grid
+from hwoutils.precision import PrecisionError
 from optixstuff import FocalResponse
 from optixstuff.grids import PixelGrid
 
 from physicaloptix.speckle import SpeckleProcess
 from physicaloptix.stats import (
+    _ndtr,
     coherent_intensity,
     dark_zone_mask,
     genchi2_cumulants,
@@ -26,6 +28,7 @@ from physicaloptix.stats import (
 _integrate = getattr(np, "trapezoid", None) or np.trapz
 
 
+@pytest.mark.float64_only(reason="physicaloptix.stats requires float64")
 class TestDarkZoneMask:
     def test_annulus_geometry(self):
         """Fails if the mask assumes a centered square or ignores the basis."""
@@ -44,6 +47,7 @@ class TestDarkZoneMask:
         assert mask.any() and not mask.all()
 
 
+@pytest.mark.float64_only(reason="physicaloptix.stats requires float64")
 class TestIntensitySplit:
     def test_coherent_intensity_is_abs_squared(self):
         rng = np.random.default_rng(0)
@@ -66,6 +70,7 @@ class TestIntensitySplit:
         )
 
 
+@pytest.mark.float64_only(reason="physicaloptix.stats requires float64")
 class TestModifiedRician:
     def test_pdf_normalizes(self):
         ic, is_ = 2.0, 0.7
@@ -89,6 +94,7 @@ class TestModifiedRician:
         np.testing.assert_allclose(pdf, expected, rtol=1e-10)
 
 
+@pytest.mark.float64_only(reason="physicaloptix.stats requires float64")
 class TestMonteCarloConsistency:
     def test_ensemble_mean_intensity_matches_ic_plus_is(self):
         """<|E_nom + G eps|^2> over draws == Ic + Is (the linear model)."""
@@ -376,8 +382,6 @@ def test_genchi2_sf_exact_single_chisquare():
     lam = np.array([2.5])
     beta = np.array([0.0])
     xs = np.array([0.5, 2.5, 10.0, 25.0])
-    from physicaloptix.stats import _ndtr
-
     exact = 2.0 * (1.0 - _ndtr(np.sqrt(xs / lam[0])))
     sf = genchi2_sf(xs, lam, beta)
     assert np.allclose(sf, exact, rtol=1e-5)
@@ -400,3 +404,30 @@ def test_stats_is_public_api():
 
     assert "stats" in physicaloptix.__all__
     assert physicaloptix.stats.pixel_pdf is pixel_pdf
+
+
+@pytest.mark.float32_only(reason="float64 statistics refuse before arithmetic")
+@pytest.mark.parametrize(
+    ("function", "args", "kwargs"),
+    [
+        (
+            dark_zone_mask,
+            (PixelGrid.focal(2, 1.0, TEST_FRAME),),
+            dict(inner_working_angle_lod=1, outer_working_angle_lod=2),
+        ),
+        (_ndtr, (0.0,), {}),
+        (coherent_intensity, (1j,), {}),
+        (incoherent_intensity, (np.ones((1, 1, 1)), np.ones(1)), {}),
+        (modified_rician_pdf, (1.0, 0.0, 1.0), {}),
+        (genchi2_pdf, (np.ones(1), np.ones(1), np.zeros(1)), {}),
+        (genchi2_cumulants, (np.ones(1), np.zeros(1)), {}),
+        (genchi2_sf, (np.ones(1), np.ones(1), np.zeros(1)), {}),
+        (pixel_pdf, (np.ones(1), 1.0, 1.0, 0j, 0.0, 1.0), {}),
+        (pixel_sf, (np.ones(1),) * 5 + (1.0,), {}),
+    ],
+)
+def test_statistics_require_float64(function, args, kwargs):
+    with pytest.raises(
+        PrecisionError, match=rf"{function.__name__} requires float64.*enable_x64"
+    ):
+        function(*args, **kwargs)

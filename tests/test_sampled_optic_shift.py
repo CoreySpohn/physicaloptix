@@ -12,6 +12,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hwoutils.testing import ulps
 from jax.test_util import check_grads
 from optixstuff.grids import PixelGrid
 
@@ -70,14 +71,23 @@ def test_integer_shift_copies_samples_with_plus_x_toward_larger_columns():
 
 @pytest.mark.parametrize("shift", [(0.3, -0.4), (-1.25, 0.5)])
 def test_fractional_shift_of_a_ramp_is_the_ramp_at_the_shifted_index(shift):
-    """Interior samples only (zero fill pollutes the boundary row and column
-    the content moved away from). Tolerance basis: floating-point, 1e-12."""
+    """Compare interior samples against the analytic ramp. Two index differences, four
+    weighted products and their sum fit within twelve roundings at peak transmission.
+
+    Args:
+        shift: Translation in column and row samples.
+    """
     sx, sy = shift
     out = np.asarray(_optic(_ramp(), shift_px=jnp.asarray(shift))(_field()).data).real
     rows, cols = np.mgrid[:NPIX, :NPIX]
     expected = 1.0 + 0.5 * (cols - sx) + 0.25 * (rows - sy)
     interior = (slice(3, NPIX - 3), slice(3, NPIX - 3))
-    np.testing.assert_allclose(out[interior], expected[interior], rtol=1e-12)
+    np.testing.assert_allclose(
+        out[interior],
+        expected[interior],
+        rtol=0,
+        atol=float(ulps(12, out[interior].max())),
+    )
 
 
 @pytest.mark.float64_only(reason="finite-difference check_grads")

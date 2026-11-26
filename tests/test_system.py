@@ -6,6 +6,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TEST_FRAME
+from hwoutils.numerics import same_tolerance
+from hwoutils.testing import ulps
 from optixstuff.grids import PixelGrid
 from optixstuff.spectral import Band, Quadrature
 
@@ -106,23 +108,54 @@ class TestEnergySplit:
             assert widened.energy_residual <= np.finfo(np.float32).eps
 
     def test_conserves_and_uses_quadrature_phase(self):
+        """Floating-point: two roots, complex products, norms squared and a sum
+        cost at most 16 roundings of incident intensity. Division of the
+        complex ports costs eight roundings at the modulus of their ratio.
+        """
         field, grid = _pupil_field()
         split = BeamSplitter.energy(0.3, grid=grid, plane=PlaneKind.PUPIL)
-        assert float(split.energy_residual) < 1e-12
+        assert float(split.energy_residual) <= ulps(4, split.t.real.dtype.type(1))
         ports = split(field)
         total = (
             np.abs(np.asarray(ports["transmit"].data)) ** 2
             + np.abs(np.asarray(ports["reflect"].data)) ** 2
         )
         np.testing.assert_allclose(
-            total, np.abs(np.asarray(field.data)) ** 2, atol=1e-14
+            total,
+            np.abs(np.asarray(field.data)) ** 2,
+            rtol=0,
+            atol=ulps(16, np.max(np.abs(field.data)) ** 2),
         )
         # The lossless-symmetric convention puts the ports in quadrature.
         transmit = np.asarray(ports["transmit"].data)
         reflect = np.asarray(ports["reflect"].data)
-        lit = np.abs(transmit) > 1e-12
+        lit = transmit != 0
         ratio = reflect[lit] / transmit[lit]
-        np.testing.assert_allclose(np.real(ratio), 0.0, atol=1e-14)
+        np.testing.assert_allclose(
+            np.real(ratio), 0.0, rtol=0, atol=ulps(8, np.max(np.abs(ratio)))
+        )
+
+    @pytest.mark.parametrize("direction", [-1, 0, 1])
+    def test_energy_gate_uses_original_amplitudes(self, direction):
+        """Host amplitudes straddling the energy limit can narrow to one value.
+
+        Args:
+            direction: Select the lossless point or either side of the limit.
+        """
+        grid = PixelGrid.pupil(2)
+        threshold = np.sqrt(same_tolerance(1.0, ulps=4))
+        r = 0.0 if direction == 0 else threshold * (1 + direction * 2.0**-26)
+
+        def build():
+            return BeamSplitter(t=1.0, r=r, grid=grid, plane=PlaneKind.PUPIL).r
+
+        for call in (build, jax.jit(build)):
+            if direction > 0:
+                with pytest.raises(ValueError, match="energy residual"):
+                    call()
+            else:
+                actual = call()
+                assert float(actual) == np.asarray(r, dtype=actual.dtype)
 
     def test_energy_gate_raises_by_default(self):
         _, grid = _pupil_field()
@@ -158,6 +191,9 @@ class TestEnergySplit:
 
 class TestDichroic:
     def test_routes_color_and_conserves_per_wavelength(self):
+        """Floating-point: interpolation, two roots, port products, two
+        squared norms and their sum cost 20 roundings at incident intensity.
+        """
         mono, grid = _pupil_field()
         # Step from transmit to reflect across the band.
         split = BeamSplitter.dichroic(
@@ -178,7 +214,10 @@ class TestDichroic:
         t_int = np.abs(np.asarray(ports["transmit"].data)) ** 2
         r_int = np.abs(np.asarray(ports["reflect"].data)) ** 2
         np.testing.assert_allclose(
-            t_int + r_int, np.abs(np.asarray(field.data)) ** 2, atol=1e-14
+            t_int + r_int,
+            np.abs(np.asarray(field.data)) ** 2,
+            rtol=0,
+            atol=ulps(20, np.max(np.abs(field.data)) ** 2),
         )
         # The blue end mostly transmits; the red end mostly reflects.
         assert t_int[0].sum() > r_int[0].sum()

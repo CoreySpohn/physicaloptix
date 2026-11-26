@@ -9,6 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TEST_FRAME
+from hwoutils.testing import ulps
 from jax.test_util import check_grads
 from optixstuff.grids import PixelGrid
 from optixstuff.spectral import Band, Quadrature
@@ -160,13 +161,21 @@ class TestLinearizationProduct:
 
 class TestLinearity:
     def test_residual_is_small_and_quadratic(self, setup):
-        """The first-order model's residual scales as eps^2 (ratio 4 at 2x)."""
+        """The first-order model's residual scales as eps^2 (ratio 4 at 2x).
+
+        Half a nanometer at a wavelength near 500 nm gives a milliradian-scale phase.
+        Its square exceeds complex64 roundoff while the cubic term stays small at
+        twice the command.
+
+        Args:
+            setup: Pupil path, incident field and mode basis.
+        """
         path, field, basis = setup
         lin = path.linearize(field, basis, wavelength_nm=WL_NM)
         rng = np.random.default_rng(0)
         direction = jnp.asarray(rng.standard_normal(4))
-        eps1 = 1e-3 * direction  # nm-scale OPD against a 500 nm wavelength
-        eps2 = 2e-3 * direction
+        eps1 = 0.5 * direction  # nm-scale OPD against a 500 nm wavelength
+        eps2 = 2 * eps1
         r1 = linearity_residual(path, field, basis, lin, eps1)
         r2 = linearity_residual(path, field, basis, lin, eps2)
         assert r1 < 1e-4
@@ -205,13 +214,23 @@ class TestAmplitudeKind:
         np.testing.assert_array_equal(np.asarray(lin_500.G), np.asarray(lin_1000.G))
 
     def test_amplitude_linear_model_is_exact(self, setup):
-        """E(eps) = E (1 + B.eps) is affine: the linear model is exact."""
+        """E(eps) = E (1 + B.eps) is affine: the linear model is exact.
+
+        The direct field and linear reconstruction traverse two pupil-width
+        contractions plus the mode sum. Bound their normalized difference at unit
+        field norm.
+
+        Args:
+            setup: Pupil path, incident field and mode basis.
+        """
         path, field, basis = setup
         amp = ModeBasis(B=basis.B, coeffs=basis.coeffs, kind="amplitude")
         lin = path.linearize(field, amp, wavelength_nm=WL_NM)
         rng = np.random.default_rng(0)
         eps = 0.05 * jnp.asarray(rng.standard_normal(4))
-        assert linearity_residual(path, field, amp, lin, eps) < 1e-12
+        assert linearity_residual(path, field, amp, lin, eps) < ulps(
+            2 * field.grid.shape[0] + basis.n_modes, field.data.real.dtype.type(1)
+        )
 
 
 def test_realize_is_flux_fraction_end_to_end(setup):
@@ -245,6 +264,14 @@ def test_mono_response_matches_perturbed_pupil_at_1000_nm(setup, kind, record_pr
     1.975e-5 of nominal peak intensity. Its exact-algebra bound allows
     1.1 times the squared phase (2 pi * 1 nm / 1000 nm)^2 for the omitted
     quadratic term.
+
+    Propagate the pupil increment directly and use the coherent cross term plus its
+    squared magnitude to resolve the excess near the bright nominal peak.
+
+    Args:
+        setup: Pupil path, incident field and mode basis.
+        kind: Amplitude or optical-path perturbation law.
+        record_property: Pytest recorder for the numerical error metrics.
     """
     path, field, _ = setup
     x, _ = field.grid.coordinates()
@@ -252,10 +279,10 @@ def test_mono_response_matches_perturbed_pupil_at_1000_nm(setup, kind, record_pr
     opd_phase = 2 * jnp.pi / 1000.0
     if kind == "amplitude":
         mode = 0.01 * ripple
-        transmission = 1 + mode
+        pupil_increment = mode
     else:
         mode = ripple  # nm of OPD at unit coefficient
-        transmission = jnp.exp(1j * opd_phase * mode)
+        pupil_increment = jnp.expm1(1j * opd_phase * mode)
     basis = ModeBasis(B=mode[None], coeffs=jnp.zeros(1), kind=kind)
     lin = path.linearize(field, basis, wavelength_nm=500.0)
     process = lin.to_speckle_process(per_mode_rms=1.0, knee_hz=1e-3, coherent=True)
@@ -267,13 +294,13 @@ def test_mono_response_matches_perturbed_pupil_at_1000_nm(setup, kind, record_pr
     # The fixture's Fraunhofer has no fixed angular reference: its kernel
     # samples the same native lambda/D coordinates for both wavelengths.
     nominal, _ = path.propagate(field)
-    perturbed = Field(field.data * transmission, field.grid, field.plane)
-    direct, _ = path.propagate(perturbed)
+    increment = Field(field.data * pupil_increment, field.grid, field.plane)
+    delta, _ = path.propagate(increment)
     norm = nominal.grid.pixel_area / field.energy()
-    expected = (abs(direct.data) ** 2 - abs(nominal.data) ** 2) * norm
+    linear_term = 2 * jnp.real(nominal.data.conj() * delta.data)
+    expected = (linear_term + abs(delta.data) ** 2) * norm
     error = jnp.max(abs(got - expected))
     if kind == "amplitude":
-        linear_term = 2 * jnp.real(nominal.data.conj() * (direct.data - nominal.data))
         scale = jnp.max(abs(linear_term)) * norm
         bound = 1e-4
     else:
@@ -340,7 +367,16 @@ class TestChromaticLinearize:
     def test_matches_per_band_mono_linearize(
         self, small_path, chromatic_field, opd_basis
     ):
-        """The correctness anchor: chromatic == the validated mono path per band."""
+        """The correctness anchor: chromatic == the validated mono path per band.
+
+        Batched and per-band derivative fields each contract two pupil-width Fourier
+        axes. Compare at the peak derivative of each band.
+
+        Args:
+            small_path: Pupil stop and native-grid Fraunhofer propagation.
+            chromatic_field: Input field at three wavelengths.
+            opd_basis: OPD modes in nanometers.
+        """
         wavelengths = chromatic_field.spectrum.nodes_nm[0]
         lin = linearize(
             small_path, chromatic_field, opd_basis, wavelengths_nm=wavelengths
@@ -364,7 +400,10 @@ class TestChromaticLinearize:
             )
             mono = linearize(small_path, mono_field, opd_basis, wavelength_nm=float(wl))
             np.testing.assert_allclose(
-                np.asarray(lin.G[w]), np.asarray(mono.G), rtol=0, atol=1e-12
+                np.asarray(lin.G[w]),
+                np.asarray(mono.G),
+                rtol=0,
+                atol=float(ulps(2 * chromatic_field.grid.shape[0], abs(mono.G).max())),
             )
             np.testing.assert_allclose(
                 np.asarray(lin.e_nom[w]), np.asarray(mono.e_nom), rtol=0, atol=1e-12
@@ -380,6 +419,15 @@ class TestChromaticLinearize:
         The shared-law comparison allows 64 eps of the map peak for the
         complex contraction and amplitude conversion; the scaling mutant
         must differ by more than 1e-3 in relative L2 norm.
+
+        Batched and per-band derivative fields each contract two pupil-width Fourier
+        axes. Compare at the peak derivative of each band.
+
+        Args:
+            small_path: Pupil stop and native-grid Fraunhofer propagation.
+            chromatic_field: Input field at three wavelengths.
+            opd_basis: OPD modes in nanometers.
+            record_property: Pytest recorder for the numerical error metrics.
         """
         wavelengths = chromatic_field.spectrum.nodes_nm[0]
         kernel_row = 0.002j * wavelengths  # linear in lambda: interp-exact
@@ -396,7 +444,10 @@ class TestChromaticLinearize:
             )
             mono = linearize(mono_path, mono_field, opd_basis, wavelength_nm=float(wl))
             np.testing.assert_allclose(
-                np.asarray(lin.G[w]), np.asarray(mono.G), rtol=0, atol=1e-12
+                np.asarray(lin.G[w]),
+                np.asarray(mono.G),
+                rtol=0,
+                atol=float(ulps(2 * chromatic_field.grid.shape[0], abs(mono.G).max())),
             )
 
         # Propagated chromaticity is retained, rather than a reference/lambda model.
@@ -414,7 +465,7 @@ class TestChromaticLinearize:
             exact_node,
             parent,
             rtol=0,
-            atol=64 * np.finfo(float).eps * float(jnp.max(jnp.abs(parent))),
+            atol=float(ulps(64, abs(parent).max())),
         )
         reference = field.at_wavelength(field.response.reference_wavelength_nm)
         reference = replace(
@@ -570,7 +621,16 @@ class TestChromaticLinearize:
     ):
         """Achromatic masks + native lambda/D output + identical input slices:
         G(w) == G(0) * (wl0/wlw) exactly -- the regime where
-        reference/wavelength scaling is exact, pinned as an equality."""
+        reference/wavelength scaling is exact, pinned as an equality.
+
+        Scaling before or after two pupil-width Fourier sums permits their
+        accumulation roundoff plus one multiply at peak column amplitude.
+
+        Args:
+            small_path: Pupil stop and native-grid Fraunhofer propagation.
+            chromatic_field: Input field at three wavelengths.
+            opd_basis: OPD modes in nanometers.
+        """
         wavelengths = chromatic_field.spectrum.nodes_nm[0]
         lin = linearize(
             small_path, chromatic_field, opd_basis, wavelengths_nm=wavelengths
@@ -578,7 +638,12 @@ class TestChromaticLinearize:
         for w in range(1, len(wavelengths)):
             scale = wavelengths[0] / wavelengths[w]
             np.testing.assert_allclose(
-                np.asarray(lin.G[w]), np.asarray(lin.G[0] * scale), rtol=0, atol=1e-12
+                np.asarray(lin.G[w]),
+                np.asarray(lin.G[0] * scale),
+                rtol=0,
+                atol=float(
+                    ulps(2 * chromatic_field.grid.shape[0] + 1, abs(lin.G[w]).max())
+                ),
             )
 
     def test_dispersive_screen_breaks_lambda_scaling(
@@ -611,7 +676,17 @@ class TestChromaticLinearize:
     def test_chromatic_residual_is_small_and_quadratic(
         self, small_path, chromatic_field, opd_basis
     ):
-        """linearity_residual generalizes: small at small eps, scales as eps^2."""
+        """linearity_residual generalizes: small at small eps, scales as eps^2.
+
+        Half a nanometer at a wavelength near 500 nm gives a milliradian-scale phase.
+        Its square exceeds complex64 roundoff while the cubic term stays small at
+        twice the command.
+
+        Args:
+            small_path: Pupil stop and native-grid Fraunhofer propagation.
+            chromatic_field: Input field at three wavelengths.
+            opd_basis: OPD modes in nanometers.
+        """
         wavelengths = chromatic_field.spectrum.nodes_nm[0]
         lin = linearize(
             small_path, chromatic_field, opd_basis, wavelengths_nm=wavelengths
@@ -619,11 +694,9 @@ class TestChromaticLinearize:
         rng = np.random.default_rng(0)
         direction = jnp.asarray(rng.standard_normal(opd_basis.n_modes))
         r1 = linearity_residual(
-            small_path, chromatic_field, opd_basis, lin, 1e-3 * direction
+            small_path, chromatic_field, opd_basis, lin, 0.5 * direction
         )
-        r2 = linearity_residual(
-            small_path, chromatic_field, opd_basis, lin, 2e-3 * direction
-        )
+        r2 = linearity_residual(small_path, chromatic_field, opd_basis, lin, direction)
         assert r1 < 1e-4
         np.testing.assert_allclose(r2 / r1, 4.0, rtol=0.05)
 
@@ -736,6 +809,8 @@ class TestPerturbationStage:
             )
 
     def test_pupil_stage_matches_input_plane_route(self):
+        """Four log2(N) butterfly stages in a forward/inverse Fresnel transform and four
+        screen phase operations set the roundoff scale of the Jacobian."""
         path, field = _train_and_field()
         stage_basis = path.stages[0].op.basis  # p_drift at the pupil
         lin_input = linearize(
@@ -749,7 +824,15 @@ class TestPerturbationStage:
             perturbation_stage="p_drift",
         )
         np.testing.assert_allclose(
-            np.asarray(lin_stage.G), np.asarray(lin_input.G), atol=1e-10
+            np.asarray(lin_stage.G),
+            np.asarray(lin_input.G),
+            rtol=0,
+            atol=float(
+                ulps(
+                    4 * int(np.ceil(np.log2(field.grid.shape[0]))) + 4,
+                    abs(lin_input.G).max(),
+                )
+            ),
         )
 
     @pytest.mark.float64_only(

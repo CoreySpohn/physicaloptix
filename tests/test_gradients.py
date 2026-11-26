@@ -24,6 +24,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TEST_FRAME
+from hwoutils.testing import ulps
 from jax.test_util import check_grads
 from optixstuff.grids import PixelGrid
 from optixstuff.spectral import Band, Quadrature
@@ -247,7 +248,11 @@ class TestLinearizeAnchors:
         shift theorem -- EXACT for the continuous-FT MFT because both sides
         share the same discrete disk, so the comparison sits at roundoff.
         This is the closed-form speckle-pair Jacobian column (the EFC
-        anchor), independent of the linearize implementation's bookkeeping."""
+        anchor), independent of the linearize implementation's bookkeeping.
+
+        Budget two pupil-width MFT dot products plus the scaled sum of shifted fields
+        at peak column amplitude.
+        """
         npix = NPUP
         pupil = PixelGrid.pupil(npix)
         q, num_airy = 8, 8
@@ -271,7 +276,12 @@ class TestLinearizeAnchors:
         g = np.asarray(lin.G[0])
         valid = slice(shift_px, nfoc - shift_px)
         expected = factor * (f0[:, : nfoc - 2 * shift_px] + f0[:, 2 * shift_px :])
-        np.testing.assert_allclose(g[:, valid], expected, atol=1e-12 * np.abs(g).max())
+        np.testing.assert_allclose(
+            g[:, valid],
+            expected,
+            rtol=0,
+            atol=float(ulps(2 * npix + 2, np.abs(g).max())),
+        )
 
     def test_analytic_matches_jvp_through_the_vortex(self):
         """The analytic linearization equals jvp autodiff on a chain
@@ -321,6 +331,8 @@ class TestChromaticAdjointGradient:
     """
 
     def test_adjoint_state_gradient_matches_autodiff_off_reference(self):
+        """The adjoint contracts two focal-width axes and scales by the intensity
+        derivative and pixel area. Compare absolute error at peak gradient."""
         npup, nfoc, ref_nm = 32, 48, 500.0
         pupil = PixelGrid.pupil(npup)
         focal = PixelGrid.focal(nfoc, 0.3, TEST_FRAME)
@@ -360,5 +372,8 @@ class TestChromaticAdjointGradient:
         scale = float(jnp.abs(euclidean).max())
         assert scale > 0.0
         np.testing.assert_allclose(
-            np.asarray(adjoint_state), np.asarray(euclidean), atol=1e-12 * scale
+            np.asarray(adjoint_state),
+            np.asarray(euclidean),
+            rtol=0,
+            atol=float(ulps(2 * nfoc + 3, abs(euclidean).max())),
         )

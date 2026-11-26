@@ -1,5 +1,7 @@
 """Speckle statistics: pure functions over (E_nom, G, mode variances).
 
+Public statistics require float64.
+
 The linear speckle model ``E = E_nom + G eps`` with zero-mean independent
 mode coefficients splits the focal intensity into a coherent part
 ``Ic = |E_nom|^2`` and an incoherent halo ``Is = sum_k Var(eps_k) |G_k|^2``,
@@ -26,9 +28,10 @@ each function's docstring for its exact parameter names. The modified
 Rician above is the ``p -> 0`` special case in raw-intensity form.
 """
 
-import jax
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.leaves import as_complex_leaf, as_float_leaf
+from hwoutils.precision import require_float64
 from jax.scipy.special import i0e
 from jax.scipy.special import ndtr as _jndtr
 
@@ -43,7 +46,16 @@ def dark_zone_mask(grid, *, inner_working_angle_lod, outer_working_angle_lod):
 
     Returns:
         Boolean array of shape ``grid.shape``.
+
+    Raises:
+        PrecisionError: If float64 is unavailable or an owner has narrower precision.
     """
+    require_float64(
+        "physicaloptix.stats.dark_zone_mask",
+        grid,
+        inner_working_angle_lod,
+        outer_working_angle_lod,
+    )
     radius = grid.radius()
     return (radius >= inner_working_angle_lod) & (radius <= outer_working_angle_lod)
 
@@ -56,7 +68,12 @@ def coherent_intensity(e_nom):
 
     Returns:
         Squared magnitude of the nominal field, with the shape of the input.
+
+    Raises:
+        PrecisionError: If float64 is unavailable or an owner has narrower precision.
     """
+    require_float64("physicaloptix.stats.coherent_intensity", e_nom)
+    e_nom = as_complex_leaf(e_nom)
     return e_nom.real**2 + e_nom.imag**2
 
 
@@ -70,7 +87,13 @@ def incoherent_intensity(G, per_mode_rms):
 
     Returns:
         The halo intensity map, shape ``(y, x)``.
+
+    Raises:
+        PrecisionError: If float64 is unavailable or an owner has narrower precision.
     """
+    require_float64("physicaloptix.stats.incoherent_intensity", G, per_mode_rms)
+    G = as_complex_leaf(G)
+    per_mode_rms = as_float_leaf(per_mode_rms)
     abs2 = G.real**2 + G.imag**2
     return jnp.tensordot(per_mode_rms**2, abs2, axes=1)
 
@@ -89,7 +112,12 @@ def modified_rician_pdf(intensity, ic, is_):
 
     Returns:
         The probability density at ``intensity``.
+
+    Raises:
+        PrecisionError: If float64 is unavailable or an owner has narrower precision.
     """
+    require_float64("physicaloptix.stats.modified_rician_pdf", intensity, ic, is_)
+    intensity, ic, is_ = (as_float_leaf(value) for value in (intensity, ic, is_))
     arg = 2.0 * jnp.sqrt(intensity * ic) / is_
     return jnp.exp(-(intensity + ic) / is_ + arg) * i0e(arg) / is_
 
@@ -102,11 +130,8 @@ def _ndtr(x):
     the NIRCam round mask). Requires x64 (the deep-tail values these laws live
     on underflow in float32).
     """
-    if not jax.config.jax_enable_x64:
-        msg = "physicaloptix.stats tail laws need x64: call hwoutils.enable_x64() first"
-        raise RuntimeError(msg)
-
-    return np.asarray(_jndtr(jnp.asarray(x, dtype=jnp.float64)))
+    require_float64("physicaloptix.stats._ndtr", x)
+    return np.asarray(_jndtr(as_float_leaf(x)))
 
 
 def genchi2_pdf(x_grid, lam, beta, n_u=4000, u_max_sigmas=60.0):
@@ -130,7 +155,12 @@ def genchi2_pdf(x_grid, lam, beta, n_u=4000, u_max_sigmas=60.0):
 
     Returns:
         The probability density at each point in ``x_grid``.
+
+    Raises:
+        PrecisionError: If float64 is unavailable or an owner has narrower precision.
     """
+    require_float64("physicaloptix.stats.genchi2_pdf", x_grid, lam, beta)
+    x_grid, lam, beta = (np.asarray(a, dtype=np.float64) for a in (x_grid, lam, beta))
     scale = np.sqrt(np.sum(2.0 * lam**2 + beta**2))
     u = np.linspace(1e-9, u_max_sigmas / scale, n_u)
     denom = 1.0 - 2j * lam[:, None] * u[None, :]
@@ -159,7 +189,12 @@ def genchi2_cumulants(lam, beta):
 
     Returns:
         Tuple ``(k1, k2, k3, k4)`` of the first four cumulants.
+
+    Raises:
+        PrecisionError: If float64 is unavailable or an owner has narrower precision.
     """
+    require_float64("physicaloptix.stats.genchi2_cumulants", lam, beta)
+    lam, beta = (np.asarray(a, dtype=np.float64) for a in (lam, beta))
     k1 = lam.sum()
     k2 = np.sum(2.0 * lam**2 + beta**2)
     k3 = np.sum(8.0 * lam**3 + 6.0 * lam * beta**2)
@@ -241,7 +276,12 @@ def genchi2_sf(x_grid, lam, beta, n_u=100000, u_max_sigmas=20000.0, chunk=8):
     Returns:
         The survival probability ``P(Q > x)`` at each point in ``x_grid``
         (or a scalar if ``x_grid`` was a scalar), clipped to ``[0, 1]``.
+
+    Raises:
+        PrecisionError: If float64 is unavailable or an owner has narrower precision.
     """
+    require_float64("physicaloptix.stats.genchi2_sf", x_grid, lam, beta)
+    lam, beta = (np.asarray(a, dtype=np.float64) for a in (lam, beta))
     x_grid = np.asarray(x_grid, dtype=np.float64)
     scalar_input = x_grid.ndim == 0
     x_grid = np.atleast_1d(x_grid)
@@ -274,8 +314,7 @@ def genchi2_sf(x_grid, lam, beta, n_u=100000, u_max_sigmas=20000.0, chunk=8):
 def pixel_sf(thresholds, i_c, gamma, p_kernel, phi_c, norm, chunk=4096, gl_nodes=96):
     """P(delta > x) per pixel and threshold, in an all-positive form.
 
-    Host-side numpy float64; not jit-safe. Requires x64 to be enabled (calls
-    :func:`_ndtr`, which raises ``RuntimeError`` otherwise).
+    Host-side numpy float64; not jit-safe.
 
     Returns an (npix, nthresh) array. The rotated frame diagonalizes the
     quadrature covariance: ``sigma1^2 = (Gamma + |P|)/2`` along P's
@@ -310,7 +349,17 @@ def pixel_sf(thresholds, i_c, gamma, p_kernel, phi_c, norm, chunk=4096, gl_nodes
     Returns:
         The survival probability ``P(delta > x)``, shape
         ``(npix, nthresh)``.
+
+    Raises:
+        PrecisionError: If float64 is unavailable or an owner has narrower precision.
     """
+    require_float64(
+        "physicaloptix.stats.pixel_sf", thresholds, i_c, gamma, p_kernel, phi_c, norm
+    )
+    thresholds, i_c, gamma, phi_c, norm = (
+        np.asarray(a, dtype=np.float64) for a in (thresholds, i_c, gamma, phi_c, norm)
+    )
+    p_kernel = np.asarray(p_kernel, dtype=np.complex128)
     nodes, weights = np.polynomial.legendre.leggauss(gl_nodes)
     npix = gamma.shape[0]
     out = np.zeros((npix, thresholds.shape[0]))
@@ -379,7 +428,17 @@ def pixel_pdf(x_grid, i_c_p, gamma_p, p_p, phi_c_p, norm, n_theta=4096):
     Returns:
         The probability density at each point in ``x_grid``, in delta
         units, shape ``(n,)``.
+
+    Raises:
+        PrecisionError: If float64 is unavailable or an owner has narrower precision.
     """
+    require_float64(
+        "physicaloptix.stats.pixel_pdf", x_grid, i_c_p, gamma_p, p_p, phi_c_p, norm
+    )
+    x_grid, i_c_p, gamma_p, phi_c_p, norm = (
+        np.asarray(a, dtype=np.float64) for a in (x_grid, i_c_p, gamma_p, phi_c_p, norm)
+    )
+    p_p = np.asarray(p_p, dtype=np.complex128)
     alpha = 0.5 * np.angle(p_p)
     s1 = np.sqrt((gamma_p + abs(p_p)) / 2.0)
     s2 = max(np.sqrt(max(gamma_p - abs(p_p), 0.0) / 2.0), 1e-12 * s1)

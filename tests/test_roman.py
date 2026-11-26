@@ -3,6 +3,8 @@
 import jax
 import numpy as np
 import pytest
+from hwoutils.numerics import eps
+from hwoutils.testing import ulps
 
 from physicaloptix.instruments.roman import (
     RomanCompact,
@@ -61,18 +63,31 @@ def test_proper_trim_is_integer_centered(shape, n, expected_origin):
 
 
 def test_entrance_is_normalized_to_unit_total_intensity():
+    """The pairwise pupil-energy sum has two log2(N) depths, plus normalization and
+    squaring.
+    """
     stages = _clear_model().propagate(825.0, 0.0, 0.0, output_dim=65)
-    assert np.sum(np.abs(stages["entrance"]) ** 2) == pytest.approx(1.0, rel=1e-12)
+    assert np.sum(np.abs(stages["entrance"]) ** 2) == pytest.approx(
+        1.0, rel=(2 * N_SMALL.bit_length() + 4) * eps(stages["entrance"].dtype), abs=0
+    )
 
 
 @pytest.mark.parametrize("kind", ["spc", "hlc"])
 def test_clear_train_conserves_energy_over_the_full_image(kind):
+    """A pair of one-dimensional Fourier sums bounds the focal field error by two
+    input row lengths at the peak.
+
+    Args:
+        kind: Compact coronagraph prescription.
+    """
     n = 257  # odd full grid: the image transform is then unitary on the full frame
     model = _clear_model(
         pupil=_disk(n, D_PIX), lyot=np.ones((n, n)), n_small=n, kind=kind
     )
     stages = model.propagate(825.0, 0.0, 0.0, output_dim=n)
-    assert np.sum(np.abs(stages["image"]) ** 2) == pytest.approx(1.0, rel=1e-9)
+    assert np.sum(np.abs(stages["image"]) ** 2) == pytest.approx(
+        1.0, rel=2 * n * eps(stages["image"].dtype), abs=0
+    )
     with pytest.raises(AssertionError, match="fpm must be present"):
         model._focal_mask(model._as_field(model.pupil, n), 825.0, {})
 
@@ -85,19 +100,31 @@ def _centroid(img, cx0, cy0, radius=4):
 
 
 def test_source_x_offset_lands_on_output_columns_after_the_transpose():
+    """The four-pixel centroid radius sets the absolute scale for two pairwise FFT
+    axes.
+    """
     stages = _clear_model().propagate(825.0, 3.0, 0.0, output_dim=65)
     expected = 3.0 * N_SMALL / D_PIX
     cx, cy = _centroid(np.abs(stages["image"]) ** 2, expected, 0.0)
     assert cx == pytest.approx(expected, abs=0.02)
-    assert cy == pytest.approx(0.0, abs=1e-9)
+    assert cy == pytest.approx(
+        0.0,
+        abs=float(ulps(2 * N_SMALL.bit_length(), stages["image"].real.dtype.type(4.0))),
+    )
 
 
 def test_source_y_offset_lands_on_output_rows():
+    """The four-pixel centroid radius sets the absolute scale for two pairwise FFT
+    axes.
+    """
     stages = _clear_model().propagate(825.0, 0.0, -2.0, output_dim=65)
     expected = -2.0 * N_SMALL / D_PIX
     cx, cy = _centroid(np.abs(stages["image"]) ** 2, 0.0, expected)
     assert cy == pytest.approx(expected, abs=0.02)
-    assert cx == pytest.approx(0.0, abs=1e-9)
+    assert cx == pytest.approx(
+        0.0,
+        abs=float(ulps(2 * N_SMALL.bit_length(), stages["image"].real.dtype.type(4.0))),
+    )
 
 
 def test_source_offset_scales_with_lam0_over_lambda():
@@ -109,10 +136,16 @@ def test_source_offset_scales_with_lam0_over_lambda():
 
 
 def test_fresnel_round_trip_returns_the_entrance_field():
+    """Forward and inverse Fresnel relays use four 2-D FFTs, each with two log2(N)
+    axes.
+    """
     stages = _clear_model().propagate(825.0, 1.0, 0.5, output_dim=65)
     back = stages["back_to_dm1"]
     np.testing.assert_allclose(
-        back, np.asarray(proper_trim(stages["entrance"], N_BIG)), atol=1e-12
+        back,
+        np.asarray(proper_trim(stages["entrance"], N_BIG)),
+        rtol=0,
+        atol=float(ulps(8 * N_SMALL.bit_length(), np.abs(back).max())),
     )
 
 
@@ -133,6 +166,9 @@ def _asymmetric_mask(m):
 
 
 def test_spc_focal_mask_matches_the_prescription_transform_pair():
+    """A pair of one-dimensional Fourier sums bounds the focal field error by two
+    input row lengths at the peak.
+    """
     m, dout = 41, 0.5
     fpm = _asymmetric_mask(m)
     stages = _clear_model(fpm=fpm, fpm_sampling_lod=dout).propagate(
@@ -141,11 +177,17 @@ def test_spc_focal_mask_matches_the_prescription_transform_pair():
     at_mask = _mft2(np.asarray(stages["back_to_dm1"]), dout, D_PIX, m, +1)
     exit_ = _mft2(at_mask * fpm, dout, D_PIX, int(D_PIX), -1)
     np.testing.assert_allclose(
-        stages["fpm"], at_mask, atol=1e-12 * np.abs(at_mask).max()
+        stages["fpm"],
+        at_mask,
+        rtol=0,
+        atol=float(ulps(2 * N_SMALL, np.abs(stages["fpm"]).max())),
     )
     expected = np.asarray(proper_trim(exit_, N_SMALL))
     np.testing.assert_allclose(
-        stages["fpm_exit"], expected, atol=1e-12 * np.abs(exit_).max()
+        stages["fpm_exit"],
+        expected,
+        rtol=0,
+        atol=float(ulps(2 * N_SMALL, np.abs(stages["fpm_exit"]).max())),
     )
 
 
@@ -171,6 +213,9 @@ def test_dm_surface_must_match_the_pupil_grid(name):
 
 
 def test_hlc_patterned_complex_mask_matches_the_prescription_babinet_form():
+    """A pair of one-dimensional Fourier sums bounds the focal field error by two
+    input row lengths at the peak.
+    """
     m, dout = 41, 0.5
     idx = np.arange(m) - m // 2
     x, y = np.meshgrid(idx, idx)
@@ -185,10 +230,16 @@ def test_hlc_patterned_complex_mask_matches_the_prescription_babinet_form():
     region = np.real(fpm) != np.real(clear)
     corrected = field + _mft2(at_mask * region * (fpm - 1.0), dout, D_PIX, N_SMALL, -1)
     np.testing.assert_allclose(
-        stages["fpm"], at_mask, atol=1e-12 * np.abs(at_mask).max()
+        stages["fpm"],
+        at_mask,
+        rtol=0,
+        atol=float(ulps(2 * N_SMALL, np.abs(stages["fpm"]).max())),
     )
     np.testing.assert_allclose(
-        stages["fpm_exit"], corrected, atol=1e-12 * np.abs(corrected).max()
+        stages["fpm_exit"],
+        corrected,
+        rtol=0,
+        atol=float(ulps(2 * N_SMALL, np.abs(stages["fpm_exit"]).max())),
     )
 
 
@@ -202,14 +253,23 @@ def _prescription_focus(lyot_field, output_dim):
 
 
 def test_image_matches_the_prescription_focus_including_phase():
+    """A pair of one-dimensional Fourier sums bounds the focal field error by two
+    input row lengths at the peak.
+    """
     stages = _clear_model().propagate(825.0, 1.3, -0.7, output_dim=65)
     expected = _prescription_focus(stages["lyot"], 65)
     np.testing.assert_allclose(
-        stages["image"], expected, atol=1e-12 * np.abs(expected).max()
+        stages["image"],
+        expected,
+        rtol=0,
+        atol=float(ulps(2 * N_SMALL, np.abs(stages["image"]).max())),
     )
 
 
 def test_entrance_tilt_matches_the_prescription_integer_centered_phase():
+    """Two source tilt axes and the normalization each contribute phase or scaling
+    roundoff, allowing sixteen operations at peak amplitude.
+    """
     sx, sy, wl = 1.3, -0.7, 700.0
     stages = _clear_model().propagate(wl, sx, sy, output_dim=65)
     n = N_SMALL
@@ -219,10 +279,18 @@ def test_entrance_tilt_matches_the_prescription_integer_centered_phase():
     x = np.tile(r, (n, 1))
     xtilt, ytilt = sy * 825.0 / wl, sx * 825.0 / wl
     expected = pupil * np.exp(1j * np.pi * (xtilt * x + ytilt * x.T))
-    np.testing.assert_allclose(stages["entrance"], expected, atol=1e-14)
+    np.testing.assert_allclose(
+        stages["entrance"],
+        expected,
+        rtol=0,
+        atol=float(ulps(16, np.abs(stages["entrance"]).max())),
+    )
 
 
 def test_dm_surface_piston_applies_twice_the_surface_as_phase():
+    """Eight roundings cover conversion to radians, complex exponential and
+    multiplication at the pupil amplitude.
+    """
     surface = np.full((N_SMALL, N_SMALL), 20e-9)
     wl = 825.0
     plain = _clear_model().propagate(wl, 0.0, 0.0, output_dim=65)
@@ -232,34 +300,49 @@ def test_dm_surface_piston_applies_twice_the_surface_as_phase():
         / plain["entrance"][N_SMALL // 2, N_SMALL // 2]
     )
     assert ratio == pytest.approx(
-        np.exp(2j * np.pi * 2 * 20e-9 / (wl * 1e-9)), rel=1e-12
+        np.exp(2j * np.pi * 2 * 20e-9 / (wl * 1e-9)), rel=8 * eps(ratio.dtype), abs=0
     )
 
 
 def test_dm2_surface_is_applied_at_the_dm2_plane():
+    """Eight roundings cover conversion to radians, complex exponential and
+    multiplication at the pupil amplitude.
+    """
     rng = np.random.default_rng(0)
     surface = 5e-9 * rng.standard_normal((N_SMALL, N_SMALL))
     wl = 825.0
     plain = _clear_model().propagate(wl, 0.0, 0.0, output_dim=65)
     with_dm = _clear_model(dm2_surface_m=surface).propagate(wl, 0.0, 0.0, output_dim=65)
     phase = np.exp(2j * np.pi * 2 * surface / (wl * 1e-9))
-    np.testing.assert_allclose(with_dm["dm2"], plain["dm2"] * phase, atol=1e-15)
+    np.testing.assert_allclose(
+        with_dm["dm2"],
+        plain["dm2"] * phase,
+        rtol=0,
+        atol=float(ulps(8, np.abs(plain["dm2"]).max())),
+    )
 
 
 def test_hlc_mask_with_no_patterned_region_scales_by_the_clear_transmission():
+    """Moving the constant mask factor through a 2-D FFT changes rounding in both
+    log2(N) butterfly paths.
+    """
     c = 0.9 * np.exp(0.3j)
     fpm = np.full((41, 41), c, dtype=complex)
     model = _clear_model(kind="hlc", fpm=fpm, n_big=N_SMALL)
     plain = _clear_model(n_big=N_SMALL).propagate(825.0, 0.0, 0.0, output_dim=65)
     out = model.propagate(825.0, 0.0, 0.0, output_dim=65)
-    np.testing.assert_allclose(out["image"], c * plain["image"], atol=1e-14)
+    np.testing.assert_allclose(
+        out["image"],
+        c * plain["image"],
+        rtol=0,
+        atol=float(ulps(2 * N_SMALL.bit_length(), np.abs(plain["image"]).max())),
+    )
 
 
 # ------------------------------------------------------------------ deformable mirror
 
+DM_SURFACE_OPS = 3 * 2 * 9 * 4 + 16  # Three 2-D FFTs and cubic interpolation.
 INF_DX, INF_PITCH = 1e-4, 1e-3  # synthetic influence function: 10 samples per actuator
-# FFT convolution leaves rounding-level (1e-16 relative) residue, not exact zeros
-FLOOR = 1e-15
 
 
 def _gaussian_influence(n=91, sigma_px=8.0, lobe=0.0):
@@ -294,10 +377,19 @@ def test_dm_with_zero_strokes_is_flat():
 
 
 def test_dm_surface_is_linear_in_the_strokes():
+    """The 2-D FFT convolution uses three transforms, each with two axes of at most
+    nine radix-2 stages. Allow four roundings per complex butterfly and the
+    final cubic interpolation.
+    """
     rng = np.random.default_rng(1)
     a, b = rng.standard_normal((2, 8, 8)) * 1e-9
     both = _dm(a + b)
-    np.testing.assert_allclose(both, _dm(a) + _dm(b), atol=1e-14 * np.abs(both).max())
+    np.testing.assert_allclose(
+        both,
+        _dm(a) + _dm(b),
+        rtol=0,
+        atol=float(ulps(DM_SURFACE_OPS, np.abs(both).max())),
+    )
 
 
 def _patch_at(surface, row, col, half=45):
@@ -305,26 +397,48 @@ def _patch_at(surface, row, col, half=45):
 
 
 def test_dm_poke_reproduces_the_influence_function_on_a_commensurate_grid():
+    """The 2-D FFT convolution uses three transforms, each with two axes of at most
+    nine radix-2 stages. Allow four roundings per complex butterfly and the
+    final cubic interpolation.
+    """
     surface = _dm(_poke(5, 2))
     # actuator (x=2, y=5) sits (2 - 3.5, 5 - 3.5) pitches from the axis: 15 samples
     row, col = 128 + 15, 128 - 15
     patch = _patch_at(surface, row, col)
-    np.testing.assert_allclose(patch, 2e-9 * _gaussian_influence(), atol=FLOOR * 2e-9)
+    np.testing.assert_allclose(
+        patch,
+        2e-9 * _gaussian_influence(),
+        rtol=0,
+        atol=float(ulps(DM_SURFACE_OPS, patch.dtype.type(2e-9))),
+    )
     outside = surface.copy()
     _patch_at(outside, row, col)[:] = 0.0
-    assert np.abs(outside).max() < FLOOR * 2e-9
+    assert np.abs(outside).max() < float(ulps(DM_SURFACE_OPS, surface.dtype.type(2e-9)))
 
 
 def test_dm_scales_the_influence_function_to_the_actuator_pitch():
+    """The 2-D FFT convolution uses three transforms, each with two axes of at most
+    nine radix-2 stages. Allow four roundings per complex butterfly and the
+    final cubic interpolation.
+    """
     # 1.25x the tabulated pitch: the function stretches by 1.25, so a grid at
     # 1.25x the tabulated sampling again lands on its samples, 15 samples out
     pitch = 1.25 * INF_PITCH
     surface = _dm(_poke(5, 2), pitch_m=pitch, grid_dx_m=1.25 * INF_DX)
     patch = _patch_at(surface, 128 + 15, 128 - 15)
-    np.testing.assert_allclose(patch, 2e-9 * _gaussian_influence(), atol=FLOOR * 2e-9)
+    np.testing.assert_allclose(
+        patch,
+        2e-9 * _gaussian_influence(),
+        rtol=0,
+        atol=float(ulps(DM_SURFACE_OPS, patch.dtype.type(2e-9))),
+    )
 
 
 def test_dm_half_sample_offset_interpolates_with_keys_weights():
+    """The 2-D FFT convolution uses three transforms, each with two axes of at most
+    nine radix-2 stages. Allow four roundings per complex butterfly and the
+    final cubic interpolation.
+    """
     # shifting the axis by 0.05 actuator (half a sample) puts every output sample
     # halfway between influence samples along x: Keys a = -0.5 gives
     # (-1/16, 9/16, 9/16, -1/16) on the four neighbors
@@ -338,26 +452,47 @@ def test_dm_half_sample_offset_interpolates_with_keys_weights():
     # samples left of the axis, the influence center at index 45), so expected
     # column j (index j + 0.5) is output column j + 68
     patch = surface[128 + 15 - 45 : 128 + 15 + 46, 69 : 69 + expected.shape[1] - 3]
-    np.testing.assert_allclose(patch, 2e-9 * expected[:, 1:-2], atol=FLOOR * 2e-9)
+    np.testing.assert_allclose(
+        patch,
+        2e-9 * expected[:, 1:-2],
+        rtol=0,
+        atol=float(ulps(DM_SURFACE_OPS, patch.dtype.type(2e-9))),
+    )
 
 
 def test_dm_flip_lr_mirrors_actuators_and_influence_but_not_the_center():
+    """The 2-D FFT convolution uses three transforms, each with two axes of at most
+    nine radix-2 stages. Allow four roundings per complex butterfly and the
+    final cubic interpolation.
+    """
     rng = np.random.default_rng(2)
     strokes = rng.standard_normal((8, 8)) * 1e-9
     lopsided = _gaussian_influence(lobe=0.3)
     center = (3.3, 3.6)  # asymmetric: a flip that also moved the center would show
     flipped = _dm(strokes, influence=lopsided, center_act=center, flip_lr=True)
     mirrored = _dm(strokes[:, ::-1], influence=lopsided[:, ::-1], center_act=center)
-    np.testing.assert_allclose(flipped, mirrored, atol=1e-14 * np.abs(mirrored).max())
+    np.testing.assert_allclose(
+        flipped,
+        mirrored,
+        rtol=0,
+        atol=float(ulps(DM_SURFACE_OPS, np.abs(mirrored).max())),
+    )
 
 
 def test_dm_flip_lr_about_a_symmetric_center_mirrors_the_surface():
+    """The 2-D FFT convolution uses three transforms, each with two axes of at most
+    nine radix-2 stages. Allow four roundings per complex butterfly and the
+    final cubic interpolation.
+    """
     rng = np.random.default_rng(3)
     strokes = rng.standard_normal((8, 8)) * 1e-9
     plain = _dm(strokes, grid_npix=255)
     flipped = _dm(strokes, grid_npix=255, flip_lr=True)
     np.testing.assert_allclose(
-        flipped, plain[:, ::-1], atol=1e-14 * np.abs(plain).max()
+        flipped,
+        plain[:, ::-1],
+        rtol=0,
+        atol=float(ulps(DM_SURFACE_OPS, np.abs(plain).max())),
     )
 
 
@@ -392,6 +527,10 @@ def test_dm_z_tilt_is_a_left_handed_rotation_about_the_axis():
 
 
 def test_dm_is_jittable_and_differentiable_in_the_strokes_and_tilts():
+    """The 2-D FFT convolution uses three transforms, each with two axes of at most
+    nine radix-2 stages. Allow four roundings per complex butterfly and the
+    final cubic interpolation.
+    """
     kw = dict(
         influence=_gaussian_influence(),
         influence_dx_m=INF_DX,
@@ -409,7 +548,10 @@ def test_dm_is_jittable_and_differentiable_in_the_strokes_and_tilts():
     jac = jax.jit(jax.jacfwd(surface))(strokes, 9.65)
     # the Jacobian column of actuator k is the surface of a unit poke at k
     np.testing.assert_allclose(
-        jac[:, :, 4, 2], surface(_poke(4, 2, height=1.0), 9.65), atol=1e-14
+        jac[:, :, 4, 2],
+        surface(_poke(4, 2, height=1.0), 9.65),
+        rtol=0,
+        atol=float(ulps(DM_SURFACE_OPS, jac.max())),
     )
     dtilt = jax.grad(lambda t: jax.numpy.sum(surface(_poke(6, 2, 1.0), t) ** 2))(9.65)
     assert np.isfinite(dtilt) and dtilt != 0.0
@@ -447,12 +589,19 @@ def _v2s(v, cal):
 
 
 def test_volts_to_stroke_follows_each_actuator_table():
+    """The two table endpoints, voltage fraction, interpolation products and
+    addition cost eight relative rounding operations.
+    """
     cal = _calibration()
     cal["stroke_table_m"][:, 1, 2] *= 3.0  # one actuator three times as responsive
     stroke = _v2s(np.full((4, 4), 25.0), cal)
     # actuators move toward the DM with voltage: the stroke is negative
-    np.testing.assert_allclose(stroke[0, 0], -2e-9 * 25.0, rtol=1e-12)
-    np.testing.assert_allclose(stroke[1, 2], -3 * 2e-9 * 25.0, rtol=1e-12)
+    np.testing.assert_allclose(
+        stroke[0, 0], -2e-9 * 25.0, rtol=8 * eps(stroke.dtype), atol=0
+    )
+    np.testing.assert_allclose(
+        stroke[1, 2], -3 * 2e-9 * 25.0, rtol=8 * eps(stroke.dtype), atol=0
+    )
 
 
 def test_volts_to_stroke_clamps_at_the_ends_of_the_table():
@@ -461,13 +610,18 @@ def test_volts_to_stroke_clamps_at_the_ends_of_the_table():
 
 
 def test_volts_to_stroke_accepts_a_rectangular_array():
+    """The two table endpoints, voltage fraction, interpolation products and
+    addition cost eight relative rounding operations.
+    """
     v = np.arange(15.0).reshape(3, 5) * 4.0
-    np.testing.assert_allclose(
-        _v2s(v, _calibration(shape=(3, 5))), -2e-9 * v, rtol=1e-12
-    )
+    stroke = _v2s(v, _calibration(shape=(3, 5)))
+    np.testing.assert_allclose(stroke, -2e-9 * v, rtol=8 * eps(stroke.dtype), atol=0)
 
 
 def test_volts_to_stroke_couples_to_the_neighbors_and_trims_the_edge():
+    """Eight interpolation operations and eight neighboring contributions bound the
+    relative coupled stroke error.
+    """
     v = np.zeros((4, 4))
     v[0, 1] = 50.0  # an edge actuator: its outer neighbors fall off the array
     stroke = _v2s(v, _calibration(coupling=0.1))
@@ -476,7 +630,7 @@ def test_volts_to_stroke_couples_to_the_neighbors_and_trims_the_edge():
     expected[0, 1] = s0
     for dy, dx in ((0, -1), (0, 1), (1, -1), (1, 0), (1, 1)):
         expected[0 + dy, 1 + dx] += 0.1 * s0
-    np.testing.assert_allclose(stroke, expected, rtol=1e-12, atol=1e-30)
+    np.testing.assert_allclose(stroke, expected, rtol=16 * eps(stroke.dtype), atol=0)
 
 
 def test_volts_to_stroke_interpolates_the_coupling_in_voltage():
@@ -499,6 +653,9 @@ def test_volts_to_stroke_rejects_malformed_calibrations():
 
 
 def test_dm_strokes_quantize_and_remove_the_median_of_live_actuators():
+    """Interpolating the actuator and median voltages before differencing requires
+    two eight-operation table lookups.
+    """
     v = np.array([[10.3, 20.0, 30.0, 40.0]] * 4)
     live = np.ones((4, 4), bool)
     live[0, 0] = False
@@ -507,7 +664,9 @@ def test_dm_strokes_quantize_and_remove_the_median_of_live_actuators():
     )
     # linear table: height = slope * (quantized volts - their live-actuator median)
     vq = np.floor(v / 0.5) * 0.5
-    np.testing.assert_allclose(heights, 2e-9 * (vq - np.median(vq[live])), rtol=1e-12)
+    np.testing.assert_allclose(
+        heights, 2e-9 * (vq - np.median(vq[live])), rtol=16 * eps(heights.dtype), atol=0
+    )
 
 
 def test_dm_strokes_pass_gradients_through_the_quantization():
@@ -536,6 +695,12 @@ def test_dm_strokes_reject_a_live_mask_of_the_wrong_shape():
 
 @pytest.mark.parametrize("k", [1, 2])
 def test_dm_wavefront_term_is_added_once_after_the_surface(k):
+    """Eight roundings cover conversion to radians, complex exponential and
+    multiplication at the pupil amplitude.
+
+    Args:
+        k: Deformable mirror number.
+    """
     rng = np.random.default_rng(k)
     surface = 3e-9 * rng.standard_normal((N_SMALL, N_SMALL))
     wfe = 7e-9 * rng.standard_normal((N_SMALL, N_SMALL))
@@ -545,7 +710,10 @@ def test_dm_wavefront_term_is_added_once_after_the_surface(k):
     a = base.propagate(wl, 0.0, 0.0, output_dim=65)[stage]
     b = both.propagate(wl, 0.0, 0.0, output_dim=65)[stage]
     np.testing.assert_allclose(
-        b, a * np.exp(2j * np.pi * wfe / (wl * 1e-9)), atol=1e-15
+        b,
+        a * np.exp(2j * np.pi * wfe / (wl * 1e-9)),
+        rtol=0,
+        atol=float(ulps(8, np.abs(a).max())),
     )
 
 

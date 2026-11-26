@@ -4,6 +4,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TEST_FRAME
+from hwoutils.numerics import eps
+from hwoutils.testing import ulps
 from optixstuff.grids import PixelGrid
 from optixstuff.spectral import Band, Quadrature
 
@@ -34,7 +36,10 @@ def band():
 
 class TestBandMean:
     def test_explicit_midpoint_rule_preserves_band_mean_power(self):
-        """A linear ramp's five-cell midpoint mean square is (1 - 1/25) / 3."""
+        """A linear ramp's five-cell midpoint mean square is (1 - 1/25) / 3.
+
+        Allow a square, weight, three pairwise additions and normalization.
+        """
         band = Band(950.0, 1050.0)
         n = 5
         cell_nm = band.width_nm / n
@@ -45,11 +50,18 @@ class TestBandMean:
         data = jnp.broadcast_to(amplitude[:, None, None], (n, *grid.shape))
         image = Field(data, grid, PlaneKind.PUPIL, spectrum=rule).intensity()
         np.testing.assert_allclose(
-            image.data, (1 - 1 / n**2) / 3, rtol=4 * np.finfo(float).eps, atol=0
+            image.data, (1 - 1 / n**2) / 3, rtol=6 * eps(image.data.dtype), atol=0
         )
 
     def test_gauss_legendre_samples_and_weights(self, band):
-        """Fails for endpoint averaging; polynomial moments use a 16-eps floor."""
+        """Node rounding is amplified by REF_NM / half-width and the monomial degree.
+
+        Five weighted terms add a three-level sum and normalization. The split rule
+        has nine weights, allowing four additions plus normalization.
+
+        Args:
+            band: Broadband quadrature rule.
+        """
         x = (np.asarray(band.nodes_nm[0]) - REF_NM) / (0.1 * REF_NM)
         for degree in range(10):
             expected = 0.0 if degree % 2 else 1.0 / (degree + 1)
@@ -57,14 +69,14 @@ class TestBandMean:
                 band.mean((x**degree)[None])[0],
                 expected,
                 rtol=0,
-                atol=16 * np.finfo(float).eps,
+                atol=(10 * degree + 6) * eps(x.dtype),
             )
         split = Quadrature.build((Band(400, 800),), order=3, breaks_nm=(500, 650))
         np.testing.assert_allclose(
             split.mean(jnp.ones_like(split.nodes_nm))[0],
             1.0,
             rtol=0,
-            atol=2 * np.finfo(float).eps,
+            atol=5 * eps(split.weights_nm.dtype),
         )
 
 
@@ -85,7 +97,15 @@ class TestSources:
         )
 
     def test_off_axis_tilt_scales_with_wavelength(self, pupil_field, band):
-        """A fixed-angle source needs a 1/lambda tilt in native units."""
+        """A fixed-angle source needs a 1/lambda tilt in native units.
+
+        The phase rounds five products/divisions at its maximum angle; exp has unit
+        slope.
+
+        Args:
+            pupil_field: Monochromatic entrance pupil field.
+            band: Broadband quadrature rule.
+        """
         source = point_source(
             pupil_field,
             spectrum=band,
@@ -98,7 +118,8 @@ class TestSources:
             np.testing.assert_allclose(
                 np.asarray(source.data[i]),
                 np.asarray(pupil_field.data * tilt),
-                atol=1e-14,
+                rtol=0,
+                atol=float(ulps(5, 2 * np.pi * 5 * REF_NM / wl * jnp.max(jnp.abs(x)))),
             )
 
     def test_opd_phasor_binds_per_wavelength(self, pupil_field, band):
@@ -215,7 +236,15 @@ class TestFixedAngularPropagation:
         assert peak_values[0] > 1.2 * peak_values[-1]
 
     def test_backward_is_per_wavelength_adjoint(self, pupil_field, band, angular_prop):
-        """Every slice pairs on the fixed angular grid's own cell area."""
+        """Every slice pairs on the fixed angular grid's own cell area.
+
+        Two separable MFTs and a weighted complex inner product sum on each grid.
+
+        Args:
+            pupil_field: Monochromatic entrance pupil field.
+            band: Broadband quadrature rule.
+            angular_prop: Fixed angular grid Fraunhofer propagator.
+        """
         rng = np.random.default_rng(0)
         g = jnp.asarray(
             rng.standard_normal((5, 96, 96)) + 1j * rng.standard_normal((5, 96, 96))
@@ -234,7 +263,10 @@ class TestFixedAngularPropagation:
         for i in range(band.nodes_nm.shape[1]):
             lhs = jnp.vdot(forward.data[i], g[i]) * du_angular**2
             rhs = jnp.vdot(source.data[i], back.data[i]) * dx**2
-            np.testing.assert_allclose(complex(lhs), complex(rhs), rtol=1e-12)
+            scale = du_angular**2 * jnp.sum(jnp.abs(forward.data[i] * g[i]))
+            np.testing.assert_allclose(
+                lhs, rhs, rtol=0, atol=float(ulps(2 * (NPUP + g.shape[-1]), scale))
+            )
 
     def test_mono_field_requires_no_reference_scaling(self, pupil_field, angular_prop):
         """A mono field through a referenced propagator uses the native grid."""
@@ -260,6 +292,14 @@ class TestFixedGridEnergyConservation:
     red at npup 64, q 4)."""
 
     def test_per_slice_energy_matches_the_pupil(self, pupil_field, band):
+        """Allow two node map operations, five weighted intensities plus normalization,
+        and two length-N MFT dots for Parseval. The off-reference 0.5% aperture
+        truncation band is unchanged.
+
+        Args:
+            pupil_field: Monochromatic entrance pupil field.
+            band: Broadband quadrature rule.
+        """
         q = 4
         focal = PixelGrid.focal(NPUP * q, 1.0 / q, TEST_FRAME)
         prop = Fraunhofer(
@@ -278,17 +318,27 @@ class TestFixedGridEnergyConservation:
         nodes, weights = np.polynomial.legendre.leggauss(5)
         wavelengths = np.asarray(band.nodes_nm[0])
         np.testing.assert_allclose(
-            wavelengths, REF_NM * (1 + 0.1 * nodes), rtol=2 * np.finfo(float).eps
+            wavelengths,
+            REF_NM * (1 + 0.1 * nodes),
+            rtol=2 * eps(wavelengths.dtype),
+            atol=0,
         )
         density = out.data.real**2 + out.data.imag**2
         previous = jnp.tensordot(jnp.asarray(weights / weights.sum()), density, axes=1)
         np.testing.assert_allclose(
-            out.intensity().data, previous, atol=0, rtol=16 * np.finfo(float).eps
+            out.intensity().data,
+            previous,
+            atol=0,
+            rtol=(2 * len(weights) + 3) * eps(density.dtype),
         )
         for k, wl in enumerate(wavelengths):
             e_slice = float((jnp.abs(out.data[k]) ** 2).sum() * focal.pixel_area)
-            tol = 1e-14 if wl == REF_NM else 5e-3
-            np.testing.assert_allclose(e_slice, e_pupil, rtol=tol)
+            tol = (
+                (4 * NPUP + 2 * int(np.ceil(np.log2(NPUP * q)))) * eps(out.data.dtype)
+                if wl == REF_NM
+                else 5e-3
+            )
+            np.testing.assert_allclose(e_slice, e_pupil, rtol=tol, atol=0)
 
 
 def test_broadband_airy_quadrature_convergence():

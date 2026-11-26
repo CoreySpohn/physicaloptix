@@ -5,6 +5,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hwoutils.testing import ulps
 
 from physicaloptix.coatings import multilayer_response, sellmeier, thickness_kernel
 from physicaloptix.elements import DispersiveScreen, ModeBasis
@@ -16,9 +17,14 @@ WL = jnp.linspace(400.0, 700.0, 31)
 
 class TestAnalyticAnchors:
     def test_bare_interface_fresnel(self):
-        """No layers: r = (n0 - ns) / (n0 + ns), the Fresnel amplitude."""
+        """No layers: r = (n0 - ns) / (n0 + ns), the Fresnel amplitude.
+
+        Three roundings cover the difference, sum and ratio of the indices.
+        """
         r, _ = multilayer_response(WL, [], [], n_substrate=1.5)
-        np.testing.assert_allclose(r, (1.0 - 1.5) / (1.0 + 1.5), rtol=1e-12)
+        np.testing.assert_allclose(
+            r, (1.0 - 1.5) / (1.0 + 1.5), rtol=0, atol=float(ulps(3, abs(r).max()))
+        )
 
     def test_matched_slab_positive_phase(self):
         """THE sign-convention anchor: an index-matched slab is pure
@@ -34,12 +40,18 @@ class TestAnalyticAnchors:
         )
 
     def test_quarter_wave_layer_closed_form(self):
-        """Single quarter-wave layer at wl0: r = (n0 ns - n1^2) / (n0 ns + n1^2)."""
+        """Single quarter-wave layer at wl0: r = (n0 ns - n1^2) / (n0 ns + n1^2).
+
+        At unit incident amplitude allow 16 roundings for the phase, two matrix
+        entries, admittance and Fresnel ratio.
+        """
         wl0, n1, ns = 550.0, 1.38, 1.5
         d = wl0 / (4.0 * n1)
         r, _ = multilayer_response(jnp.array([wl0]), [n1], [d], n_substrate=ns)
         expected = (1.0 * ns - n1**2) / (1.0 * ns + n1**2)
-        np.testing.assert_allclose(r[0], expected, rtol=1e-10)
+        np.testing.assert_allclose(
+            r[0], expected, rtol=0, atol=float(ulps(16, jnp.ones_like(r[0].real)))
+        )
 
     def test_quarter_wave_stack_peak_reflectance(self):
         """N (high, low) pairs at wl0: R from the admittance closed form.
@@ -47,6 +59,9 @@ class TestAnalyticAnchors:
         Each quarter-wave layer transforms the admittance as Y -> n^2 / Y;
         iterating from the substrate through the (HL)^N stack gives
         Y = (n_h / n_l)^(2N) * ns, and R = ((n0 - Y) / (n0 + Y))^2.
+
+        Each layer contributes phase, trigonometric, admittance and complex multiply-
+        add roundings (16 per layer), then the output ratio and square take four.
         """
         wl0, n_h, n_l, ns, pairs = 550.0, 2.35, 1.38, 1.5, 6
         indices, thicknesses = [], []
@@ -58,15 +73,29 @@ class TestAnalyticAnchors:
         )
         admittance = (n_h / n_l) ** (2 * pairs) * ns
         expected_r_squared = ((1.0 - admittance) / (1.0 + admittance)) ** 2
-        np.testing.assert_allclose(jnp.abs(r[0]) ** 2, expected_r_squared, rtol=1e-8)
+        np.testing.assert_allclose(
+            jnp.abs(r[0]) ** 2,
+            expected_r_squared,
+            rtol=0,
+            atol=float(
+                ulps(16 * len(indices) + 4, r.real.dtype.type(expected_r_squared))
+            ),
+        )
 
     def test_energy_conservation_lossless(self):
-        """|r|^2 + (ns/n0)|t|^2 == 1 at every wavelength for real indices."""
+        """|r|^2 + (ns/n0)|t|^2 == 1 at every wavelength for real indices.
+
+        Budget 16 roundings per layer for phase and transfer matrix, then six for the
+        two intensity terms and their sum at unit incident power.
+        """
         r, t = multilayer_response(
             WL, [2.35, 1.38, 2.35], [60.0, 95.0, 60.0], n_substrate=1.5
         )
         np.testing.assert_allclose(
-            jnp.abs(r) ** 2 + 1.5 * jnp.abs(t) ** 2, 1.0, rtol=1e-10
+            jnp.abs(r) ** 2 + 1.5 * jnp.abs(t) ** 2,
+            1.0,
+            rtol=0,
+            atol=float(ulps(3 * 16 + 6, jnp.ones_like(r[0].real))),
         )
 
 
@@ -79,13 +108,20 @@ class TestSellmeier:
         np.testing.assert_allclose(n[0], 1.4585, atol=2e-4)
 
     def test_sellmeier_layer_composes(self):
-        """The intended data path: n(lambda) array feeding a layer index."""
+        """The intended data path: n(lambda) array feeding a layer index.
+
+        At unit incident power allow 16 operations for one transfer matrix and six
+        for the outgoing intensity sum.
+        """
         b = jnp.array([0.6961663, 0.4079426, 0.8974794])
         c = jnp.array([0.0684043**2, 0.1162414**2, 9.896161**2])
         n_layer = sellmeier(WL, b, c)  # (w,) array-valued layer index
         r, t = multilayer_response(WL, [n_layer], [100.0], n_substrate=1.5)
         np.testing.assert_allclose(
-            jnp.abs(r) ** 2 + 1.5 * jnp.abs(t) ** 2, 1.0, rtol=1e-10
+            jnp.abs(r) ** 2 + 1.5 * jnp.abs(t) ** 2,
+            1.0,
+            rtol=0,
+            atol=float(ulps(16 + 6, jnp.ones_like(r[0].real))),
         )
 
 
@@ -108,13 +144,22 @@ class TestThicknessKernel:
     def test_matched_slab_kernel_is_opd_law(self):
         """Sign + unit anchor tying the kernel to the OPD law: each nm of
         matched-slab thickness adds n nm of optical path, so
-        d(log t)/dd == +i 2 pi n / lambda exactly."""
+        d(log t)/dd == +i 2 pi n / lambda exactly.
+
+        The derivative and primal each traverse one layer of phase, matrix and
+        admittance operations, budgeted at 16 roundings per traversal.
+        """
         n = 1.5
         wl = jnp.linspace(500.0, 600.0, 3)
         kern = thickness_kernel(
             wl, [n], [100.0], layer=0, output="t", n_incident=n, n_substrate=n
         )
-        np.testing.assert_allclose(kern, 1j * 2.0 * jnp.pi * n / wl, rtol=1e-8)
+        np.testing.assert_allclose(
+            kern,
+            1j * 2.0 * jnp.pi * n / wl,
+            rtol=0,
+            atol=float(ulps(2 * 16, abs(kern).max())),
+        )
 
     def test_rejects_unknown_output(self):
         """output="R" (or any typo) must raise, not silently fall through to
@@ -138,6 +183,16 @@ class TestFeedsDispersiveScreen:
     def test_thickness_kernel_feeds_dispersive_screen(
         self, small_path, chromatic_field
     ):
+        """Analytic and autodiff fields each contract over both pupil axes, allowing two
+        pupil widths of roundoff at the peak derivative.
+
+        Interpolating the node allows four roundings for subtraction, slope,
+        multiplication and addition at the kernel scale.
+
+        Args:
+            small_path: Pupil stop and native-grid Fraunhofer propagation.
+            chromatic_field: Input field at three wavelengths.
+        """
         wavelengths = chromatic_field.spectrum.nodes_nm[0]
         kern = thickness_kernel(
             wavelengths, [2.35, 1.38], [60.0, 95.0], layer=0, n_substrate=1.5
@@ -161,7 +216,7 @@ class TestFeedsDispersiveScreen:
             np.asarray(screen.kernel_at(wavelengths))[0],
             np.asarray(kern),
             rtol=0,
-            atol=1e-12,
+            atol=float(ulps(4, abs(kern).max())),
         )
 
         path = OpticalPath(stages=(Stage("coating", screen), *small_path.stages))
@@ -181,5 +236,8 @@ class TestFeedsDispersiveScreen:
         jac = jax.jacfwd(run)(screen.command)  # (w, y, x, m)
         g_ad = jnp.moveaxis(jac, -1, 1)  # (w, m, y, x)
         np.testing.assert_allclose(
-            np.asarray(lin.G), np.asarray(g_ad), rtol=0, atol=1e-12
+            np.asarray(lin.G),
+            np.asarray(g_ad),
+            rtol=0,
+            atol=float(ulps(2 * grid.shape[0], abs(g_ad).max())),
         )

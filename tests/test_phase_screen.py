@@ -6,6 +6,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TEST_FRAME
+from hwoutils.testing import ulps
 from jax.test_util import check_grads
 from optixstuff.grids import PixelGrid
 from optixstuff.spectral import Band, Quadrature
@@ -34,14 +35,23 @@ def _pupil_field(npix, data=None):
 
 class TestPhaseScreen:
     def test_applies_the_opd_phasor(self):
+        """The unit phasor allows six roundings for scaling OPD by two pi, dividing by
+        wavelength and evaluating sine and cosine."""
         npix = 8
         grid = PixelGrid.pupil(npix)
         basis = eqx.tree_at(lambda b: b.coeffs, _basis(npix), jnp.array([1.0, -0.5]))
         out = PhaseScreen(basis, grid, wavelength_nm=WL)(_pupil_field(npix))
         expected = np.exp(1j * 2 * np.pi * np.asarray(basis.opd()) / WL)
-        np.testing.assert_allclose(np.asarray(out.data), expected, rtol=1e-12)
+        np.testing.assert_allclose(
+            np.asarray(out.data),
+            expected,
+            rtol=0,
+            atol=float(ulps(6, abs(out.data).max())),
+        )
 
     def test_chromatic_applies_per_wavelength_phase(self):
+        """The unit phasor allows six roundings for scaling OPD by two pi, dividing by
+        wavelength and evaluating sine and cosine."""
         npix = 8
         grid = PixelGrid.pupil(npix)
         basis = eqx.tree_at(lambda b: b.coeffs, _basis(npix), jnp.array([1.0, -0.5]))
@@ -55,7 +65,12 @@ class TestPhaseScreen:
         opd = np.asarray(basis.opd())
         for k, wl in enumerate(np.asarray(spectrum.nodes_nm[0])):
             expected = np.exp(1j * 2 * np.pi * opd / wl)
-            np.testing.assert_allclose(np.asarray(out.data[k]), expected, rtol=1e-12)
+            np.testing.assert_allclose(
+                np.asarray(out.data[k]),
+                expected,
+                rtol=0,
+                atol=float(ulps(6, abs(out.data).max())),
+            )
 
     def test_zero_command_is_identity(self):
         npix = 8
@@ -128,14 +143,19 @@ class TestSampledPhaseScreen:
         return jnp.asarray(40.0 * rng.standard_normal((self.NPIX, self.NPIX)))
 
     def test_phasor_matches_the_closed_form_and_phase_screen(self):
-        """Tolerance basis: exact-algebra against ``PhaseScreen`` (the same
-        expression on the same array); floating-point 1e-12 against NumPy."""
+        """The unit phasor allows six roundings for scaling OPD by two pi, dividing by
+        wavelength and evaluating sine and cosine."""
         grid = PixelGrid.pupil(self.NPIX)
         opd = self._opd()
         screen = SampledPhaseScreen(opd, grid).at_wavelength(WL)
         out = screen(_pupil_field(self.NPIX))
         expected = np.exp(2j * np.pi * np.asarray(opd) / WL)
-        np.testing.assert_allclose(np.asarray(out.data), expected, rtol=1e-12)
+        np.testing.assert_allclose(
+            np.asarray(out.data),
+            expected,
+            rtol=0,
+            atol=float(ulps(6, abs(out.data).max())),
+        )
         basis = ModeBasis(B=opd[None], coeffs=jnp.ones(1))
         ref = PhaseScreen(basis, grid, wavelength_nm=WL)(_pupil_field(self.NPIX))
         np.testing.assert_array_equal(np.asarray(out.data), np.asarray(ref.data))
@@ -148,6 +168,8 @@ class TestSampledPhaseScreen:
         np.testing.assert_allclose(np.asarray(out.data), 1j, atol=1e-12)
 
     def test_chromatic_field_converts_per_wavelength_without_binding(self):
+        """The unit phasor allows six roundings for scaling OPD by two pi, dividing by
+        wavelength and evaluating sine and cosine."""
         grid = PixelGrid.pupil(self.NPIX)
         opd = self._opd()
         spectrum = Quadrature.build(
@@ -159,7 +181,8 @@ class TestSampledPhaseScreen:
             np.testing.assert_allclose(
                 np.asarray(out.data[k]),
                 np.exp(2j * np.pi * np.asarray(opd) / wl),
-                rtol=1e-12,
+                rtol=0,
+                atol=float(ulps(6, abs(out.data).max())),
             )
 
     def test_unbound_monochromatic_use_raises(self):

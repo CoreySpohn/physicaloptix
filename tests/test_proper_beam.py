@@ -4,6 +4,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hwoutils.testing import ulps
 from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind
@@ -96,6 +97,9 @@ def _gaussian(n, dx, w):
 
 
 def test_ptp_matches_same_grid_fresnel():
+    """The two propagation paths each perform two 2D FFTs, six roundings per butterfly
+    per axis.
+    """
     n, d_pix, d = 64, 32.0, 0.01
     rng = np.random.default_rng(0)
     a = jnp.asarray(rng.standard_normal((n, n)) + 1j * rng.standard_normal((n, n)))
@@ -109,13 +113,18 @@ def test_ptp_matches_same_grid_fresnel():
         on_undersampled="record",
     )
     ref = fres.forward(Field(data=a, grid=grid, plane=PlaneKind.PUPIL)).data
-    assert jnp.max(jnp.abs(out - _corner(ref))) < 1e-12 * jnp.max(jnp.abs(ref))
+    assert jnp.max(jnp.abs(out - _corner(ref))) < float(
+        ulps(48 * int(np.ceil(np.log2(n))), jnp.max(jnp.abs(ref)))
+    )
 
 
 def test_ops_conserve_energy_and_invert():
+    """Two FFTs per hop allow six roundings per axis per stage. Squaring doubles the
+    field budget, then pixels sum pairwise.
+    """
     n, dx = 64, 0.01 / 32
     a = _corner(_gaussian(n, dx, 0.003))
-    e0 = float(jnp.sum(jnp.abs(a) ** 2))
+    e0 = jnp.sum(jnp.abs(a) ** 2)
     for op in (
         Op("ptp", 0.3, dx, True),
         Op("stw", 0.4, LAM * 0.4 / (n * dx), True),
@@ -123,9 +132,11 @@ def test_ops_conserve_energy_and_invert():
         Op("lens", 2.0, dx, True),
     ):
         e = float(jnp.sum(jnp.abs(run_ops(a, (op,), LAM)) ** 2))
-        assert e == pytest.approx(e0, rel=1e-13)
+        assert abs(e - e0) < float(ulps(50 * int(np.log2(n)) + 3, e0))
     back = run_ops(a, (Op("ptp", 0.3, dx, True), Op("ptp", -0.3, dx, True)), LAM)
-    assert jnp.max(jnp.abs(back - a)) < 1e-13
+    assert jnp.max(jnp.abs(back - a)) < float(
+        ulps(48 * int(np.ceil(np.log2(n))), jnp.max(jnp.abs(a)))
+    )
 
 
 def test_planned_focus_matches_gaussian_beam_optics():

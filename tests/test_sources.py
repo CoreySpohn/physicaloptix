@@ -13,6 +13,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TEST_FRAME
+from hwoutils.testing import ulps
 from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind
@@ -45,8 +46,8 @@ def _image(source, parity=(1, 1)):
 
 
 def test_tilt_is_the_plane_wave_of_the_physical_angle():
-    """Phase ramp ``exp(2j pi (theta / (lambda / D)) x)`` with x in pupil
-    diameters, from physical units. Floating-point tolerance, 1e-12."""
+    """Allow ten roundings at unit amplitude for angular conversion, the two-coordinate
+    dot product, phase scaling and complex exponential."""
     source = PointSource(jnp.asarray([0.021, -0.013]))
     field = source.entrance_field(_entrance(), WAVELENGTH_NM, DIAMETER_M)
     x = np.asarray(_grid_axis(_entrance().grid))
@@ -54,34 +55,49 @@ def test_tilt_is_the_plane_wave_of_the_physical_angle():
     py = -0.013 * ARCSEC_TO_RAD * DIAMETER_M / (WAVELENGTH_NM * NM_TO_M)
     ramp = np.exp(2j * np.pi * (px * x[None, :] + py * x[:, None]))
     np.testing.assert_allclose(
-        np.asarray(field.data), np.asarray(_entrance().data) * ramp, rtol=1e-12
+        np.asarray(field.data),
+        np.asarray(_entrance().data) * ramp,
+        rtol=0,
+        atol=float(ulps(10, abs(field.data).max())),
     )
 
 
 def test_source_at_plus_x_lands_m_columns_over():
     """A source m = 3 output samples (0.5 lambda/D each) toward +x displaces
     the image 3 columns toward larger column index; a sign error moves it the
-    other way. Compared on columns where both images are inside the grid."""
+    other way. Compared on columns where both images are inside the grid.
+
+    Two pupil-width Fourier sums and magnitude squared set the roundoff allowance at
+    peak intensity.
+    """
     m = 3
     on_axis = _image(PointSource(jnp.zeros(2)))
     shifted = _image(PointSource(jnp.asarray([m * 0.5 * LOD_ARCSEC, 0.0])))
     np.testing.assert_allclose(
-        shifted[:, m:], on_axis[:, :-m], rtol=0, atol=1e-10 * on_axis.max()
+        shifted[:, m:],
+        on_axis[:, :-m],
+        rtol=0,
+        atol=float(ulps(2 * NPUP + 2, on_axis.max())),
     )
 
 
 def test_source_at_plus_y_lands_on_plus_rows_and_parity_flips_it():
+    """Two pupil-width Fourier sums and magnitude squared set the roundoff allowance at
+    peak intensity."""
     m = 2
     on_axis = _image(PointSource(jnp.zeros(2)))
     source = PointSource(jnp.asarray([0.0, m * 0.5 * LOD_ARCSEC]))
     np.testing.assert_allclose(
-        _image(source)[m:], on_axis[:-m], rtol=0, atol=1e-10 * on_axis.max()
+        _image(source)[m:],
+        on_axis[:-m],
+        rtol=0,
+        atol=float(ulps(2 * NPUP + 2, on_axis.max())),
     )
     np.testing.assert_allclose(
         _image(source, parity=(1, -1))[:-m],
         on_axis[m:],
         rtol=0,
-        atol=1e-10 * on_axis.max(),
+        atol=float(ulps(2 * NPUP + 2, on_axis.max())),
     )
 
 

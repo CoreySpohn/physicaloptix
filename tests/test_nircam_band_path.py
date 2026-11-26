@@ -5,11 +5,7 @@ Truth sources and tolerance bases:
 - Identity with the per-node construction. With every seam at zero, the fold
   must reproduce ``nircam_band_image`` (the same stage arithmetic, one path
   per node) for a configuration with the focal mask, Lyot stop, an SI OPD
-  cube and an off-axis source. Eager evaluation is asserted bitwise
-  (exact-algebra: the same expressions on the same arrays; a zero Lyot shift
-  and zero offset screens are exact multiplications by one); the jitted fold
-  differs only by XLA fusion: measured 5e-15 relative, asserted at rtol 1e-13
-  (floating-point).
+  cube and an off-axis source. The two summation orders agree to roundoff.
 - Linearity of the node sum: the gradient of a shared leaf through the band
   equals the weight-summed gradients of the one-node bands (exact-algebra).
 - Checkpoint on and off are one computation: equal values and gradients.
@@ -27,6 +23,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 import scipy.special
+from hwoutils.numerics import eps
+from hwoutils.testing import ulps
 
 from physicaloptix.instruments import (
     BandLimitedRoundMask,
@@ -128,17 +126,24 @@ def _band(nodes=NODES_NM, weights=RAW_WEIGHTS, cube="default"):
 
 
 def test_zero_seam_band_equals_nircam_band_image():
+    """Use one rounding per pupil sample in each of the two Fourier sums.
+    Their peak sets the absolute scale for cancellation in faint samples.
+    """
     config, inputs, band = _config(), _inputs(), _band()
     reference = np.asarray(nircam_band_image(config, inputs, band).data)
     model, source = build_nircam_band(config, inputs, band)
     optical = model.image((source,))
     assert optical.reconstruction == "band_limited"
     eager = np.asarray(optical.data)
-    np.testing.assert_array_equal(eager, reference)
+    np.testing.assert_allclose(
+        eager, reference, atol=float(ulps(2 * NPUP, reference.max())), rtol=0
+    )
     assert reference.max() > 0.0
 
     jitted = np.asarray(eqx.filter_jit(lambda m, s: m.image((s,)).data)(model, source))
-    np.testing.assert_allclose(jitted, reference, rtol=1e-13, atol=0)
+    np.testing.assert_allclose(
+        jitted, reference, rtol=0, atol=float(ulps(2 * NPUP, reference.max()))
+    )
 
 
 @pytest.fixture(
@@ -156,9 +161,14 @@ def test_nircam_band_sums_independent_nodes_on_one_sky_grid(band_inputs):
     """Truth is the weighted sum of two independent NIRCam propagations.
 
     The node grids must coincide with the reported detector geometry
-    (1e-9 relative in angle, exact shape and center). The hand sum and
-    the band use float64 MFTs, with a 1e-12 relative floating-point
-    allowance. Doubling one camera pitch must prevent the sum.
+    (1e-9 relative in angle, exact shape and center). Doubling one camera pitch
+    must prevent the sum.
+
+    Use one rounding per pupil sample in each of the two Fourier sums.
+    Their peak sets the absolute scale for cancellation in faint samples.
+
+    Args:
+        band_inputs: Synthetic or exported NIRCam pupil inputs.
     """
     config = _config(ote_opd=False, focal_mask=False, lyot_stop=False, si_wfe=False)
     model, source = build_nircam_band(config, band_inputs, _band(cube=None))
@@ -179,7 +189,12 @@ def test_nircam_band_sums_independent_nodes_on_one_sky_grid(band_inputs):
         expected += (
             weight / sum(RAW_WEIGHTS) * np.asarray(field.intensity().integrated().data)
         )
-    np.testing.assert_allclose(image.data, expected, rtol=1e-12, atol=0)
+    np.testing.assert_allclose(
+        image.data,
+        expected,
+        rtol=0,
+        atol=float(ulps(2 * band_inputs.pupil_amplitude.shape[-1], image.data.max())),
+    )
 
     wide_path, _ = build_nircam(
         dataclasses.replace(node_config, pixel_scale_arcsec=2 * SCALE), band_inputs
@@ -210,7 +225,10 @@ def test_stage_names_and_zero_seams():
     assert not np.any(np.asarray(model.path.stage("ote_offset").opd_nm))
     assert not np.any(np.asarray(model.path.stage("si_offset").opd_nm))
     assert not np.any(np.asarray(model.path.stage("lyot_stop").shift_px))
-    np.testing.assert_array_equal(source.position_arcsec, [0.13, -0.07])
+    np.testing.assert_array_equal(
+        source.position_arcsec,
+        np.asarray([0.13, -0.07], dtype=source.position_arcsec.dtype),
+    )
 
 
 def test_optional_stages_follow_the_config_toggles():
@@ -251,6 +269,9 @@ def _probe():
 
 
 def test_shared_seam_gradient_is_the_sum_of_per_node_gradients():
+    """The gradient passes through forward and adjoint row and column Fourier sums
+    at two wavelengths; allow eight pupil-width sums at the peak gradient.
+    """
     weights = np.asarray(RAW_WEIGHTS) / np.sum(RAW_WEIGHTS)
     cube = _si_cube()
     config, inputs, probe = _config(), _inputs(), _probe()
@@ -273,12 +294,19 @@ def test_shared_seam_gradient_is_the_sum_of_per_node_gradients():
     ]
     for i in range(2):
         summed = sum(w * part[i] for w, part in zip(weights, parts, strict=True))
-        scale = float(jnp.max(jnp.abs(summed)))
+        scale = jnp.max(jnp.abs(summed))
         assert scale > 0.0
-        np.testing.assert_allclose(full[i], summed, rtol=0, atol=1e-10 * scale)
+        np.testing.assert_allclose(
+            full[i], summed, rtol=0, atol=float(ulps(8 * NPUP, scale))
+        )
 
 
 def test_checkpoint_on_and_off_agree_in_value_and_gradient():
+    """Allow two pupil-width sums for the primal row and column transforms.
+
+    Both wavelengths traverse the transforms again in the adjoint, giving
+    eight pupil-width sums at the peak gradient.
+    """
     config, inputs, probe = _config(), _inputs(), _probe()
     offset, shift = _seam_point()
     model, source = build_nircam_band(config, inputs, _band())
@@ -295,16 +323,24 @@ def test_checkpoint_on_and_off_agree_in_value_and_gradient():
 
     value_on, grads_on = run(True)
     value_off, grads_off = run(False)
-    np.testing.assert_allclose(value_on, value_off, rtol=1e-13, atol=0)
+    np.testing.assert_allclose(
+        value_on, value_off, rtol=2 * NPUP * eps(value_on.dtype), atol=0
+    )
     for g_on, g_off in zip(grads_on, grads_off, strict=True):
-        scale = float(jnp.max(jnp.abs(g_off)))
+        scale = jnp.max(jnp.abs(g_off))
         assert scale > 0.0
-        np.testing.assert_allclose(g_on, g_off, rtol=0, atol=1e-10 * scale)
+        np.testing.assert_allclose(
+            g_on, g_off, rtol=0, atol=float(ulps(8 * NPUP, scale))
+        )
 
 
 def test_detector_plus_y_lands_on_plus_rows():
     """No mask, no OPD: a y-asymmetric pupil image displaced by m output
-    samples toward +y moves m rows toward +row."""
+    samples toward +y moves m rows toward +row.
+
+    Use one rounding per pupil sample in each of the two Fourier sums.
+    Their peak sets the absolute scale for cancellation in faint samples.
+    """
     m = 3
     config = _config(ote_opd=False, focal_mask=False, lyot_stop=False, si_wfe=False)
     model, _ = build_nircam_band(config, _inputs(), _band(cube=None))
@@ -312,6 +348,6 @@ def test_detector_plus_y_lands_on_plus_rows():
     on_axis = np.asarray(model.image((PointSource([0.0, 0.0]),)).data)
     shifted = np.asarray(model.image((PointSource([0.0, m * pitch]),)).data)
     np.testing.assert_allclose(
-        shifted[m:], on_axis[:-m], rtol=0, atol=1e-10 * on_axis.max()
+        shifted[m:], on_axis[:-m], rtol=0, atol=float(ulps(2 * NPUP, on_axis.max()))
     )
     assert isinstance(model, PolychromaticPath)

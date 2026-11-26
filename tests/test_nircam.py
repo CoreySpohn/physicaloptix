@@ -14,9 +14,9 @@ Tolerances are floating-point floors: both sides of each comparison are
 exact finite sums of the same quadrature (or an exact integer-pixel Fourier
 shift), so the only difference is roundoff. Measured (x64): complex residual
 <= 8.3e-16 of the peak, shifted-intensity residual <= 1.4e-15 of the peak,
-energy error <= 3.7e-15. The 1e-10 floor fails every deliberate mutation
-tried (tilt not reflected, inversion dropped or on x, OPD sign or unit
-wrong at the reader, wavelength off by 0.1 percent, normalization dropped).
+energy error <= 3.7e-15. The double-precision calculation distinguishes every
+deliberate mutation tried (tilt not reflected, inversion dropped or on x, OPD sign or
+unit wrong at the reader, wavelength off by 0.1 percent, normalization dropped).
 """
 
 import hashlib
@@ -30,6 +30,8 @@ import pytest
 import scipy.special
 from astropy.io import fits
 from hwoutils.conversions import arcsec_to_rad
+from hwoutils.numerics import eps
+from hwoutils.testing import ulps
 
 from physicaloptix.core import PlaneKind
 from physicaloptix.instruments import (
@@ -48,7 +50,6 @@ DIAMETER_M = 6.5
 WAVELENGTH_NM = 3350.0
 PIXEL_SCALE_ARCSEC = 0.0624
 NPUP = 64
-FLOOR = 1e-10
 
 # (detector pixels, oversample): even output, odd output with oversampling,
 # odd output at detector sampling.
@@ -203,7 +204,16 @@ class TestIndependentFourierSum:
     def test_complex_field_matches_physical_unit_dft(self, det_npix, oversample):
         """Complex focal field (not intensity) against a direct sum in meters
         and radians: pins arcsec and nm units, signed off-axis position, the
-        y reflection, the OPD phase sign and the absolute scale together."""
+        y reflection, the OPD phase sign and the absolute scale together.
+
+        Use one rounding per pupil sample in each of the two Fourier sums.
+        The independent reference peak sets the absolute scale for cancellation
+        in faint samples.
+
+        Args:
+            det_npix: Detector pixels per axis.
+            oversample: Samples per detector pixel on each axis.
+        """
         amp = _asymmetric_pupil(NPUP)
         opd = _asymmetric_opd_nm(NPUP)
         source = (0.37, -0.21)
@@ -213,21 +223,37 @@ class TestIndependentFourierSum:
         )
         expected = _expected_field(amp, opd, det_npix, oversample, source)
         diff = np.abs(np.asarray(out.data) - expected).max()
-        assert diff <= FLOOR * np.abs(expected).max()
+        assert diff <= float(
+            ulps(2 * NPUP, np.abs(expected).max().astype(out.data.real.dtype))
+        )
 
     def test_no_opd_matches_flat_dft(self):
+        """Use one rounding per pupil sample in each of the two Fourier sums.
+        The independent reference peak sets the absolute scale for cancellation
+        in faint samples.
+        """
         amp = _asymmetric_pupil(NPUP)
         out, _ = _propagate(_config(15, 1, source=(-0.2, 0.45)), _inputs())
         expected = _expected_field(amp, np.zeros_like(amp), 15, 1, (-0.2, 0.45))
         diff = np.abs(np.asarray(out.data) - expected).max()
-        assert diff <= FLOOR * np.abs(expected).max()
+        assert diff <= float(
+            ulps(2 * NPUP, np.abs(expected).max().astype(out.data.real.dtype))
+        )
 
 
 class TestSignedDisplacement:
     @pytest.mark.parametrize(("det_npix", "oversample"), GRIDS)
     def test_source_offset_is_a_signed_pixel_shift(self, det_npix, oversample):
         """A source at (+3, -2) output samples images as the on-axis PSF
-        shifted by +3 columns and -2 rows (exact Fourier shift)."""
+        shifted by +3 columns and -2 rows (exact Fourier shift).
+
+        Use one rounding per pupil sample in each of the two Fourier sums.
+        Their peak sets the absolute scale for cancellation in faint samples.
+
+        Args:
+            det_npix: Detector pixels per axis.
+            oversample: Samples per detector pixel on each axis.
+        """
         step = PIXEL_SCALE_ARCSEC / oversample
         inputs = _inputs()
         on = _image(_config(det_npix, oversample), inputs)
@@ -236,14 +262,25 @@ class TestSignedDisplacement:
         )
         n = on.shape[0]
         np.testing.assert_allclose(
-            off[: n - 2, 3:], on[2:, : n - 3], rtol=0, atol=FLOOR * on.max()
+            off[: n - 2, 3:],
+            on[2:, : n - 3],
+            rtol=0,
+            atol=float(ulps(2 * NPUP, on.max())),
         )
 
     @pytest.mark.parametrize(("det_npix", "oversample"), GRIDS)
     def test_opd_ramp_moves_image_along_reflected_axes(self, det_npix, oversample):
         """A positive-path OPD ramp of +2 samples along entrance +x and +3
         along entrance +y moves the image +2 columns and -3 rows: +x maps to
-        +x, entrance +y reaches the detector as -y."""
+        +x, entrance +y reaches the detector as -y.
+
+        Use one rounding per pupil sample in each of the two Fourier sums.
+        Their peak sets the absolute scale for cancellation in faint samples.
+
+        Args:
+            det_npix: Detector pixels per axis.
+            oversample: Samples per detector pixel on each axis.
+        """
         step_rad = PIXEL_SCALE_ARCSEC / oversample * ARCSEC_TO_RAD
         x_m = _pupil_coords(NPUP) * DIAMETER_M
         xx, yy = np.meshgrid(x_m, x_m)
@@ -253,7 +290,10 @@ class TestSignedDisplacement:
         tilted = _image(config, _inputs(opd_nm=ramp_nm))
         n = flat.shape[0]
         np.testing.assert_allclose(
-            tilted[: n - 3, 2:], flat[3:, : n - 2], rtol=0, atol=FLOOR * flat.max()
+            tilted[: n - 3, 2:],
+            flat[3:, : n - 2],
+            rtol=0,
+            atol=float(ulps(2 * NPUP, flat.max())),
         )
 
 
@@ -268,7 +308,17 @@ class TestEnergy:
         """Entrance-pupil energy is one and, on a complete conjugate output
         grid (N du = npup), all of it reaches the focal field (Parseval),
         with an off-axis source and an OPD present. Energies are summed here
-        from the declared cell sizes, before any normalization of images."""
+        from the declared cell sizes, before any normalization of images.
+
+        The squared modulus, normalization, and pairwise energy sum fit within
+        two pupil rows of rounding steps.
+
+        Args:
+            npup: Samples per pupil axis.
+            det_npix: Detector pixels per axis.
+            oversample: Samples per detector pixel on each axis.
+            du_lod: Focal sample pitch in lambda/D.
+        """
         lod_arcsec = WAVELENGTH_NM * NM_TO_M / DIAMETER_M / ARCSEC_TO_RAD
         config = _config(
             det_npix,
@@ -282,8 +332,12 @@ class TestEnergy:
         )
         pupil_energy = np.sum(np.abs(np.asarray(taps["entrance_pupil"].data)) ** 2)
         focal_energy = np.sum(np.abs(np.asarray(out.data)) ** 2)
-        assert pupil_energy / npup**2 == pytest.approx(1.0, abs=1e-12)
-        assert focal_energy * du_lod**2 == pytest.approx(1.0, abs=1e-10)
+        assert pupil_energy / npup**2 == pytest.approx(
+            1.0, rel=2 * npup * eps(pupil_energy.dtype), abs=0
+        )
+        assert focal_energy * du_lod**2 == pytest.approx(
+            1.0, rel=2 * npup * eps(focal_energy.dtype), abs=0
+        )
 
 
 # --- STPSF-exported bundle reader ------------------------------------------
@@ -372,7 +426,16 @@ class TestFromBundle:
         a positive OPD increasing toward +x moves its image toward -x (the
         sign POPPY documents for its tilt). A +2-sample ramp in meters must
         therefore move this builder's image by -2 columns: pins the m -> nm
-        conversion and the sign reversal at the import boundary."""
+        conversion and the sign reversal at the import boundary.
+
+        Use one rounding per pupil sample in each of the two Fourier sums.
+        Their peak sets the absolute scale for cancellation in faint samples.
+        Two relative rounding steps cover the meter-to-nanometer conversion and
+        storage of the OPD.
+
+        Args:
+            tmp_path: Temporary directory for the generated files.
+        """
         step_rad = PIXEL_SCALE_ARCSEC / 2 * ARCSEC_TO_RAD
         x_m = _pupil_coords(NPUP) * DIAMETER_M
         xx, _ = np.meshgrid(x_m, x_m)
@@ -380,14 +443,20 @@ class TestFromBundle:
         amp = _asymmetric_pupil(NPUP)
         inputs = NIRCamInputs.from_bundle(_write_bundle(tmp_path, amp, ramp_m))
         np.testing.assert_allclose(
-            np.asarray(inputs.ote_opd_nm), -ramp_m / NM_TO_M, rtol=1e-15
+            np.asarray(inputs.ote_opd_nm),
+            -ramp_m / NM_TO_M,
+            rtol=2 * eps(inputs.ote_opd_nm.dtype),
+            atol=0,
         )
         config = _config(16, 2, ote_opd=True)
         flat = _image(config, _inputs(opd_nm=np.zeros_like(ramp_m)))
         tilted = _image(config, inputs)
         n = flat.shape[0]
         np.testing.assert_allclose(
-            tilted[:, : n - 2], flat[:, 2:], rtol=0, atol=FLOOR * flat.max()
+            tilted[:, : n - 2],
+            flat[:, 2:],
+            rtol=0,
+            atol=float(ulps(2 * NPUP, flat.max())),
         )
 
     def test_missing_file_fails_explicitly(self, tmp_path):
@@ -649,7 +718,16 @@ class TestUnityMask:
         """A unity focal mask returns the unperturbed pupil field on any
         mask-plane window, including a small stamp (8 lambda/D): the image
         equals the same path without a focal mask, Lyot stop on, OPD and an
-        off-axis source present."""
+        off-axis source present.
+
+        Use one rounding per pupil sample in each of the two Fourier sums.
+        Their peak sets the absolute scale for cancellation in faint samples.
+
+        Args:
+            extent_lod: Focal-mask window extent in lambda/D.
+            det_npix: Detector pixels per axis.
+            oversample: Samples per detector pixel on each axis.
+        """
         opd = _asymmetric_opd_nm(NPUP)
         source = (0.21, -0.13)
         inputs = _masked_inputs(mask=_UniformMask(1.0), opd_nm=opd)
@@ -671,11 +749,16 @@ class TestUnityMask:
             np.asarray(taps["focal_mask"].data),
             np.asarray(taps["inversion"].data),
             rtol=0,
-            atol=FLOOR * np.abs(np.asarray(taps["inversion"].data)).max(),
+            atol=float(
+                ulps(2 * NPUP, np.abs(np.asarray(taps["inversion"].data)).max())
+            ),
         )
         ref = np.asarray(reference.data)
         np.testing.assert_allclose(
-            np.asarray(masked.data), ref, rtol=0, atol=FLOOR * np.abs(ref).max()
+            np.asarray(masked.data),
+            ref,
+            rtol=0,
+            atol=float(ulps(2 * NPUP, np.abs(ref).max())),
         )
 
 
@@ -684,7 +767,16 @@ class TestKnownAttenuation:
     def test_half_amplitude_mask_passes_a_quarter_of_the_energy(self, mask_oversample):
         """A uniform 0.5 amplitude mask over the full band halves the field
         at the Lyot plane and passes 0.25 of the entrance-pupil energy, both
-        at the Lyot plane and on a complete conjugate output grid."""
+        at the Lyot plane and on a complete conjugate output grid.
+
+        Use one rounding per pupil sample in each of the two Fourier sums.
+        Their peak sets the absolute scale for cancellation in faint samples.
+        The squared modulus, normalization, and pairwise energy sum fit within
+        two pupil rows of rounding steps.
+
+        Args:
+            mask_oversample: Focal-mask samples per lambda/D.
+        """
         config = _config(
             64,
             1,
@@ -701,15 +793,19 @@ class TestKnownAttenuation:
         pre = np.asarray(taps["inversion"].data)
         post = np.asarray(taps["focal_mask"].data)
         np.testing.assert_allclose(
-            post, 0.5 * pre, rtol=0, atol=FLOOR * np.abs(pre).max()
+            post, 0.5 * pre, rtol=0, atol=float(ulps(2 * NPUP, np.abs(pre).max()))
         )
-        assert float(taps["focal_mask"].energy()) == pytest.approx(0.25, abs=1e-12)
+        assert float(taps["focal_mask"].energy()) == pytest.approx(
+            0.25, rel=2 * NPUP * eps(pre.dtype), abs=0
+        )
         mask_plane = mask_plane_field(
             build_nircam(config, _masked_inputs(mask=_UniformMask(0.5)))[0], taps
         )
-        assert float(mask_plane.energy()) == pytest.approx(0.25, abs=1e-12)
+        assert float(mask_plane.energy()) == pytest.approx(
+            0.25, rel=2 * NPUP * eps(pre.dtype), abs=0
+        )
         focal_energy = np.sum(np.abs(np.asarray(out.data)) ** 2) * out.grid.pixel_area
-        assert focal_energy == pytest.approx(0.25, abs=1e-10)
+        assert focal_energy == pytest.approx(0.25, rel=2 * NPUP * eps(pre.dtype), abs=0)
 
 
 class TestMaskSupport:
@@ -717,7 +813,11 @@ class TestMaskSupport:
         """COMPACT perturbation only (a regionless occulter, (M - 1) within
         0.6 arcsec = 5.6 lambda/D): every mask-plane window that contains it
         gives the full-band result; a window that cuts it (+-4 lambda/D) does
-        not. Masks with extended regions are covered by the next test."""
+        not. Masks with extended regions are covered by the next test.
+
+        Use one rounding per pupil sample in each of the two Fourier sums.
+        Their peak sets the absolute scale for cancellation in faint samples.
+        """
 
         def image(extent):
             config = _config(
@@ -734,7 +834,7 @@ class TestMaskSupport:
         full = image(None)
         for extent in (16.0, 24.0, 32.0):
             np.testing.assert_allclose(
-                image(extent), full, rtol=0, atol=FLOOR * full.max()
+                image(extent), full, rtol=0, atol=float(ulps(2 * NPUP, full.max()))
             )
         assert np.abs(image(8.0) - full).max() > 1e-3 * full.max()
 
@@ -746,7 +846,16 @@ class TestMaskSupport:
         independently, and (square DFT window, one sample per lambda/D, where
         Parseval is exact) the returned energy equals the post-mask
         mask-plane energy: the half-plane's light is removed. Every truncated
-        window keeps some of it."""
+        window keeps some of it.
+
+        Use one rounding per pupil sample in each of the two Fourier sums.
+        Their peak sets the absolute scale for cancellation in faint samples.
+        The squared modulus, normalization, and pairwise energy sum fit within
+        two pupil rows of rounding steps.
+
+        Args:
+            extent_lod: Focal-mask window extent in lambda/D.
+        """
         half_plane = ((None, None, 1.0, None, 0.0),)
         mask = _occulter(regions=half_plane)
         amp = _asymmetric_pupil(NPUP)
@@ -780,12 +889,15 @@ class TestMaskSupport:
         # samples): the direct-form reference is compared through them.
         out, _ = _propagate(_config(NPUP, 1, scale=LOD_ARCSEC, **common), inputs)
         np.testing.assert_allclose(
-            np.asarray(out.data), expected, rtol=0, atol=FLOOR * np.abs(expected).max()
+            np.asarray(out.data),
+            expected,
+            rtol=0,
+            atol=float(ulps(2 * NPUP, np.abs(out.data).max())),
         )
         path, _ = build_nircam(_config(16, 2, **common), inputs)
         post_mask_energy = float(mask_plane_field(path, full).energy())
         assert float(full["focal_mask"].energy()) == pytest.approx(
-            post_mask_energy, rel=1e-12
+            post_mask_energy, rel=2 * NPUP * eps(out.data.dtype), abs=0
         )
         truncated = lyot_field(extent_lod)
         e_full = float(full["focal_mask"].energy())
@@ -799,7 +911,16 @@ class TestMaskedIndependentFourierSum:
         sums in meters and radians: pins the mask pitch, extent, arcsec scale
         and orientation, Babinet == direct propagation on the full band, the
         Lyot and SI arrays in the exit-pupil frame, the SI support and the
-        post-mask OPD sign."""
+        post-mask OPD sign.
+
+        Use one rounding per pupil sample in each of the two Fourier sums.
+        The independent reference peak sets the absolute scale for cancellation
+        in faint samples.
+
+        Args:
+            det_npix: Detector pixels per axis.
+            oversample: Samples per detector pixel on each axis.
+        """
         amp = _asymmetric_pupil(NPUP)
         opd = _asymmetric_opd_nm(NPUP)
         lyot = _exit_lyot(NPUP)
@@ -836,7 +957,9 @@ class TestMaskedIndependentFourierSum:
             PIXEL_SCALE_ARCSEC,
         )
         diff = np.abs(np.asarray(out.data) - expected).max()
-        assert diff <= FLOOR * np.abs(expected).max()
+        assert diff <= float(
+            ulps(2 * NPUP, np.abs(expected).max().astype(out.data.real.dtype))
+        )
 
 
 class TestMaskDisplacement:
@@ -847,7 +970,11 @@ class TestMaskDisplacement:
         |M|^2 times the unmasked image at every sample: an off-center occulter
         with an asymmetric region is imaged where the mask prescription puts
         it, x right and y up, in arcsec, as an amplitude (not intensity)
-        transmission. Even output parity (32 samples)."""
+        transmission. Even output parity (32 samples).
+
+        Use one rounding per pupil sample in each of the two Fourier sums.
+        Their peak sets the absolute scale for cancellation in faint samples.
+        """
         center = (0.3, -0.2)
         mask = _occulter(center_arcsec=center, regions=BOX_REGION)
         scale = _scale_for_pitch(2, 1.0)
@@ -865,7 +992,7 @@ class TestMaskDisplacement:
             regions=BOX_REGION,
         )
         np.testing.assert_allclose(
-            masked, m**2 * unmasked, rtol=0, atol=FLOOR * unmasked.max()
+            masked, m**2 * unmasked, rtol=0, atol=float(ulps(2 * NPUP, unmasked.max()))
         )
         assert m.min() < 0.1  # the occulter core lies inside the output field
         assert np.any(m == 0.3)  # and so does part of the box region
@@ -875,7 +1002,15 @@ class TestMaskDisplacement:
         """Moving the source by s under a fixed occulter gives the image of a
         centered source with the occulter moved by -s, shifted by +s: here
         s = (+3, -2) samples, with the Lyot stop in, so the occulted image
-        moves consistently and with the correct sign."""
+        moves consistently and with the correct sign.
+
+        Use one rounding per pupil sample in each of the two Fourier sums.
+        Their peak sets the absolute scale for cancellation in faint samples.
+
+        Args:
+            det_npix: Detector pixels per axis.
+            oversample: Samples per detector pixel on each axis.
+        """
         pitch = 0.5
         scale = _scale_for_pitch(oversample, pitch)
         step = pitch * LOD_ARCSEC
@@ -898,7 +1033,7 @@ class TestMaskDisplacement:
             moved_source[: n - 2, 3:],
             moved_mask[2:, : n - 3],
             rtol=0,
-            atol=FLOOR * moved_source.max(),
+            atol=float(ulps(2 * NPUP, moved_source.max())),
         )
 
 
@@ -928,16 +1063,26 @@ class TestPrePostMaskOPD:
 
     def test_same_opd_either_side_of_a_unity_mask_is_identical(self):
         """The same physical OPD (reflected into the exit frame) placed
-        before or after a unity focal mask gives the same complex field."""
+        before or after a unity focal mask gives the same complex field.
+
+        Use one rounding per pupil sample in each of the two Fourier sums.
+        Their peak sets the absolute scale for cancellation in faint samples.
+        """
         pre, post, _ = self._pair(_UniformMask(1.0))
-        np.testing.assert_allclose(post, pre, rtol=0, atol=FLOOR * np.abs(pre).max())
+        np.testing.assert_allclose(
+            post, pre, rtol=0, atol=float(ulps(2 * NPUP, np.abs(pre).max()))
+        )
 
     def test_pre_and_post_mask_opd_differ_with_an_occulter(self):
         """With the occulter in, the pre-mask OPD scatters light past it and
         the post-mask OPD only reshapes what the stop passes: the images
         differ, and on a complete output grid the post-mask OPD leaves the
-        transmitted energy unchanged (floor 1e-10) while the pre-mask OPD
-        changes it (measured 1e-2 here; bound 1e-3)."""
+        transmitted energy unchanged while the pre-mask OPD
+        changes it (measured 1e-2 here; bound 1e-3).
+
+        The squared modulus, normalization, and pairwise energy sum fit within
+        two pupil rows of rounding steps.
+        """
         pre, post, _ = self._pair(_occulter())
         pre_i, post_i = np.abs(pre) ** 2, np.abs(post) ** 2
         assert np.abs(pre_i - post_i).max() > 0.05 * pre_i.max()
@@ -945,7 +1090,7 @@ class TestPrePostMaskOPD:
             _occulter(), det_npix=64, oversample=1, scale=_scale_for_pitch(1, 1.0)
         )
         e_pre, e_post, e_none = (np.sum(np.abs(f) ** 2) for f in (pre, post, none))
-        assert e_post == pytest.approx(e_none, rel=1e-10)
+        assert e_post == pytest.approx(e_none, rel=2 * NPUP * eps(post.dtype), abs=0)
         assert abs(e_pre - e_none) > 1e-3 * e_none
 
 
@@ -1092,12 +1237,21 @@ def _write_masked_bundle(directory, *, si_opd_m=None, sampled_mask=None):
 
 class TestFromBundleMasked:
     def test_reads_mask_lyot_and_si(self, tmp_path):
+        """Two relative rounding steps cover the meter-to-nanometer conversion and
+        storage of the OPD.
+
+        Args:
+            tmp_path: Temporary directory for the generated files.
+        """
         inputs = NIRCamInputs.from_bundle(_write_masked_bundle(tmp_path))
         np.testing.assert_array_equal(
             np.asarray(inputs.lyot_amplitude), _exit_lyot(NPUP)
         )
         np.testing.assert_allclose(
-            np.asarray(inputs.si_opd_nm), -_exit_si_opd_nm(NPUP), rtol=1e-14, atol=1e-12
+            np.asarray(inputs.si_opd_nm),
+            -_exit_si_opd_nm(NPUP),
+            rtol=2 * eps(inputs.si_opd_nm.dtype),
+            atol=0,
         )
         np.testing.assert_array_equal(
             np.asarray(inputs.si_support), _exit_support(NPUP)
@@ -1123,7 +1277,14 @@ class TestFromBundleMasked:
         """STPSF's SI OPD sits after the inversion: a positive STPSF OPD ramp
         of +2 samples toward +x and +3 toward +y (exit frame, meters) moves
         the image by -2 columns and -3 rows. Pins the SI sign reversal, the
-        m -> nm factor and the absence of a reflection after the mask."""
+        m -> nm factor and the absence of a reflection after the mask.
+
+        Use one rounding per pupil sample in each of the two Fourier sums.
+        Their peak sets the absolute scale for cancellation in faint samples.
+
+        Args:
+            tmp_path: Temporary directory for the generated files.
+        """
         step_rad = PIXEL_SCALE_ARCSEC / 2 * ARCSEC_TO_RAD
         x_m = _pupil_coords(NPUP) * DIAMETER_M
         xx, yy = np.meshgrid(x_m, x_m)
@@ -1145,7 +1306,10 @@ class TestFromBundleMasked:
         tilted = _image(config, ones_inputs)
         n = flat.shape[0]
         np.testing.assert_allclose(
-            tilted[: n - 3, : n - 2], flat[3:, 2:], rtol=0, atol=FLOOR * flat.max()
+            tilted[: n - 3, : n - 2],
+            flat[3:, 2:],
+            rtol=0,
+            atol=float(ulps(2 * NPUP, flat.max())),
         )
 
 
@@ -1184,10 +1348,16 @@ class TestFullBandFFT:
     oversample 2 or 3. Measured (x64): relative residuals <= 7e-15.
     """
 
-    TOL = 1e-12
-
     @pytest.mark.parametrize(("npup", "mask_oversample"), [(15, 3), (16, 2)])
     def test_band_image_and_gradient_match_the_mft(self, npup, mask_oversample):
+        """The forward and reverse transforms each sum two axes on the oversampled
+        mask grid.
+        The adjoint traverses the same two transform pairs again in reverse.
+
+        Args:
+            npup: Samples per pupil axis.
+            mask_oversample: Focal-mask samples per lambda/D.
+        """
         inputs = _fft_inputs(npup)
         cfg_fft, cfg_mft = _fft_mft_configs(npup, mask_oversample)
         band = NIRCamBand(wavelengths_nm=(3200.0, 3500.0), weights=(1.0, 2.0))
@@ -1196,7 +1366,10 @@ class TestFullBandFFT:
             for cfg in (cfg_fft, cfg_mft)
         ]
         np.testing.assert_allclose(
-            images[0], images[1], rtol=0, atol=self.TOL * images[1].max()
+            images[0],
+            images[1],
+            rtol=0,
+            atol=float(ulps(4 * npup * mask_oversample, images[1].max())),
         )
         weight = jnp.asarray(
             np.random.default_rng(0).uniform(0.5, 1.5, images[0].shape)
@@ -1214,7 +1387,10 @@ class TestFullBandFFT:
         ]
         assert np.abs(grads[1]).max() > 0
         np.testing.assert_allclose(
-            grads[0], grads[1], rtol=0, atol=1e-10 * np.abs(grads[1]).max()
+            grads[0],
+            grads[1],
+            rtol=0,
+            atol=float(ulps(8 * npup * mask_oversample, np.abs(grads[1]).max())),
         )
 
     def test_auto_picks_fft_on_the_full_band_and_mft_on_a_window(self):

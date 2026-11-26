@@ -1,5 +1,6 @@
 """Tests for AnalyticSpeckleField (the linear generator as an optixstuff field)."""
 
+from dataclasses import replace
 from typing import ClassVar
 
 import jax
@@ -8,14 +9,20 @@ import numpy as np
 import optixstuff as ox
 import pytest
 from conftest import TEST_FRAME, analytic_from_density, speckle_grid
-from hwoutils.constants import s2d
+from hwoutils.constants import d2s, s2d
+from hwoutils.testing import precision_pair, ulps
 from optixstuff import FocalResponse
 from optixstuff.grids import Measure
+from scipy.integrate import quad
 
 from physicaloptix import AnalyticSpeckleField
+from physicaloptix.core import Field
 from physicaloptix.core.grid import _grid_axis
-from physicaloptix.linearize import linearize, perturbed_map
-from physicaloptix.speckle import SpeckleProcess, ou_exposure_neff
+from physicaloptix.linearize import linearize
+from physicaloptix.speckle import (
+    SpeckleProcess,
+    ou_exposure_neff,
+)
 
 _DIMS, _M, _F = 8, 3, 4
 _EPOCH_D = 0.0
@@ -380,7 +387,11 @@ class TestTemporalKernel:
     def test_line_weights_carry_the_grid_spacing(self):
         """Trapezoid weighting multiplies the ordinate by trapezoid widths, which on
         a log grid grow with f -- so the two weightings differ by a factor
-        proportional to f, not by a constant."""
+        proportional to f, not by a constant. Floating-point: multiplying and
+        dividing by the PSD and forming the midpoint need four roundings.
+        In logspace, endpoint arithmetic and base-ten exponentiation can
+        perturb each log coordinate by four eps at its exponent scale.
+        """
         proc = _small_process(knee_hz=self.KNEE)
         f = np.asarray(proc.frequencies_hz())
         ratio = np.asarray(proc.line_weights()[0]) / np.asarray(proc.psd(f))
@@ -388,15 +399,17 @@ class TestTemporalKernel:
         # The ratio IS df_j: the independently computed trapezoid widths.
         half = 0.5 * np.diff(f)
         df = np.concatenate([[half[0]], half[1:] + half[:-1], [half[-1]]])
-        assert np.allclose(ratio, df, rtol=1e-9)
+        np.testing.assert_allclose(ratio, df, rtol=ulps(4, f.dtype.type(1)), atol=0)
         # On a log grid those widths are proportional to f in the interior,
         # so the two weightings differ by a factor that grows across the
         # band rather than by a constant.
-        interior = slice(1, -1)
-        assert np.allclose(
-            ratio[interior] / f[interior],
-            ratio[len(f) // 2] / f[len(f) // 2],
-            rtol=1e-6,
+        log_step = np.log(f[-1] / f[0]) / (len(f) - 1)
+        expected = np.sinh(log_step)
+        # A perturbation to log(f) is a relative perturbation to f;
+        # the subtraction in df/f has absolute error on that scale.
+        log_scale = f.dtype.type(max(1.0, np.max(np.abs(np.log(f)))))
+        np.testing.assert_allclose(
+            ratio[1:-1] / f[1:-1], expected, rtol=0, atol=ulps(8, log_scale)
         )
 
     def test_per_mode_grids_get_per_mode_kernels(self):
@@ -838,6 +851,9 @@ class TestTelescopePeak:
     """Anchor against an independent numpy DFT (sign- and scale-visible)."""
 
     def test_matches_brute_force_dft(self):
+        """Floating-point: two length-N complex dot products (four real
+        roundings per term) and the final squared modulus at peak intensity.
+        """
         from optixstuff.grids import PixelGrid
 
         from physicaloptix import telescope_peak
@@ -860,7 +876,12 @@ class TestTelescopePeak:
         e = kernel @ disk @ kernel.T * pupil_grid.step**2
         expected = float((np.abs(e) ** 2).max())
         got = telescope_peak(field, focal_grid)
-        np.testing.assert_allclose(got, expected, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(
+            got,
+            expected,
+            rtol=0,
+            atol=ulps(8 * npup + 3, field.data.real.dtype.type(expected)),
+        )
 
 
 # input_energy = norm * du^2 makes the derived normalization equal `norm`
@@ -871,6 +892,9 @@ _UNIT_E_IN = 0.25**2
 class TestChromaticProcess:
     def test_interpolated_sensitivity_is_used_as_given(self):
         """Linear interpolation gives G=3 (exact-algebra halo of 9).
+
+        Floating-point: eight roundings for interpolation, amplitude
+        conversion, multiplication, squared norm and division.
 
         Fails if a frozen node carries an OPD law or precompensates G.
         """
@@ -892,7 +916,7 @@ class TestChromaticProcess:
         node = process.draw(jax.random.PRNGKey(0)).at_wavelength(1000.0)
         coeff = node.coefficients(elapsed_s=0.0)[0]
         halo = node.realize(wavelength_nm=jnp.array([500.0, 1000.0])).data / coeff**2
-        np.testing.assert_allclose(halo, 9.0, rtol=8 * np.finfo(float).eps, atol=0)
+        np.testing.assert_allclose(halo, 9.0, rtol=0, atol=ulps(8, halo.dtype.type(9)))
 
     def test_draw_interpolates_complex_amplitudes(self):
         """Chromatic draw passes wavelengths through, and realize uses the
@@ -1112,14 +1136,19 @@ class TestSeamIdentity:
             coherent=True,
             wavelengths_nm=wavelengths,
         )
-        run = perturbed_map(
-            small_path,
-            chromatic_field,
-            opd_basis,
-            float(wavelengths[0]),
-            wavelengths_nm=wavelengths,
+        # A linear path propagates the nonlinear pupil increment by itself.
+        # expm1 retains the small signal before it meets the nominal field.
+        opd = jnp.einsum("m,myx->yx", eps, opd_basis.B)
+        phase = 2j * jnp.pi * opd / wavelengths[:, None, None]
+        increment, _ = small_path.propagate(
+            Field(
+                chromatic_field.data * jnp.expm1(phase),
+                chromatic_field.grid,
+                chromatic_field.plane,
+                chromatic_field.spectrum,
+            )
         )
-        exact = run(eps)  # (w, y, x) complex
+        nominal, _ = small_path.propagate(chromatic_field)
         du2 = lin.grid.step**2
         e_in = np.asarray(
             jnp.broadcast_to(jnp.asarray(lin.input_energy), wavelengths.shape)
@@ -1127,7 +1156,12 @@ class TestSeamIdentity:
         for w, wl in enumerate(wavelengths):
             delta = field.realize(wavelength_nm=float(wl), elapsed_s=0.0).data
             direct = (
-                (jnp.abs(exact[w]) ** 2 - jnp.abs(lin.e_nom[w]) ** 2) * du2 / e_in[w]
+                (
+                    2 * jnp.real(jnp.conj(nominal.data[w]) * increment.data[w])
+                    + jnp.abs(increment.data[w]) ** 2
+                )
+                * du2
+                / e_in[w]
             )
             np.testing.assert_allclose(
                 delta, direct, atol=5e-3 * float(jnp.max(jnp.abs(direct)))
@@ -1169,10 +1203,14 @@ class TestCrossBandMoments:
     def test_diagonal_matches_moments(self, coherent, renormalized):
         """Band-diagonal blocks reproduce the per-channel monochromatic moments.
 
-        This ties every einsum (kernels, heterodyne, kurtosis correction,
-        normalization) to the shipped single-band implementation; a transposed
-        axis, a dropped conjugate, or a wrong normalization broadcast all fail
-        it at machine precision.
+        Kernels budget two paths of two products, the complex dot and pixel
+        conversion. Variance adds the squares, heterodyne, normalization and
+        optional kurtosis. Use Gamma for kernel cancellation and the sum of
+        absolute variance terms for covariance cancellation.
+
+        Args:
+            coherent: Include the nominal-field cross term.
+            renormalized: Include the per-draw RMS correction.
         """
         proc = _chromatic_process(coherent)
         cbm = proc.cross_band_moments(renormalized=renormalized)
@@ -1190,30 +1228,27 @@ class TestCrossBandMoments:
                 proc.knee_hz,
                 coherent=coherent,
             ).moments(renormalized=renormalized)
-            np.testing.assert_allclose(
-                np.asarray(cbm.mean_map[i]),
-                np.asarray(mono.mean_map),
-                rtol=1e-12,
-                atol=0,
-            )
-            np.testing.assert_allclose(
-                np.asarray(cbm.cov_map[i, i]),
-                np.asarray(mono.var_map),
-                rtol=1e-12,
-                atol=0,
-            )
-            np.testing.assert_allclose(
-                np.asarray(cbm.gamma_pixel_map[i, i]),
-                np.asarray(mono.gamma_pixel_map),
-                rtol=1e-12,
-                atol=0,
-            )
-            np.testing.assert_allclose(
-                np.asarray(cbm.p_pixel_map[i, i]),
-                np.asarray(mono.p_pixel_map),
-                rtol=1e-12,
-                atol=0,
-            )
+            gamma = mono.gamma_pixel_map
+            e_pixel, g_pixel = proc.response.per_pixel()
+            norm = proc.response.input_energy
+            m = g_pixel.shape[1]
+            var_scale = 2 * gamma**2
+            if coherent:
+                var_scale += 4 * jnp.abs(e_pixel[i]) ** 2 * gamma
+            if renormalized:
+                # The excess kurtosis of a fixed-length projection is >= -2.
+                var_scale += 2 * gamma**2
+            for actual, expected, tolerance in (
+                (cbm.mean_map[i], mono.mean_map, ulps(2 * (m + 6), mono.mean_map)),
+                (
+                    cbm.cov_map[i, i],
+                    mono.var_map,
+                    ulps(2 * (2 * m + 18), var_scale / norm**2),
+                ),
+                (cbm.gamma_pixel_map[i, i], gamma, ulps(2 * (2 * m + 6), gamma)),
+                (cbm.p_pixel_map[i, i], mono.p_pixel_map, ulps(2 * (2 * m + 6), gamma)),
+            ):
+                assert np.all(np.abs(actual - expected) <= tolerance)
 
     def test_covariance_matches_monte_carlo(self):
         """Genuine ensemble test through the shipped draw/realize path,
@@ -1276,8 +1311,11 @@ class TestCrossBandMoments:
         assert rel.max() > 0.1  # the dropped term is a >10% effect somewhere
 
     def test_achromatic_channels_are_perfectly_correlated(self):
-        """lambda-scaled stacks + zero offset: every band pair has correlation
-        exactly 1 (the achromatic limit is an equality, not an approximation)."""
+        """Lambda-scaled, zero-offset channels have unit correlation.
+
+        Budget two complex mode sums, their squared norms, and the two
+        square roots, product and division at unit correlation.
+        """
         _, m, ny, nx = 3, 4, 1, 12
         key = jax.random.PRNGKey(3)
         g0 = jax.random.normal(key, (m, ny, nx, 2)) @ jnp.array([1.0, 1j])
@@ -1300,62 +1338,66 @@ class TestCrossBandMoments:
         cov = proc.cross_band_moments().cov_map
         d = jnp.sqrt(jnp.einsum("iiyx->iyx", cov))
         rho = cov / (d[:, None] * d[None, :])
-        np.testing.assert_allclose(np.asarray(rho), 1.0, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(
+            rho, 1.0, rtol=0, atol=ulps(4 * m + 12, rho.dtype.type(1))
+        )
 
     def test_two_time_kernels_use_the_synthesis_autocorrelation(self):
-        """With one shared knee, the lagged kernels are the equal-time kernels
-        times rho(tau) -- pins the kernel-slot wiring to autocorrelation()."""
+        """Lag multiplies the kernels by the shared autocorrelation.
+
+        Both complex contractions budget two component operations per mode,
+        pixel scaling and lag multiplication at the uncancelled kernel scale
+        sqrt(Gamma_ii * Gamma_jj). Mean intensity is lag-independent.
+        """
         proc = _chromatic_process(coherent=True)
         tau = 300.0
         r = float(np.asarray(proc.autocorrelation(tau))[0])
         cbm_0 = proc.cross_band_moments()
         cbm_t = proc.cross_band_moments(tau_s=tau)
-        np.testing.assert_allclose(
-            np.asarray(cbm_t.gamma_pixel_map),
-            r * np.asarray(cbm_0.gamma_pixel_map),
-            rtol=1e-12,
-            atol=1e-15,
-        )
-        np.testing.assert_allclose(
-            np.asarray(cbm_t.p_pixel_map),
-            r * np.asarray(cbm_0.p_pixel_map),
-            rtol=1e-12,
-            atol=1e-15,
-        )
-        np.testing.assert_allclose(  # the mean is time-independent
-            np.asarray(cbm_t.mean_map),
-            np.asarray(cbm_0.mean_map),
-            rtol=1e-12,
-            atol=0,
-        )
+        diag = np.real(np.einsum("iiyx->iyx", np.asarray(cbm_0.gamma_pixel_map)))
+        scale = np.sqrt(diag[:, None] * diag[None, :]) * abs(r)
+        n_ops = 2 * (2 * proc.per_mode_rms.size + 6)
+        for lagged, instant in (
+            (cbm_t.gamma_pixel_map, cbm_0.gamma_pixel_map),
+            (cbm_t.p_pixel_map, cbm_0.p_pixel_map),
+        ):
+            assert np.all(
+                np.abs(np.asarray(lagged) - r * np.asarray(instant))
+                <= ulps(n_ops, scale)
+            )
+        np.testing.assert_array_equal(cbm_t.mean_map, cbm_0.mean_map)
 
     def test_mask_reductions(self):
+        """Allow six selected-pixel additions and a division per reduction."""
         proc = _chromatic_process(coherent=True)
         mask = jnp.zeros((1, 12), dtype=bool).at[0, :6].set(True)
         cbm = proc.cross_band_moments(mask=mask)
-        np.testing.assert_allclose(
-            np.asarray(cbm.annulus_cov),
-            np.asarray(cbm.cov_map[..., 0, :6].mean(axis=-1)),
-            rtol=1e-12,
-            atol=0,
-        )
-        np.testing.assert_allclose(
-            np.asarray(cbm.annulus_mean),
-            np.asarray(cbm.mean_map[:, 0, :6].mean(axis=-1)),
-            rtol=1e-12,
-            atol=0,
-        )
+        for actual, selected in (
+            (cbm.annulus_cov, cbm.cov_map[..., 0, :6]),
+            (cbm.annulus_mean, cbm.mean_map[:, 0, :6]),
+        ):
+            scale = jnp.abs(selected).mean(-1)
+            assert np.all(
+                np.abs(actual - selected.mean(-1)) <= ulps(2 * (6 + 1), scale)
+            )
         assert proc.cross_band_moments().annulus_cov is None
 
     def test_jit_compatible(self):
+        """Budget both covariance sums and heterodyne at their absolute scale.
+
+        Each route has two complex terms per mode and 14 scalar or
+        component roundings for weighting, squares, scaling and summation.
+        """
         proc = _chromatic_process(coherent=True)
         jitted = jax.jit(lambda p: p.cross_band_moments().cov_map)
-        np.testing.assert_allclose(
-            np.asarray(jitted(proc)),
-            np.asarray(proc.cross_band_moments().cov_map),
-            rtol=1e-12,
-            atol=0,
-        )
+        cbm = proc.cross_band_moments()
+        gamma = np.real(np.einsum("iiyx->iyx", np.asarray(cbm.gamma_pixel_map)))
+        bound = np.sqrt(gamma[:, None] * gamma[None, :])
+        e, _ = proc.response.per_pixel()
+        norm = proc.response.input_energy
+        scale = (2 * bound**2 + 4 * np.abs(e[:, None] * e[None, :]) * bound) / norm**2
+        n_ops = 2 * (2 * proc.per_mode_rms.size + 14)
+        assert np.all(np.abs(jitted(proc) - cbm.cov_map) <= ulps(n_ops, scale))
 
     def test_guards(self):
         w, m, ny, nx = 3, 4, 1, 12
@@ -1388,14 +1430,20 @@ class TestCrossBandViews:
     _WLS = (500.0, 550.0, 600.0)
 
     def test_correlation_is_unit_diagonal_and_bounded(self):
+        """Two roots, their product and division round at unit correlation."""
         cbm = _chromatic_process(coherent=True).cross_band_moments()
         rho = np.asarray(cbm.correlation())
-        np.testing.assert_allclose(np.einsum("iiyx->iyx", rho), 1.0, rtol=0, atol=1e-12)
-        assert np.all(np.abs(rho) <= 1.0 + 1e-12)
+        atol = ulps(4, rho.dtype.type(1))
+        np.testing.assert_allclose(np.einsum("iiyx->iyx", rho), 1.0, rtol=0, atol=atol)
+        assert np.all(np.abs(rho) <= 1.0 + atol)
         assert not np.allclose(rho, 1.0)  # chromatic G genuinely decorrelates
 
     def test_n_eff_is_one_in_the_achromatic_limit(self):
-        """Perfectly correlated channels carry exactly one independent look."""
+        """Perfectly correlated channels carry one independent look.
+
+        Count the mode products and sums twice for squared covariance,
+        then the trace, band-pair reduction, squares and division at one.
+        """
         _, m, ny, nx = 3, 4, 1, 12
         key = jax.random.PRNGKey(3)
         g0 = jax.random.normal(key, (m, ny, nx, 2)) @ jnp.array([1.0, 1j])
@@ -1416,7 +1464,10 @@ class TestCrossBandViews:
             wavelengths_nm=jnp.array(self._WLS),
         )
         n_eff = np.asarray(proc.cross_band_moments().n_eff())
-        np.testing.assert_allclose(n_eff, 1.0, rtol=0, atol=1e-12)
+        n_ops = 4 * m + 2 * len(self._WLS) ** 2 + 8
+        np.testing.assert_allclose(
+            n_eff, 1.0, rtol=0, atol=ulps(n_ops, n_eff.dtype.type(1))
+        )
 
     def test_n_eff_between_one_and_w_for_chromatic(self):
         n_eff = np.asarray(
@@ -1427,14 +1478,21 @@ class TestCrossBandViews:
         assert n_eff.max() > 1.01  # genuinely more than one look somewhere
 
     def test_impropriety_matches_kernels(self):
+        """Allow magnitude, norm product, square root and division per path.
+
+        The kernel calculation adds two complex terms per mode and two
+        multiplications to the unit Cauchy-Schwarz bound.
+        """
         cbm = _chromatic_process(coherent=True).cross_band_moments()
         eta = np.asarray(cbm.impropriety())
         g = np.real(np.einsum("iiyx->iyx", np.asarray(cbm.gamma_pixel_map)))
         expected = np.abs(np.asarray(cbm.p_pixel_map)) / np.sqrt(
             g[:, None] * g[None, :]
         )
-        np.testing.assert_allclose(eta, expected, rtol=1e-12, atol=0)
-        assert np.all(eta <= 1.0 + 1e-12)  # cross-band Cauchy-Schwarz
+        np.testing.assert_allclose(
+            eta, expected, rtol=ulps(12, eta.dtype.type(1)), atol=0
+        )
+        assert np.all(eta <= 1.0 + ulps(2 * (2 * 4 + 2) + 6, eta.dtype.type(1)))
 
     def test_views_reject_two_time_containers(self):
         cbm = _chromatic_process(coherent=True).cross_band_moments(tau_s=50.0)
@@ -1455,16 +1513,42 @@ class TestCrossBandViews:
             )
 
     def test_joint_covariance_blocks_match_per_pixel_maps_at_nonzero_tau(self):
-        """Same coincident-pixel identity at a nonzero lag -- pins the two-time
-        damping into joint_covariance rather than a hardcoded tau_s=0 path."""
+        """The lagged blocks agree for host and float32 lags, eager and JIT.
+
+        Compare coincident-pixel kernels with two mode sums and fourteen
+        weighting, product, square and normalization operations per route
+        at the absolute sum of the variance terms.
+        """
         proc = _chromatic_process(coherent=True)
-        mask = jnp.zeros((1, 12), dtype=bool).at[0, 2:7].set(True)
-        joint = np.asarray(proc.joint_covariance(mask, tau_s=50.0))  # (w, 5, w, 5)
-        cov_map = np.asarray(proc.cross_band_moments(tau_s=50.0).cov_map)
-        for sel, pix in enumerate(range(2, 7)):
-            np.testing.assert_allclose(
-                joint[:, sel, :, sel], cov_map[:, :, 0, pix], rtol=1e-12, atol=0
+        pixels = np.arange(2, 7)
+        mask = np.zeros((1, 12), dtype=bool)
+        mask[0, pixels] = True
+        tau = jnp.asarray(50.0, dtype=jnp.float32)
+
+        def joint(lag):
+            return proc.joint_covariance(mask, tau_s=lag)
+
+        cbm = proc.cross_band_moments(tau_s=tau)
+        host = proc.cross_band_moments(tau_s=50.0)
+        np.testing.assert_array_equal(cbm.cov_map, host.cov_map)
+        gamma = np.real(
+            np.einsum(
+                "iiyx->iyx", np.asarray(proc.cross_band_moments().gamma_pixel_map)
             )
+        )
+        bound = np.sqrt(gamma[:, None] * gamma[None, :])
+        e, _ = proc.response.per_pixel()
+        scale = (
+            2 * bound**2 + 4 * np.abs(e[:, None] * e[None, :]) * bound
+        ) / proc.response.input_energy**2
+        tolerance = ulps(2 * (2 * proc.per_mode_rms.size + 14), scale)
+        for value in (joint(tau), jax.jit(joint)(tau)):
+            assert value.dtype == cbm.cov_map.dtype
+            for sel, pix in enumerate(pixels):
+                assert np.all(
+                    np.abs(value[:, sel, :, sel] - cbm.cov_map[:, :, 0, pix])
+                    <= tolerance[:, :, 0, pix]
+                )
 
     def test_joint_covariance_cross_pixel_matches_monte_carlo(self):
         """One genuine cross-pixel cross-band MC anchor (the map route cannot
@@ -1546,28 +1630,34 @@ class TestSingleBandImpropriety:
         )
 
     def test_matches_kernels(self):
+        """Magnitude and division use four roundings on each path."""
         key = jax.random.PRNGKey(0)
         g = jax.random.normal(key, (4, 3, 5, 2)) @ jnp.array([1.0, 1j])
         mom = self._mono(g).moments()
         eta = np.asarray(mom.impropriety())
         gamma = np.asarray(mom.gamma_pixel_map)
         expected = np.abs(np.asarray(mom.p_pixel_map)) / gamma
-        np.testing.assert_allclose(eta, expected, rtol=1e-12, atol=0)
+        np.testing.assert_allclose(
+            eta, expected, rtol=ulps(8, eta.dtype.type(1)), atol=0
+        )
 
     def test_one_mode_basis_is_exactly_one(self):
-        """A single real-coefficient mode confines the field to a line."""
+        """One mode has unit impropriety within eight product and norm roundings."""
         key = jax.random.PRNGKey(0)
         g = jax.random.normal(key, (1, 4, 4, 2)) @ jnp.array([1.0, 1j])
         eta = np.asarray(self._mono(g).moments().impropriety())
-        np.testing.assert_allclose(eta, 1.0, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(eta, 1.0, rtol=0, atol=ulps(8, eta.dtype.type(1)))
 
     def test_quadrature_pair_is_exactly_zero(self):
-        """g and i*g at equal rms cancel P: the homogeneity criterion."""
+        """Two complex squares, their sum and normalization cancel to zero.
+
+        The uncancelled terms sum to Gamma, so use unit impropriety scale.
+        """
         key = jax.random.PRNGKey(0)
         g0 = jax.random.normal(key, (4, 4, 2)) @ jnp.array([1.0, 1j])
         g = jnp.stack([g0, 1j * g0])
         eta = np.asarray(self._mono(g).moments().impropriety())
-        np.testing.assert_allclose(eta, 0.0, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(eta, 0.0, rtol=0, atol=ulps(8, eta.dtype.type(1)))
 
     def test_bounded_by_one(self):
         key = jax.random.PRNGKey(0)
@@ -1595,13 +1685,16 @@ class TestSingleBandImpropriety:
         assert np.isfinite(float(jax.grad(total)(1.0)))
 
     def test_jit_compatible(self):
-        # Jit and eager agree to rounding; XLA fusion may differ in the last bit.
+        """Budget both three-mode complex sums, squares and division at one."""
         key = jax.random.PRNGKey(0)
         g = jax.random.normal(key, (3, 4, 4, 2)) @ jnp.array([1.0, 1j])
         proc = self._mono(g)
         got = jax.jit(lambda p: p.moments().impropriety())(proc)
         np.testing.assert_allclose(
-            np.asarray(got), np.asarray(proc.moments().impropriety()), rtol=1e-14
+            got,
+            proc.moments().impropriety(),
+            rtol=0,
+            atol=ulps(2 * (2 * g.shape[0] + 8), got.dtype.type(1)),
         )
 
 
@@ -1699,6 +1792,12 @@ def test_shared_law_matches_density_parent_formula(record_property):
     Basis: documented density law at the reference wavelength, evaluated
     independently from input arrays. 32 eps times peak accommodates two
     complex contractions and amplitude conversion, including dark pixels.
+    For the summed value and its analytic time derivative, 40 roundings at
+    the sum of absolute pixel contributions cover the phase products,
+    two-line/two-mode contractions and the three-level pixel reduction.
+
+    Args:
+        record_property: Pytest recorder for representative pixel errors.
     """
     grid = speckle_grid((2, 3), 0.3, 500.0)
     e = jnp.array([[1 + 2j, 0.2 - 0.3j, -0.7j], [0.4, -1j, 2 - 0.1j]])
@@ -1735,7 +1834,7 @@ def test_shared_law_matches_density_parent_formula(record_property):
         image.data,
         parent,
         rtol=0,
-        atol=32 * np.finfo(float).eps * np.max(np.abs(parent)),
+        atol=ulps(32, jnp.max(jnp.abs(parent))),
     )
     assert image.grid == grid
     assert image.measure == Measure.integral()
@@ -1746,47 +1845,58 @@ def test_shared_law_matches_density_parent_formula(record_property):
     record_property("max_abs_difference", float(np.max(np.abs(image.data - parent))))
     # The inherited law stays traceable and differentiable through this synthesis.
     fn = jax.jit(lambda t: field.realize(wavelength_nm=500.0, elapsed_s=t).data.sum())
-    np.testing.assert_allclose(fn(seconds), np.sum(parent), rtol=1e-14, atol=0)
-    h = 1e-3  # central-difference O((2*pi*f*h)^2), below 1e-7 here
+    np.testing.assert_allclose(
+        fn(seconds), np.sum(parent), rtol=0, atol=ulps(40, jnp.sum(jnp.abs(parent)))
+    )
+    omega = 2 * np.pi * np.asarray(frequencies, dtype=np.float64)
+    slopes = -np.sum(
+        np.asarray(amplitudes) * omega * np.sin(omega * seconds + np.asarray(phases)),
+        axis=-1,
+    )
+    dfield = np.einsum("m,myx->yx", slopes, np.asarray(g))
+    terms = (
+        2 * np.real(np.conj(np.asarray(e) + increment) * dfield) * grid.pixel_area / 4
+    )
     np.testing.assert_allclose(
         jax.grad(fn)(seconds),
-        (fn(seconds + h) - fn(seconds - h)) / (2 * h),
-        rtol=1e-7,
-        atol=0,
+        terms.sum(),
+        rtol=0,
+        atol=ulps(40, e.real.dtype.type(np.sum(np.abs(terms)))),
     )
 
 
 def test_synthesis_clock_origin_and_time_axes():
     """Fails if scene days reach the Hz synthesis or time axes pair modes.
 
-    Truth: the field anchored at zero read at the elapsed seconds. Basis: 8
-    ulps of the binary64 scene time at day 17, converted to seconds, times the
-    maximum phase derivative.
+    The reference subtracts the binary64 days before evaluating the
+    sinusoidal series in NumPy float64. The floating-point budget covers
+    eight operations for the phase, cosine, product and four-term reduction
+    at the amplitude-weighted phase scale.
     """
     field = _field(coherent=True)
-    # Static epoch is a constructor argument, never a float32 device scalar.
-    shifted = AnalyticSpeckleField(
-        field.response,
-        epoch_d=17.0,
-        amplitudes=field.amplitudes,
-        frequencies_hz=field.frequencies_hz,
-        phases=field.phases,
-    )
+    epoch = 60000.125
+    shifted = replace(field, epoch_d=epoch)
     offsets = np.array([0.1, 2.5, 17.0])
-    expected = field.coefficients(elapsed_s=offsets)
-    actual = shifted.coefficients(elapsed_s=shifted.elapsed_s(17.0 + offsets * s2d))
-    bound = (
-        8
-        * np.spacing(17.0)
-        / s2d
-        * 2
-        * np.pi
-        * 0.03
-        * np.sum(np.abs(field.amplitudes), axis=1)
-    )
-    np.testing.assert_array_less(
-        np.abs(actual - expected), np.broadcast_to(bound, actual.shape)
-    )
+    scene_days = epoch + offsets * s2d
+    assert np.unique(scene_days.astype(np.float32)).size == 1
+    seconds = (scene_days - epoch) * d2s
+    elapsed = shifted.elapsed_s(scene_days)
+    np.testing.assert_array_equal(elapsed, seconds.astype(elapsed.dtype))
+    phase = 2 * np.pi * np.asarray(field.frequencies_hz, dtype=np.float64) * seconds[
+        :, None, None
+    ] + np.asarray(field.phases)
+    amplitudes = np.asarray(field.amplitudes, dtype=np.float64)
+    expected = np.sum(amplitudes * np.cos(phase), axis=-1)
+    scale = np.sum(np.abs(amplitudes) * (1 + np.abs(phase)), axis=-1)
+
+    def coefficients(t):
+        return shifted.coefficients(elapsed_s=t)
+
+    for evaluate in (coefficients, jax.jit(coefficients)):
+        actual = evaluate(elapsed)
+        np.testing.assert_array_less(
+            np.abs(np.asarray(actual) - expected), ulps(8, scale.astype(actual.dtype))
+        )
     image = shifted.realize(wavelength_nm=jnp.array([500.0, 1000.0]), elapsed_s=offsets)
     assert image.data.shape == (2, 3, _DIMS, _DIMS)
     assert image.leading_axes == ("wavelength", "time_0")
@@ -1810,7 +1920,6 @@ def test_fields_run_on_their_own_clock(chromatic, precision):
     float32 grid, so a branch that casts a JAX array through float32 fails
     the x64 comparison.
     """
-    from dataclasses import replace
 
     import equinox as eqx
     from optixstuff.speckle import AbstractSpeckleField
@@ -1860,20 +1969,66 @@ def test_fields_run_on_their_own_clock(chromatic, precision):
         anchored.realize(wavelength_nm=wavelength_nm, time_d=1.0)
 
 
-def test_broadened_equals_explicit_node_sum():
-    """Fails if broadband substitutes a center or coherently averages fields.
+def _realization_roundoff_scale(field, node, times):
+    """Absolute error scale in intensity units per epsilon at one node."""
+    response = field.response
+    c, gains = (
+        np.abs(np.asarray(x, dtype=np.complex128)) for x in (response.e_nom, response.G)
+    )
+    scale = 1.0
+    if getattr(field, "wavelengths_nm", None) is not None:
+        nodes = np.asarray(field.wavelengths_nm)
+        end = np.clip(nodes.searchsorted(node), 1, len(nodes) - 1)
+        c, gains = c[end - 1 : end + 1].max(0), gains[end - 1 : end + 1].max(0)
+        norm = np.interp(
+            node, nodes, np.broadcast_to(response.input_energy, nodes.shape)
+        )
+        interpolate_ops = 6
+    else:
+        norm = float(response.input_energy)
+        interpolate_ops = 0
+        if response.wavelength_law == "opd":
+            scale = response.reference_wavelength_nm / node
 
-    Basis: explicit weighted intensity sum, 64 float64 eps. The two sides
-    propagate each node through separately compiled FFT programs, so they agree
-    to a few ulp per transform stage rather than bitwise, and the three-node
-    weighted sum with its normalization adds about 5 eps (Higham 2002, the
-    bound gamma_n for an n-term sum). The first version of this bound, 32 eps,
-    was exceeded by a factor of 1.6 on one platform (about 51 eps), so 64 eps
-    keeps that case inside with a quarter of headroom; this machine sees under
-    2 eps. A wrong node, weight or coherent average moves the result by
-    orders of magnitude more. Both mono phase scaling and propagated node
-    tables must use the same inherited integrator.
+    amplitudes = np.abs(np.asarray(field.amplitudes, dtype=np.float64))
+    phase_scale = 2 * np.pi * np.abs(
+        np.asarray(times)[..., None, None]
+        * np.asarray(field.frequencies_hz, dtype=np.float64)
+    ) + np.abs(np.asarray(field.phases, dtype=np.float64))
+    depth = (amplitudes.shape[-1] - 1).bit_length()
+    coeff_scale = amplitudes.sum(-1)
+    coeff_error = (amplitudes * (4 * phase_scale + 2 + depth)).sum(-1)
+    gains *= scale
+    delta = np.einsum("m,myx->yx", coeff_scale, gains)
+    delta_error = np.einsum("...m,myx->...yx", coeff_error, gains)
+    delta_error += (2 * gains.shape[0] + 5 + interpolate_ops) * delta
+    intensity = 2 * c * delta + delta**2
+    return (
+        response.grid.pixel_area
+        / norm
+        * (
+            2 * (c + delta) * delta_error
+            + 2 * delta * (2 + interpolate_ops) * c
+            + (8 + interpolate_ops) * intensity
+        )
+    )
+
+
+def test_broadened_equals_explicit_node_sum():
+    """Check the incoherent weighted intensity sum and midpoint average.
+
+    Four phase operations contribute at the absolute argument, cosine and
+    amplitude multiply at the absolute line weight, and the line sum at its
+    binary reduction depth. The complex field dot uses two real operations
+    per mode plus five for wavelength and pixel scaling. Chromatic linear
+    interpolation adds six operations at the larger neighbor amplitude.
+    Propagate these errors through 2 Re(conj(C) dE) + |dE|**2 at the
+    absolute fields, with eight more roundings for intensity and energy
+    normalization. Both paths incur the node error. Each weighted reduction
+    adds one term per node plus three for weight, sum and normalization.
+    The two exact midpoints use the same node bound and one add and divide.
     """
+    import equinox as eqx
     from optixstuff.spectral import Band, Quadrature
 
     fields = (
@@ -1882,78 +2037,165 @@ def test_broadened_equals_explicit_node_sum():
     )
     times = jnp.array([0.0, 13.0])
     for field in fields:
+        # Retain a faint pixel so a global peak cannot mask a local error.
+        field = eqx.tree_at(
+            lambda f: f.response.G,
+            field,
+            field.response.G.at[..., 0, 0].multiply(0.001),
+        )
         expected_breaks = getattr(field, "wavelengths_nm", ())
         np.testing.assert_array_equal(field.spectral_breaks_nm(), expected_breaks)
         quadrature = Quadrature.build((Band(500, 550), Band(550, 600)), field, order=3)
-        expected = []
-        for nodes, weights in zip(
-            quadrature.nodes_nm, quadrature.weights(), strict=True
-        ):
-            expected.append(
-                sum(
-                    weight * field.realize(wavelength_nm=node, elapsed_s=times).data
-                    for node, weight in zip(nodes, weights, strict=True)
-                )
-                / weights.sum()
-            )
         image = field.broadened(quadrature=quadrature, elapsed_s=times)
-        np.testing.assert_allclose(
-            image.data,
-            jnp.stack(expected),
-            rtol=64 * np.finfo(float).eps,
-            atol=64 * np.finfo(float).eps * np.max(np.abs(expected)),
-        )
+        for actual, nodes, weights in zip(
+            image.data, quadrature.nodes_nm, quadrature.weights(), strict=True
+        ):
+            slices = [
+                field.realize(wavelength_nm=node, elapsed_s=times).data
+                for node in nodes
+            ]
+            expected = (
+                sum(w * v for w, v in zip(weights, slices, strict=True)) / weights.sum()
+            )
+            scales = [
+                _realization_roundoff_scale(field, float(node), times) for node in nodes
+            ]
+            node_scale = np.average(scales, axis=0, weights=np.asarray(weights))
+            reduction_scale = np.average(
+                np.abs(slices), axis=0, weights=np.asarray(weights)
+            )
+            budget = 2 * (node_scale + (nodes.size + 3) * reduction_scale)
+            assert np.all(
+                np.abs(actual - expected) <= ulps(1, budget.astype(actual.dtype))
+            )
         assert image.grid == field.grid
         assert image.leading_axes == ("band", "time_0")
-        # Inherited midpoint average also retains Image geometry and metadata.
         average = field.realize_average(wavelength_nm=550.0, exposure_s=4.0, n_sub=2)
-        midpoint = (
-            sum(field.realize(wavelength_nm=550.0, elapsed_s=t).data for t in (1, 3))
-            / 2
+        midpoints = np.array([1.0, 3.0])
+        slices = [
+            field.realize(wavelength_nm=550.0, elapsed_s=t).data for t in midpoints
+        ]
+        expected = sum(slices) / 2
+        node_scale = _realization_roundoff_scale(field, 550.0, midpoints).mean(0)
+        budget = 2 * (node_scale + 2 * np.mean(np.abs(slices), axis=0))
+        assert np.all(
+            np.abs(average.data - expected)
+            <= ulps(1, budget.astype(average.data.dtype))
         )
+
+
+def test_ou_exposure_neff_at_storage_limits():
+    """Check extreme scales, the exact zero limit and its analytic tangent.
+
+    The long-exposure oracle uses T / (2*tau). The omitted relative
+    correction is at most 2*tau/T, below either lane's roundoff. Eight
+    roundings cover mantissa scaling and the divisions, including the
+    binary64 closed form at T/tau near ten and the slope 1/(3*tau).
+    """
+    for tau, exposure in ((1e-40, 0.0), (1.0, 3e38), (0.5, 2e38)):
+
+        def evaluate(t, timescale=tau):
+            return ou_exposure_neff(timescale, t)[0]
+
+        expected = 1.0 if exposure == 0 else exposure / (2 * tau)
+        for actual in (
+            evaluate(exposure),
+            evaluate(jnp.asarray(exposure)),
+            jax.jit(evaluate)(jnp.asarray(exposure)),
+            jax.jit(lambda t=exposure: evaluate(t))(),
+        ):
+            if exposure == 0:
+                assert actual == 1
+            else:
+                np.testing.assert_allclose(
+                    actual, expected, rtol=ulps(8, actual.dtype.type(1)), atol=0
+                )
+
+    # The ratio stays near ten even when both input seconds are subnormal.
+    tau = 1e-40
+    host = 1e-39
+    node = jnp.asarray(host)
+
+    def for_short_scale(t):
+        return ou_exposure_neff(tau, t)[0]
+
+    for represented, actual in (
+        (host, for_short_scale(host)),
+        (host, jax.jit(lambda: for_short_scale(host))()),
+        (float(node), for_short_scale(node)),
+        (float(node), jax.jit(for_short_scale)(node)),
+    ):
+        ratio = represented / tau
+        expected = ratio**2 / (2 * (ratio + np.expm1(-ratio)))
         np.testing.assert_allclose(
-            average.data, midpoint, rtol=32 * np.finfo(float).eps, atol=0
+            actual, expected, rtol=ulps(8, actual.dtype.type(1)), atol=0
         )
+
+    # This slope fits float32 even though the reciprocal timescale does not.
+    def near_zero(t):
+        return ou_exposure_neff(1e-39, t)[0]
+
+    zero, one = jnp.asarray(0.0), jnp.asarray(1.0)
+    for evaluate in (near_zero, jax.jit(near_zero)):
+        _, tangent = jax.jvp(evaluate, (zero,), (one,))
+        for actual in (tangent, jax.grad(evaluate)(zero)):
+            np.testing.assert_allclose(
+                actual, 1 / (3 * 1e-39), rtol=ulps(8, actual.dtype.type(1)), atol=0
+            )
 
 
 def test_ou_exposure_neff_integrates_the_exponential_kernel():
     """Exact-algebra integral checked with float64 quadrature.
 
     On v=t/T in [0,1], variance reduction is 2*int((1-v)*exp(-T*v/tau)).
-    A 128-node Gauss rule resolves the exponential through T/tau=1000.
-
-    The reference weights are recomputed from the closed form
-    ``2 / ((1 - x^2) P_n'(x)^2)`` at the nodes. ``leggauss`` weights carry
-    about 1e-11 relative error at the edge nodes, and that error changed
-    between numpy releases (1.3e-13 then 3.6e-12 in the u=1000 result); at
-    large u the integral is dominated by the edge nodes, so it passes
-    straight through.
-
-    The tolerance is the conditioning of the function's direct branch. It
-    evaluates u + expm1(-u), which cancels to u^2/2, losing a factor 1/u in
-    relative precision, worst at the branch switch u = 1e-4: eps / 1e-4 =
-    2.2e-12. The measured worst error against a 40-digit evaluation is
-    6.7e-13 there.
+    Adaptive host float64 quadrature integrates this positive integrand.
+    At u >= 1/8 cancellation amplifies relative errors in expm1 by at
+    most 17. Three roundings there plus the ratio and reciprocal give a
+    64-eps budget. Below that switch ten Horner steps cost at most 20 eps.
+    The zero-exposure derivative is one division and one reciprocal.
     """
     tau = np.array([1.0, 2.0])
-    exposures = np.array([0.0, 1e-8, 1e-4, 1.0, 10.0, 1000.0])
-    nodes, _ = np.polynomial.legendre.leggauss(128)
-    dp = np.polynomial.legendre.legval(
-        nodes, np.polynomial.legendre.legder(np.eye(129)[128])
+    switch = 0.125
+    exposures = np.array(
+        [
+            0,
+            1e-8,
+            1e-4,
+            np.nextafter(switch, 0),
+            switch,
+            np.nextafter(switch, 1),
+            1,
+            10,
+            1000,
+        ]
     )
-    weights = 2.0 / ((1.0 - nodes**2) * dp**2)
-    v = (nodes + 1.0) / 2.0
     u = exposures[None, :] / tau[:, None]
-    reduction = np.sum(weights * (1 - v) * np.exp(-u[..., None] * v), axis=-1)
-    np.testing.assert_allclose(
-        ou_exposure_neff(tau, exposures),
-        1 / reduction,
-        rtol=np.finfo(float).eps / 1e-4,
-        atol=0,
-    )
+
+    def reference(ratio):
+        value, _ = quad(
+            lambda v: 2 * (1 - v) * np.exp(-ratio * v), 0, 1, epsabs=0, epsrel=2e-14
+        )
+        return 1 / value
+
+    expected = np.vectorize(reference)(u)
+    for evaluate in (
+        lambda t: ou_exposure_neff(tau, t),
+        jax.jit(lambda t: ou_exposure_neff(tau, t)),
+    ):
+        got = evaluate(exposures)
+        np.testing.assert_allclose(
+            got, expected, rtol=ulps(64, got.dtype.type(1)), atol=0
+        )
+    if got.dtype == np.float64:
+        precision_pair(
+            lambda t: ou_exposure_neff(tau, t),
+            (jnp.asarray(exposures),),
+            bound=float(ulps(64, np.float32(1))),
+            scale=0,
+        )
     np.testing.assert_array_equal(ou_exposure_neff(tau, 0.0), np.ones(2))
     derivative = jax.grad(lambda t: ou_exposure_neff(2.0, t).sum())(0.0)
-    np.testing.assert_allclose(derivative, 1 / 6, rtol=2e-15)
+    np.testing.assert_allclose(derivative, 1 / 6, rtol=0, atol=ulps(2, derivative))
     with pytest.raises(ValueError, match="positive"):
         ou_exposure_neff(0.0, 1.0)
 

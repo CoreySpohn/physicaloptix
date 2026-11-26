@@ -5,6 +5,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hwoutils.numerics import eps
 
 from physicaloptix.instruments.roman_full import (
     RomanFull,
@@ -65,11 +66,16 @@ def test_compile_records_beams_and_unique_taps():
 
 
 def test_run_conserves_energy_and_returns_taps():
+    """Four FFTs across the relays each span two log2(N) axes before the final
+    energy reduction.
+    """
     _, model = _model()
     out = eqx.filter_jit(lambda m: m(taps=("focus", "pupil2")))(model)
     assert set(out) == {"focus", "pupil2", "end"}
     for k in out:
-        assert float(jnp.sum(jnp.abs(out[k]) ** 2)) == pytest.approx(1.0, rel=1e-12)
+        assert float(jnp.sum(jnp.abs(out[k]) ** 2)) == pytest.approx(
+            1.0, rel=8 * N.bit_length() * eps(out[k].dtype), abs=0
+        )
 
 
 def test_gradient_through_a_map():

@@ -4,6 +4,8 @@ import ineedvalidation as vv
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hwoutils.numerics import eps
+from hwoutils.testing import ulps
 from optixstuff import SimplePrimary
 from optixstuff.grids import Measure, PixelGrid
 from optixstuff.spectral import Band, Quadrature
@@ -58,6 +60,13 @@ def test_broadband_peak_matches_a_direct_fixed_angle_camera(nodes_nm, peak_fract
     The native even grid samples either side of the peak; all four nearest
     samples tie. Translating by half a pixel on each axis aligns the live
     peak with a sample. The 1e-6 relative bound covers repeated Fourier sums.
+
+    Use one rounding per pupil sample in each of the two Fourier sums.
+    Their peak sets the absolute scale for cancellation in faint samples.
+
+    Args:
+        nodes_nm: Two quadrature wavelengths in nanometers.
+        peak_fraction: Analytic registered peak flux per pixel.
     """
     pupil = PixelGrid.pupil(24)
     entrance = Field(jnp.ones(pupil.shape), pupil, PlaneKind.PUPIL)
@@ -80,10 +89,21 @@ def test_broadband_peak_matches_a_direct_fixed_angle_camera(nodes_nm, peak_fract
     nearest = (abs(x - 4.0) == 0.125) & (abs(y) == 0.125)
     for image in per_node:
         np.testing.assert_array_equal(
-            np.isclose(image, image.max(), rtol=1e-12), nearest
+            np.isclose(
+                image,
+                image.max(),
+                rtol=0,
+                atol=float(ulps(2 * pupil.shape[0], image.max())),
+            ),
+            nearest,
         )
     actual = live.source_psfs(REFERENCE_NM, [4.0], [0.0]).image
-    np.testing.assert_allclose(actual.data[0], per_node.mean(axis=0), rtol=1e-6, atol=0)
+    np.testing.assert_allclose(
+        actual.data[0],
+        per_node.mean(axis=0),
+        rtol=0,
+        atol=float(ulps(2 * pupil.shape[0], per_node.max())),
+    )
     # The peak fractions use point intensity times native area, the YIP
     # encoding. An explicit detector request would integrate the footprint.
     registered = live.source_psfs(REFERENCE_NM, [4.125], [0.125]).image
@@ -106,6 +126,12 @@ def test_yip_and_live_train_agree_in_flux_per_detector_pixel(tmp_path):
     is 2.04e-8 of incident flux per detector pixel. The stellar reconstruction
     (cubic spline in yippy) differs by 5.34e-6. Use three times each measured
     maximum and compare total detector throughputs to 1e-6 relative.
+
+    The throughput budget adds the pairwise reduction depth of each image sum to
+    the measured interpolation discrepancy.
+
+    Args:
+        tmp_path: Temporary directory for the generated files.
     """
     pupil = PixelGrid.pupil(24)
     x, y = pupil.coordinates()
@@ -144,5 +170,8 @@ def test_yip_and_live_train_agree_in_flux_per_detector_pixel(tmp_path):
         assert actual.measure == expected.measure == Measure.integral()
         np.testing.assert_allclose(actual.data, expected.data, atol=tolerance, rtol=0)
         np.testing.assert_allclose(
-            actual.data.sum(), expected.data.sum(), rtol=1e-6, atol=0
+            actual.data.sum(),
+            expected.data.sum(),
+            rtol=1e-6 + 2 * actual.data.size.bit_length() * eps(actual.data.dtype),
+            atol=0,
         )
