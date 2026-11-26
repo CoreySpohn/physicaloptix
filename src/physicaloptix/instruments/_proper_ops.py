@@ -21,6 +21,8 @@ import jax.numpy as jnp
 import numpy as np
 from hwoutils.precision import like
 
+_ELLIPSE_EDGE_SLACK = 1e-10  # tol: algorithm, 1e-10 in PROPER's normalized r^2
+
 
 def shift_center(a):
     """Roll the center sample ``n // 2`` to the corner (self-inverse for even sizes).
@@ -144,7 +146,8 @@ def ellipse_mask(n, dx, radius_m, xc_m=0.0, yc_m=0.0, nsub=11):
     for j, i in zip(y_edge, x_edge, strict=True):
         xs = (sub_x + i) / rad
         ys = (sub_y + j) / rad
-        mask[j, i] = np.sum(xs * xs + ys * ys <= 1 + 1e-10) / float(nsub * nsub)
+        inside_edge = xs * xs + ys * ys <= 1 + _ELLIPSE_EDGE_SLACK
+        mask[j, i] = np.sum(inside_edge) / float(nsub * nsub)
     image = np.zeros((n, n), dtype=np.float64)
     image[miny : miny + ny, minx : minx + nx] = mask
     return image

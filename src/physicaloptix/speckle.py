@@ -225,7 +225,7 @@ class AnalyticSpeckleField(LinearSpeckleField):
             Mode coefficients of shape (*time_shape, n_modes), in the mode units of the
             response.
         """
-        t = jnp.asarray(elapsed_s, dtype=float)
+        t = like(elapsed_s, self.frequencies_hz)
         phase = 2.0 * jnp.pi * self.frequencies_hz * t[..., None, None] + self.phases
         return jnp.sum(self.amplitudes * jnp.cos(phase), axis=-1)
 
@@ -716,11 +716,12 @@ class SpeckleProcess(eqx.Module):
         """
         self.response = response
         m = response.G.shape[-3]
+        dtype = jnp.result_type(response.G.real, 0.0)
         self.per_mode_rms = jnp.broadcast_to(
-            jnp.asarray(per_mode_rms, dtype=float), (m,)
+            jnp.asarray(per_mode_rms, dtype=dtype), (m,)
         )
-        self.knee_hz = jnp.broadcast_to(jnp.asarray(knee_hz, dtype=float), (m,))
-        self.slope = jnp.broadcast_to(jnp.asarray(slope, dtype=float), (m,))
+        self.knee_hz = jnp.broadcast_to(jnp.asarray(knee_hz, dtype=dtype), (m,))
+        self.slope = jnp.broadcast_to(jnp.asarray(slope, dtype=dtype), (m,))
         # Per-mode frequency grids/PSDs are only needed when the modes drift
         # on different timescales or with different slopes; when they agree
         # (the scalar case) keep the single shared 1D grid, so a scalar-knee
@@ -731,7 +732,7 @@ class SpeckleProcess(eqx.Module):
         )
         self.epoch_d = float(epoch_d)
         self.wavelengths_nm = (
-            None if wavelengths_nm is None else jnp.asarray(wavelengths_nm, dtype=float)
+            None if wavelengths_nm is None else jnp.asarray(wavelengths_nm, dtype=dtype)
         )
         self.coherent = coherent
         self.n_freq = n_freq
@@ -800,17 +801,19 @@ class SpeckleProcess(eqx.Module):
         Returns:
             Log-spaced synthesis frequencies in Hz, shape (f,) or (m, f).
         """
+        base = like(10.0, self.knee_hz)
         if not self.per_mode_freq:
             log_knee = jnp.log10(self.knee_hz[0])
             return jnp.logspace(
                 log_knee - self.decades_below,
                 log_knee + self.decades_above,
                 self.n_freq,
+                base=base,
             )
         log_knee = jnp.log10(self.knee_hz)  # (m,)
         return jax.vmap(
             lambda lk: jnp.logspace(
-                lk - self.decades_below, lk + self.decades_above, self.n_freq
+                lk - self.decades_below, lk + self.decades_above, self.n_freq, base=base
             )
         )(log_knee)  # (m, f)
 
@@ -935,8 +938,8 @@ class SpeckleProcess(eqx.Module):
         Returns:
             ``N_eff`` with shape ``(m,) + jnp.shape(exposure_s)``.
         """
-        t_exp = jnp.asarray(exposure_s, dtype=float)
         f = self.frequencies_hz()
+        t_exp = like(exposure_s, f)
         if f.ndim == 1:
             f = jnp.broadcast_to(f, (self.response.G.shape[-3], self.n_freq))
         w = self.line_weights()
@@ -983,12 +986,18 @@ class SpeckleProcess(eqx.Module):
         # synthesis coefficients carry; see line_weights.
         power = self.line_weights()
         rms = self.per_mode_rms[:, None]
+        shape = (m, self.n_freq)
+        dtype = power.dtype
         if renormalize:
             k_amp, k_phase = jax.random.split(key)
-            amp = jnp.sqrt(power) * jax.random.normal(k_amp, (m, self.n_freq))
+            amp = jnp.sqrt(power) * jax.random.normal(k_amp, shape, dtype=dtype)
             amp = amp * (rms / jnp.sqrt(0.5 * jnp.sum(amp**2, axis=1, keepdims=True)))
             phases = jax.random.uniform(
-                k_phase, (m, self.n_freq), minval=0.0, maxval=2.0 * jnp.pi
+                k_phase,
+                shape,
+                dtype=dtype,
+                minval=like(0.0, power),
+                maxval=like(2.0 * jnp.pi, power),
             )
         else:
             # weights sum to 2 over frequency, the amplitude-squared convention
@@ -997,9 +1006,9 @@ class SpeckleProcess(eqx.Module):
             weights = 2.0 * power / jnp.sum(power, axis=1, keepdims=True)
             k_real, k_imag = jax.random.split(key)
             z = (
-                jax.random.normal(k_real, (m, self.n_freq))
-                + 1j * jax.random.normal(k_imag, (m, self.n_freq))
-            ) / jnp.sqrt(2.0)
+                jax.random.normal(k_real, shape, dtype=dtype)
+                + 1j * jax.random.normal(k_imag, shape, dtype=dtype)
+            ) / jnp.sqrt(like(2.0, power))
             c = jnp.sqrt(weights) * rms * z
             amp = jnp.abs(c)
             phases = jnp.angle(c)

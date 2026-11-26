@@ -109,6 +109,7 @@ dev = [
 [tool.pytest.ini_options]
 addopts = "-p hwoutils.testing.precision"
 default_precision = "float32"
+precision_guard_enforce = true
 
 # record_property (tests/test_speckle.py, tests/test_linearize.py) warns under the default xunit2 family.
 junit_family = "xunit1"

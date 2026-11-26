@@ -46,6 +46,8 @@ from physicaloptix.elements.base import (
 from physicaloptix.sources import point_source
 from physicaloptix.transforms import Fraunhofer, Fresnel
 
+_DM_MAGNIFICATION_RTOL = 1e-6  # tol: algorithm, 1 ppm of the tabulated pitch ratio
+
 
 def proper_trim(a, n):
     """Crop or zero-pad a square array to ``n`` about the integer center ``m // 2``.
@@ -154,7 +156,7 @@ def dm_surface(
         raise ValueError("influence function must have odd width and height")
     ratio = influence_pitch_m / influence_dx_m
     mag = int(np.round(ratio))
-    if abs(ratio - mag) > 1e-6 * ratio:
+    if abs(ratio - mag) > _DM_MAGNIFICATION_RTOL * ratio:
         raise ValueError(
             f"influence_pitch_m / influence_dx_m = {ratio} must be an integer"
         )

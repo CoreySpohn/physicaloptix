@@ -51,7 +51,7 @@ class CommandResponse(eqx.Module):
         """
         command = self.element.command
         if not jnp.issubdtype(command.dtype, jnp.inexact):
-            command = command.astype(float)
+            command = command.astype(self.field.data.real.dtype)
 
         def propagated_data(command):
             outputs = self._propagate(command)

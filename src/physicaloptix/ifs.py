@@ -44,6 +44,7 @@ import jax.numpy as jnp
 import numpy as np
 from hwoutils.constants import two_pi
 from hwoutils.leaves import is_traced
+from hwoutils.numerics import same
 from hwoutils.precision import like, precision_of
 from jax import lax
 from jaxtyping import Array
@@ -554,7 +555,7 @@ def _fine_axis(offsets, n_quad):
     step = float(offsets[1] - offsets[0])
     fine = 1.0 / n_quad
     stride = step / fine
-    if abs(stride - round(stride)) > 1e-9:
+    if not same(stride, round(stride)):
         raise ValueError(
             f"offset step {step} must be an integer multiple of 1/n_quad "
             f"= {fine} for exact pixel integration"

@@ -32,7 +32,7 @@ _LABELS = {
 
 _KINDS = ("intensity", "phase", "complex")
 _CUTS = ("x", "y")
-_PHASE_ZERO_RATIO = 1e-10
+_PHASE_ZERO_RATIO = 1e-10  # tol: algorithm, 1e-10 of peak intensity for phase display
 # Owned-figure cut inset: below the image (shares x) for a "x" cut, beside
 # it (shares y) for a "y" cut -- see _draw_cut_curve for why "y" is
 # transposed rather than reusing the "below, sharex" geometry.
