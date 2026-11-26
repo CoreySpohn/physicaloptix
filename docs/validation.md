@@ -443,14 +443,27 @@ still skip when their cache is absent.
 
 ## Numerical requirements
 
-The deep-contrast path is **float64-mandatory**: in float32 the dark hole
-floors near $3\times10^{-4}$ contrast instead of $10^{-11}$. The test suite
-pins itself to CPU float64 for determinism (`tests/conftest.py`); production
-use should call `jax.config.update("jax_enable_x64", True)` (or
-`hwoutils.enable_x64()`) before building deep-null chains. Sampling regimes
-the construction-time gates reject (`on_undersampled="raise"`) are outside
-the validated envelope; the gates exist so an undersampled chain fails at
-build, not silently at depth.
+`test_float32_contrast_floor` measures how closely float32 propagation
+reproduces the float64 on-axis stellar intensity on the same prepared optics.
+The floor is the largest absolute pixel difference in the stated region,
+divided by the float64 peak of the unocculted off-axis PSF for the same
+entrance pupil, spectrum, and native grid. Radius $r$, pixel pitch, and
+source offset are in $\lambda/D$ at the reference wavelength.
+
+| Optical path | Pupil samples | Wavelength | Pixel pitch | Region | Reference offset | Measured float32 contrast floor |
+|--------------|--------------:|------------|------------:|--------|-----------------:|--------------------------------:|
+| Bare circular stop | 64 | 600 nm | 0.5 | $3 < r < 10$ | 6 | $3.06\times10^{-9}$ |
+| Circular stop with 3 nm RMS in Noll mode 5 | 64 | 600 nm | 0.5 | $3 < r < 10$ | 6 | $2.86\times10^{-9}$ |
+| Charge-2 vortex ($q=64$, scale factor 4, window 16) with a Lyot stop of diameter $0.90D$ | 64 | 600 nm | 0.5 | $3 < r < 10$ | 6 | $3.13\times10^{-11}$ |
+| Bare square stop | 16 | 600 nm | 0.25 | $r < 2.5$ | 2 | $1.21\times10^{-7}$ |
+| Band-averaged circular stop | 24 | 450–550 nm, three nodes, 500 nm reference | 0.4 | $r < 1$ | 0.8 | $2.90\times10^{-8}$ |
+
+Use float64 when you need agreement finer than the floor for your path.
+Vortex mask construction also depends on precision. Building the same vortex
+independently in each precision gave a total contrast difference of
+$8.07\times10^{-11}$. `PathCoronagraph.from_path` accepts no target contrast,
+so callers choose the precision. Sampling regimes rejected at construction
+(`on_undersampled="raise"`) are outside the validated range.
 
 ## What is not yet validated
 

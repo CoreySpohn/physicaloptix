@@ -25,7 +25,8 @@ from optixstuff.spectral import Band, Quadrature
 
 from physicaloptix.core import Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis
-from physicaloptix.elements import MultiScaleVortex, SampledOptic
+from physicaloptix.elements import MultiScaleVortex, PhaseScreen, SampledOptic
+from physicaloptix.elements.modes import zernike_basis
 from physicaloptix.interop import PathCoronagraph
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.transforms import Fraunhofer
@@ -117,6 +118,21 @@ def bare_telescope():
         max_separation_lod=OWA,
         pixel_scale_lod=0.5,
         n_sky_screens=32,
+    )
+
+
+@pytest.fixture
+def band_telescope(small_path, chromatic_field):
+    """Three-node band-averaged circular pupil at a 500 nm reference wavelength."""
+    return PathCoronagraph.from_path(
+        OpticalPath(stages=small_path.stages[:1]),
+        chromatic_field,
+        primary=PRIMARY,
+        reference_wavelength_nm=500.0,
+        max_separation_lod=1.0,
+        pixel_scale_lod=0.4,
+        fov_margin_lod=2.0,
+        n_sky_screens=1,
     )
 
 
@@ -247,9 +263,7 @@ class TestConformance:
             pixels = detector.to_lod(scale_nm, coro.frame)
             np.testing.assert_allclose(pixels.step, coro.grid.step, rtol=1e-14)
 
-    def test_band_average_uses_one_native_stellar_map(
-        self, small_path, chromatic_field
-    ):
+    def test_band_average_uses_one_native_stellar_map(self, band_telescope):
         """The build spectrum fixes one map on the reference lambda/D grid.
 
         The three-node flat illumination spans 450 to 550 nm. Serving
@@ -261,19 +275,9 @@ class TestConformance:
         peak brightness.
 
         Args:
-            small_path: Pupil-stop and camera stages.
-            chromatic_field: Entrance field sampled across the build band.
+            band_telescope: Circular stop with a three-node build spectrum.
         """
-        coro = PathCoronagraph.from_path(
-            OpticalPath(stages=small_path.stages[:1]),
-            chromatic_field,
-            primary=PRIMARY,
-            reference_wavelength_nm=500.0,
-            max_separation_lod=1.0,
-            pixel_scale_lod=0.4,
-            fov_margin_lod=2.0,
-            n_sky_screens=1,
-        )
+        coro = band_telescope
         assert coro.band_averaged
         assert coro.scale_wavelength_nm(450.0, 485.0) == 485.0
         blue = np.asarray(coro.stellar_map(450.0, 0.0).data)
@@ -669,6 +673,52 @@ class TestSamplingExplicitContract:
         np.testing.assert_allclose(wide, padded[1:41, 1:57], rtol=1e-12)
 
 
+def _aberrated(build_wavelength_nm, screen_wavelength_nm=600.0, amplitude_nm=3.0):
+    """A bare telescope with a fixed Zernike aberration screen."""
+    pupil_grid = PixelGrid.pupil(NPUP)
+    disk = _disk(pupil_grid, 0.5)
+    basis = zernike_basis(pupil_grid, 6, rms_nm=1.0)
+    coeffs = jnp.zeros(6).at[4].set(amplitude_nm)
+    basis = eqx.tree_at(lambda b: b.coeffs, basis, coeffs)
+    core_path = OpticalPath(
+        stages=(
+            Stage(
+                "stop",
+                SampledOptic(
+                    transmission=jnp.asarray(disk),
+                    grid=pupil_grid,
+                    plane=PlaneKind.PUPIL,
+                ),
+            ),
+            Stage(
+                "wfe",
+                PhaseScreen(basis, pupil_grid, wavelength_nm=screen_wavelength_nm),
+            ),
+        )
+    )
+    field = Field(
+        data=jnp.asarray(disk).astype(complex),
+        grid=pupil_grid,
+        plane=PlaneKind.PUPIL,
+    )
+    return PathCoronagraph.from_path(
+        core_path,
+        field,
+        primary=PRIMARY,
+        reference_wavelength_nm=build_wavelength_nm or 600.0,
+        max_separation_lod=OWA,
+        pixel_scale_lod=0.5,
+        n_sky_screens=32,
+        wavelength_nm=build_wavelength_nm,
+    )
+
+
+@pytest.fixture(scope="module")
+def aberrated_telescope():
+    """Circular pupil with 3 nm RMS in the fifth Noll mode at 600 nm."""
+    return _aberrated(600.0)
+
+
 class TestChromaticBuild:
     """from_path(wavelength_nm=...): the OPD conversion at the true wavelength."""
 
@@ -693,50 +743,6 @@ class TestChromaticBuild:
         with pytest.raises(ValueError, match="below the shortest"):
             coro.at_wavelength(600.1)
 
-    def _aberrated(
-        self, build_wavelength_nm, screen_wavelength_nm=600.0, amplitude_nm=3.0
-    ):
-        """A bare telescope with a fixed Zernike aberration screen."""
-        from physicaloptix.elements import PhaseScreen
-        from physicaloptix.elements.modes import zernike_basis
-
-        pupil_grid = PixelGrid.pupil(NPUP)
-        disk = _disk(pupil_grid, 0.5)
-        basis = zernike_basis(pupil_grid, 6, rms_nm=1.0)
-        coeffs = jnp.zeros(6).at[4].set(amplitude_nm)
-        basis = eqx.tree_at(lambda b: b.coeffs, basis, coeffs)
-        core_path = OpticalPath(
-            stages=(
-                Stage(
-                    "stop",
-                    SampledOptic(
-                        transmission=jnp.asarray(disk),
-                        grid=pupil_grid,
-                        plane=PlaneKind.PUPIL,
-                    ),
-                ),
-                Stage(
-                    "wfe",
-                    PhaseScreen(basis, pupil_grid, wavelength_nm=screen_wavelength_nm),
-                ),
-            )
-        )
-        field = Field(
-            data=jnp.asarray(disk).astype(complex),
-            grid=pupil_grid,
-            plane=PlaneKind.PUPIL,
-        )
-        return PathCoronagraph.from_path(
-            core_path,
-            field,
-            primary=PRIMARY,
-            reference_wavelength_nm=build_wavelength_nm or 600.0,
-            max_separation_lod=OWA,
-            pixel_scale_lod=0.5,
-            n_sky_screens=32,
-            wavelength_nm=build_wavelength_nm,
-        )
-
     def _halo(self, coro):
         """Off-core aberration-scattered energy, referenced to no aberration.
 
@@ -745,7 +751,7 @@ class TestChromaticBuild:
         scatter the OPD screen adds on top, so measure the difference.
         """
         wl = coro.frame.reference_wavelength_nm
-        nominal = self._aberrated(wl, amplitude_nm=0.0)
+        nominal = _aberrated(wl, amplitude_nm=0.0)
         detector = PixelGrid.focal(56, 0.5, coro.frame)
         psf = np.asarray(coro.stellar_map(wl, 0.0, grid=detector).data)
         ref = np.asarray(nominal.stellar_map(wl, 0.0, grid=detector).data)
@@ -754,18 +760,19 @@ class TestChromaticBuild:
         r = np.hypot(yy - n / 2 + 0.5, xx - n / 2 + 0.5) * 0.5
         return float((psf - ref)[r > 3.0].sum())
 
-    def test_build_at_screen_wavelength_matches_mono(self):
+    def test_build_at_screen_wavelength_matches_mono(self, aberrated_telescope):
         """Tagging the build wavelength equal to the screen's changes nothing."""
-        mono = self._aberrated(None)
-        tagged = self._aberrated(600.0)
+        mono = _aberrated(None)
         a = np.asarray(mono.stellar_map(600.0, 0.0, grid=_grid((56, 56), 0.5)).data)
-        b = np.asarray(tagged.stellar_map(600.0, 0.0, grid=_grid((56, 56), 0.5)).data)
+        b = np.asarray(
+            aberrated_telescope.stellar_map(600.0, 0.0, grid=_grid((56, 56), 0.5)).data
+        )
         np.testing.assert_allclose(a, b, rtol=1e-10, atol=1e-18)
 
     def test_halo_scales_inverse_square_with_wavelength(self):
         """The small-phase aberration halo scales as (lambda0/lambda)^2."""
-        blue = self._aberrated(450.0)
-        red = self._aberrated(900.0)
+        blue = _aberrated(450.0)
+        red = _aberrated(900.0)
         ratio = self._halo(blue) / self._halo(red)
         np.testing.assert_allclose(ratio, (900.0 / 450.0) ** 2, rtol=0.05)
 
@@ -775,7 +782,7 @@ class TestChromaticBuild:
         Integer wavelengths and boolean metadata permit exact equality, and
         a shorter concrete read must still hit the monochromatic sampling limit.
         """
-        fixed = self._aberrated(700.0)
+        fixed = _aberrated(700.0)
         assert not fixed.band_averaged
         assert fixed.scale_wavelength_nm(710.0, 700.0) == 710.0
         assert fixed.wavelength_nm == 700.0
@@ -783,7 +790,7 @@ class TestChromaticBuild:
         with pytest.raises(ValueError, match="below the shortest"):
             fixed.at_wavelength(699.0)
         np.testing.assert_array_equal(np.unique(fixed.spectral_breaks_nm()), [700.0])
-        untagged = self._aberrated(None)
+        untagged = _aberrated(None)
         assert not untagged.band_averaged
         assert untagged.wavelength_nm is None
         assert untagged.bandpass is None
@@ -1229,7 +1236,55 @@ def test_local_zodi_rate_reads_the_record_sky(vortex_coronagraph):
     )
 
 
-def _resampled_sky(coro, _offset=None):
+@vv.case(
+    "on-axis-contrast-floor", "code-verification", basis="spike", srq="on-axis contrast"
+)
+@pytest.mark.medium(reason="calibrate live optics and propagate in both precisions")
+@pytest.mark.float64_only(reason="precision_pair needs x64")
+@pytest.mark.parametrize(
+    ("path_fixture", "unocculted_fixture", "inner_lod", "offset_lod", "bound"),
+    [
+        ("bare_telescope", "bare_telescope", 3.0, 6.0, 6.2e-9),
+        ("aberrated_telescope", "bare_telescope", 3.0, 6.0, 5.8e-9),
+        ("vortex_coronagraph", "bare_telescope", 3.0, 6.0, 6.3e-11),
+        ("square_telescope", "square_telescope", 0.0, 2.0, 2.5e-7),
+        ("band_telescope", "band_telescope", 0.0, 0.8, 5.8e-8),
+    ],
+    ids=["bare", "aberrated", "vortex", "square", "band"],
+)
+def test_float32_contrast_floor(
+    request, path_fixture, unocculted_fixture, inner_lod, offset_lod, bound
+):
+    """Fails if float32 propagation changes working-region intensity beyond its bound.
+
+    At 600 nm the 64-sample circular pupil and 0.5 lambda/D pitch give
+    3-10 lambda/D annulus errors of 3.06e-9 (bare), 2.86e-9 (3 nm RMS, Noll 5), and
+    3.13e-11 (charge 2, q=64, scale factor 4, window 16, 0.90 D Lyot stop),
+    relative to the bare telescope's peak at a source offset of 6 lambda/D.
+    The 16-sample square pupil at 600 nm (pitch 0.25) gives 1.21e-7 within
+    2.5 lambda/D. The 24-sample disk over 450-550 nm (three nodes, pitch 0.4)
+    gives 2.90e-8 within 1 lambda/D. Both include the stellar core and use
+    the unocculted peak on their own grid, at offsets 2 and 0.8 lambda/D.
+    Doubling each maximum pixel error and rounding up to two significant
+    digits gives bounds of 6.2e-9, 5.8e-9, 6.3e-11, 2.5e-7, and 5.8e-8.
+    """
+    model = request.getfixturevalue(path_fixture)
+    unocculted = request.getfixturevalue(unocculted_fixture)
+    wavelength_nm = model.frame.reference_wavelength_nm
+    radius = model.grid.radius()
+    region = (radius > inner_lod) & (radius < model.max_separation_lod)
+    peak = float(
+        unocculted.source_psfs(wavelength_nm, offset_lod, 0.0).image.data.max()
+    )
+    assert peak > 0 and region.any()
+
+    def stellar_intensity(coro):
+        return coro.stellar_map(wavelength_nm, 0.0).data[region]
+
+    precision_pair(stellar_intensity, (model,), bound=bound, scale=peak)
+
+
+def _resampled_sky(coro, _offset):
     grid = replace(coro.grid, shape=(8, 8), center_x=3.5, center_y=3.5)
     return coro.uniform_sky_map(600.0, grid=grid).data
 
@@ -1279,33 +1334,4 @@ def test_coronagraph_precision(bare_telescope, read):
     """
     args = bare_telescope, jnp.array([0.0, 0.375])
     precision_pair(read, args, bound=ulps(16 * NPUP, np.float32(1)))
-    if read is not _resampled_sky:
-        assert_precision_closed(read, *canonical(args, precision="float32"))
-
-
-class _SkyResamplingWidening(AssertionError):
-    """A shared resampling coordinate or fill value widened to float64."""
-
-
-@pytest.mark.float64_only(reason="trace a float32 sky map with x64 available")
-@pytest.mark.xfail(
-    strict=True,
-    raises=_SkyResamplingWidening,
-    reason="the shared resampler creates float64 grid coordinates and a float64 fill",
-)
-def test_resampled_sky_precision_closure(bare_telescope):
-    """Fails if resampling a float32 sky introduces a wide coordinate or fill."""
-    model = canonical(bare_telescope, precision="float32")
-    try:
-        assert_precision_closed(_resampled_sky, model)
-    except AssertionError as error:
-        sites = (
-            "/optixstuff/grids.py:343:24 (PixelGrid.coordinates)",
-            "/hwoutils/map_coordinates.py:127:11 (_map_coordinates)",
-        )
-        if any(
-            str(error).endswith(f"{site}: precision widened to float64")
-            for site in sites
-        ):
-            raise _SkyResamplingWidening(str(error)) from error
-        raise
+    assert_precision_closed(read, *canonical(args, precision="float32"))
