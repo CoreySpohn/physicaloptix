@@ -604,9 +604,55 @@ def test_volts_to_stroke_follows_each_actuator_table():
     )
 
 
+@pytest.mark.parametrize("device_nodes", [False, True], ids=["host", "device"])
+def test_volts_to_stroke_resolves_a_narrow_interior_interval(device_nodes):
+    """A midpoint gives half stroke and half coupling to its right neighbor.
+
+    Fails if absolute voltage knots collapse or an interpolation origin erases
+    a resolvable interval. All expected values are binary fractions of the
+    tabulated stroke, so no interpolation tolerance is needed.
+
+    Args:
+        device_nodes: Use adjacent device knots or sub-ULP host knots.
+    """
+    v = jax.numpy.array([[50, 0]], dtype=np.float32)
+    delta = float(np.spacing(np.float32(50))) if device_nodes else 1e-6
+    nodes = np.array([0, 50 - delta, 50 + delta, 120])
+    table = np.zeros((4, 1, 2))
+    table[2:, 0, 0] = 1e-7
+    coupling = np.zeros((4, 1, 2, 3, 3))
+    coupling[2:, 0, 0, 1, 2] = 1
+    if device_nodes:
+        nodes = jax.numpy.asarray(nodes, dtype=v.dtype)
+
+    def stroke(volts, knots):
+        return volts_to_stroke(
+            volts,
+            stroke_volts=knots,
+            coupling_volts=knots,
+            stroke_table_m=table,
+            coupling=coupling,
+        )
+
+    if device_nodes:
+        compiled = jax.jit(stroke)(v, nodes)
+    else:
+        compiled = jax.jit(lambda volts: stroke(volts, nodes))(v)
+    expected = np.asarray([[-5e-8, -2.5e-8]], dtype=np.float32)
+    for actual in (stroke(v, nodes), compiled):
+        np.testing.assert_array_equal(actual, expected)
+
+
 def test_volts_to_stroke_clamps_at_the_ends_of_the_table():
-    stroke = _v2s(np.array([[-20.0, 130.0]]), _calibration(shape=(1, 2)))
-    np.testing.assert_allclose(stroke, [[0.0, -2e-9 * 100.0]], atol=1e-30)
+    cal = _calibration(shape=(1, 4))
+    # The sum of the penultimate stroke and a rounded full interval loses
+    # the last stroke here; a clamped query returns the tabulated endpoint.
+    cal["stroke_table_m"][-2, 0, 2:] = 1
+    cal["stroke_table_m"][-1, 0, 2:] = 1e-20
+    stroke = _v2s(np.array([[-np.inf, -20, 130, np.inf]]), cal)
+    np.testing.assert_array_equal(
+        stroke, np.array([[0, 0, -1e-20, -1e-20]], dtype=stroke.dtype)
+    )
 
 
 def test_volts_to_stroke_accepts_a_rectangular_array():

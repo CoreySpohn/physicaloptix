@@ -9,9 +9,10 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TEST_FRAME
+from hwoutils.leaves import canonical
 from hwoutils.numerics import eps
 from hwoutils.precision import like
-from hwoutils.testing import ulps
+from hwoutils.testing import assert_precision_closed, precision_pair, ulps
 from optixstuff import SimplePrimary
 from optixstuff.coronagraph import (
     AbstractImagingCoronagraph,
@@ -548,6 +549,37 @@ class TestSamplingExplicitContract:
         np.testing.assert_allclose(
             data[0], np.asarray(alone.image.data)[0], rtol=1e-12, atol=1e-12
         )
+
+    def test_source_admission_at_the_nyquist_boundary(self, bare_telescope):
+        """Fails if rounding an offset or the open Nyquist limit drops a source.
+
+        Host positions lie one float64 spacing inside and outside the limit,
+        which falls between adjacent float32 device positions. Each admitted
+        source must deliver light, and excluded sources give exact zero images.
+        """
+        model = canonical(bare_telescope, precision="float32")
+        wave = np.float32(model.low_nm / 2)
+        model = replace(model, low_nm=float(wave) + float(np.spacing(wave)) / 8)
+        limit = (0.5 / model.input_field.grid.step) * (
+            model.low_nm / model.frame.reference_wavelength_nm
+        )
+        host = np.array(
+            [np.nextafter(limit, 0), -limit, np.nextafter(limit, np.inf), 0, 0]
+        )
+        inner = np.float32(limit)
+        outer = np.nextafter(inner, np.float32(np.inf))
+        device = jnp.asarray([0, 0, 0, -inner, outer], dtype=jnp.float32)
+
+        def sources(coro, y):
+            return coro.source_psfs(coro.low_nm, host, y)
+
+        for run in (sources, eqx.filter_jit(sources)):
+            batch = run(model, device)
+            expected = np.array([True, False, False, True, False])
+            np.testing.assert_array_equal(batch.valid, expected)
+            peaks = np.max(np.asarray(batch.image.data), axis=(-2, -1))
+            np.testing.assert_array_equal(peaks > 0, expected)
+            np.testing.assert_array_equal(np.asarray(batch.image.data)[~expected], 0)
 
     def test_products_are_zero_beyond_their_extent(self, vortex_coronagraph):
         """Fails if a product is reflected or extended past its grid.
@@ -1195,3 +1227,85 @@ def test_local_zodi_rate_reads_the_record_sky(vortex_coronagraph):
     np.testing.assert_allclose(
         rates.local_zodi[0, 0], expected, rtol=16 * eps(rates.local_zodi.dtype), atol=0
     )
+
+
+def _resampled_sky(coro, _offset=None):
+    grid = replace(coro.grid, shape=(8, 8), center_x=3.5, center_y=3.5)
+    return coro.uniform_sky_map(600.0, grid=grid).data
+
+
+@pytest.mark.float64_only(reason="trace a float32 coronagraph with x64 available")
+@pytest.mark.parametrize(
+    "read",
+    [
+        lambda coro, x: coro.stellar_map(600.0, x[0]).data,
+        lambda coro, x: coro.source_psfs(600.0, x, -x).image.data,
+        lambda coro, x: (
+            coro.off_axis_psf(
+                600.0,
+                x[1],
+                replace(coro.grid, shape=(8, 8), center_x=3.5, center_y=3.5),
+            ).data
+        ),
+        lambda coro, x: (
+            coro.stellar_map(
+                600.0,
+                x[0],
+                grid=replace(coro.grid, shape=(8, 8), center_x=3.5, center_y=3.5),
+            ).data
+        ),
+        lambda coro, x: coro.uniform_sky_response(x),
+        lambda coro, x: coro.uniform_sky_response(np.array([0.125, 0.75])),
+        lambda coro, x: coro.uniform_sky_map(600.0, grid=coro.grid).data,
+        _resampled_sky,
+    ],
+    ids=[
+        "stellar",
+        "sources",
+        "off-axis-grid",
+        "stellar-grid",
+        "sky-profile",
+        "host-sky-profile",
+        "sky-map",
+        "sky-grid",
+    ],
+)
+def test_coronagraph_precision(bare_telescope, read):
+    """Fails if reading the live train or its calibration creates a wide value.
+
+    Each pupil axis has 64 complex summands. Allow two axes, four real
+    roundings per multiply-add, and a factor of two for squared amplitude,
+    relative to the peak in each output.
+    """
+    args = bare_telescope, jnp.array([0.0, 0.375])
+    precision_pair(read, args, bound=ulps(16 * NPUP, np.float32(1)))
+    if read is not _resampled_sky:
+        assert_precision_closed(read, *canonical(args, precision="float32"))
+
+
+class _SkyResamplingWidening(AssertionError):
+    """A shared resampling coordinate or fill value widened to float64."""
+
+
+@pytest.mark.float64_only(reason="trace a float32 sky map with x64 available")
+@pytest.mark.xfail(
+    strict=True,
+    raises=_SkyResamplingWidening,
+    reason="the shared resampler creates float64 grid coordinates and a float64 fill",
+)
+def test_resampled_sky_precision_closure(bare_telescope):
+    """Fails if resampling a float32 sky introduces a wide coordinate or fill."""
+    model = canonical(bare_telescope, precision="float32")
+    try:
+        assert_precision_closed(_resampled_sky, model)
+    except AssertionError as error:
+        sites = (
+            "/optixstuff/grids.py:343:24 (PixelGrid.coordinates)",
+            "/hwoutils/map_coordinates.py:127:11 (_map_coordinates)",
+        )
+        if any(
+            str(error).endswith(f"{site}: precision widened to float64")
+            for site in sites
+        ):
+            raise _SkyResamplingWidening(str(error)) from error
+        raise

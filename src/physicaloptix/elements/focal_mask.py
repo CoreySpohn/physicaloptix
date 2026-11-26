@@ -10,6 +10,7 @@ MFT (``Fraunhofer``) on any other window.
 
 import equinox as eqx
 import numpy as np
+from hwoutils.precision import like
 from jaxtyping import Array
 from optixstuff.grids import PixelGrid
 
@@ -164,7 +165,7 @@ class FocalPlaneMask(eqx.Module):
         self._check_mono(field)
         focal = self.transform.forward(field)
         perturbation = Field(
-            data=focal.data * (self.transmission - 1.0),
+            data=focal.data * (self.transmission - like(1.0, focal.data)),
             grid=focal.grid,
             plane=focal.plane,
             spectrum=focal.spectrum,

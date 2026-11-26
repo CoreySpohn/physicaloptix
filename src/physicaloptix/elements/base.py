@@ -4,6 +4,7 @@ from abc import abstractmethod
 from typing import Self
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
 from hwoutils.leaves import as_complex_leaf, as_float_leaf, as_leaf
@@ -76,9 +77,16 @@ def _optional_float_leaf(value):
     return None if value is None else as_float_leaf(value)
 
 
+def _array_leaf(value):
+    """Retain the precision of strong amplitudes and the kind of discrete masks."""
+    if isinstance(value, jax.Array) and jnp.issubdtype(value.dtype, jnp.inexact):
+        return _amplitude_leaf(value)
+    return as_leaf(value)
+
+
 def _optional_leaf(value):
     """A strong leaf of the value's own kind, or None."""
-    return None if value is None else as_leaf(value)
+    return None if value is None else _array_leaf(value)
 
 
 class SampledOptic(Element):
@@ -155,6 +163,7 @@ class SampledOptic(Element):
                 self.shift_px[1],
                 self.shift_px[0],
                 order=self.shift_order,
+                cval=jnp.zeros((), dtype=transmission.dtype),
             )
         return Field(
             data=field.data * transmission,

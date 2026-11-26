@@ -42,6 +42,9 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.constants import two_pi
+from hwoutils.leaves import is_traced
+from hwoutils.precision import like, precision_of
 from jax import lax
 from jaxtyping import Array
 from optixstuff import PsfletPack
@@ -55,6 +58,7 @@ from optixstuff.grids import (
 from optixstuff.psflet_pack import TEMPLATE_ORIGIN
 
 from physicaloptix.core.grid import _grid_axis
+from physicaloptix.elements.base import _amplitude_leaf
 from physicaloptix.transforms.cmft import cmft_fwd
 
 
@@ -91,7 +95,7 @@ class LensletChain(eqx.Module):
             or ``"flat"`` (uniform tile; the analytic sinc^2 reference).
     """
 
-    pupil_field: Array = eqx.field(converter=jnp.asarray)
+    pupil_field: Array = eqx.field(converter=_amplitude_leaf)
     pupil_grid: PixelGrid
     stop_opd_nm: Array | None
     pitch_lod_ref: float = eqx.field(static=True)
@@ -257,8 +261,11 @@ class LensletChain(eqx.Module):
         """
         return self.micropupil_px / self.pitch_lod(wavelength_nm)
 
+    def _axis(self, grid):
+        return like(_grid_axis(grid), self)
+
     def _window(self):
-        c = jnp.asarray(_grid_axis(self.tile_grid))
+        c = self._axis(self.tile_grid)
         half = 0.5 * self.fill_factor
         inside = (jnp.abs(c[:, None]) <= half) & (jnp.abs(c[None, :]) <= half)
         return inside.astype(self.pupil_field.real.dtype)
@@ -280,12 +287,12 @@ class LensletChain(eqx.Module):
                     "per-wavelength pupil_field needs an explicit pupil slice"
                 )
             pupil = self.pupil_field
-        tile = jnp.asarray(_grid_axis(self.tile_grid))
+        tile = self._axis(self.tile_grid)
         if self.illumination == "flat":
             field = jnp.ones((self.n_tile, self.n_tile), dtype=pupil.dtype)
         else:
-            u_tile = tile * self.pitch_lod(wavelength_nm)
-            field = cmft_fwd(pupil, jnp.asarray(_grid_axis(self.pupil_grid)), u_tile)
+            u_tile = tile * like(self.pitch_lod(wavelength_nm), tile)
+            field = cmft_fwd(pupil, self._axis(self.pupil_grid), u_tile)
         return field * self._window()
 
     def micropupil_field(self, wavelength_nm, pupil=None):
@@ -301,8 +308,8 @@ class LensletChain(eqx.Module):
             applied if there is one.
         """
         windowed = self.local_field(wavelength_nm, pupil)
-        u_mp = jnp.asarray(_grid_axis(self.mp_grid))
-        field = cmft_fwd(windowed, jnp.asarray(_grid_axis(self.tile_grid)), u_mp)
+        u_mp = self._axis(self.mp_grid)
+        field = cmft_fwd(windowed, self._axis(self.tile_grid), u_mp)
         if self.pinhole_radius is not None:
             rr2 = u_mp[:, None] ** 2 + u_mp[None, :] ** 2
             field = field * (rr2 <= self.pinhole_radius**2)
@@ -310,12 +317,12 @@ class LensletChain(eqx.Module):
 
     def _relay_to_stop(self, tile_field, wavelength_nm, shift_diffraction=(0.0, 0.0)):
         """Windowed tile field -> field just after the spectrograph stop."""
-        u_mp = jnp.asarray(_grid_axis(self.mp_grid))
-        field = cmft_fwd(tile_field, jnp.asarray(_grid_axis(self.tile_grid)), u_mp)
+        u_mp = self._axis(self.mp_grid)
+        field = cmft_fwd(tile_field, self._axis(self.tile_grid), u_mp)
         if self.pinhole_radius is not None:
             rr2 = u_mp[:, None] ** 2 + u_mp[None, :] ** 2
             field = field * (rr2 <= self.pinhole_radius**2)
-        x_s = jnp.asarray(_grid_axis(self.stop_grid))
+        x_s = self._axis(self.stop_grid)
         field = cmft_fwd(field, u_mp, x_s)
         if self.stop_kind == "square":
             inside = (jnp.abs(x_s[:, None]) <= self.stop_halfwidth) & (
@@ -326,11 +333,11 @@ class LensletChain(eqx.Module):
         field = field * inside
         if self.stop_opd_nm is not None:
             field = field * jnp.exp(
-                2j * jnp.pi * self.stop_opd_nm / jnp.asarray(wavelength_nm)
+                1j * (two_pi * (self.stop_opd_nm / like(wavelength_nm, tile_field)))
             )
         dx, dy = shift_diffraction
-        if dx != 0.0 or dy != 0.0:
-            phase = x_s[None, :] * dx + x_s[:, None] * dy
+        if is_traced(dx) or is_traced(dy) or dx != 0.0 or dy != 0.0:
+            phase = x_s[None, :] * like(dx, x_s) + x_s[:, None] * like(dy, x_s)
             field = field * jnp.exp(2j * jnp.pi * phase)
         return field
 
@@ -383,17 +390,17 @@ class LensletChain(eqx.Module):
                     "per-wavelength pupil_field needs an explicit pupil slice"
                 )
             pupil = self.pupil_field
-        tile = jnp.asarray(_grid_axis(self.tile_grid))
-        p_lod = self.pitch_lod(wavelength_nm)
+        tile = self._axis(self.tile_grid)
+        p_lod = like(self.pitch_lod(wavelength_nm), tile)
         window = self._window()
-        xp = jnp.asarray(_grid_axis(self.pupil_grid))
+        xp = self._axis(self.pupil_grid)
 
         def one(center):
             uy = (tile + center[1]) * p_lod
             ux = (tile + center[0]) * p_lod
             return cmft_fwd(pupil, xp, uy, ux) * window
 
-        return jax.vmap(one)(jnp.asarray(centers_pitch))
+        return jax.vmap(one)(like(centers_pitch, tile))
 
     def detector_patch(
         self, tile_field, wavelength_nm, off_y, off_x, shift_diffraction=(0.0, 0.0)
@@ -417,9 +424,11 @@ class LensletChain(eqx.Module):
             Complex detector field of one lenslet, shape (len(off_y), len(off_x)).
         """
         stop = self._relay_to_stop(tile_field, wavelength_nm, shift_diffraction)
-        ppd = self.px_per_diffraction(wavelength_nm)
-        x_s = jnp.asarray(_grid_axis(self.stop_grid))
-        return cmft_fwd(stop, x_s, jnp.asarray(off_y) / ppd, jnp.asarray(off_x) / ppd)
+        ppd = like(self.px_per_diffraction(wavelength_nm), stop)
+        x_s = self._axis(self.stop_grid)
+        return cmft_fwd(
+            stop, x_s, like(off_y, tile_field) / ppd, like(off_x, tile_field) / ppd
+        )
 
     def detector_field(
         self, wavelength_nm, px_coords, pupil=None, shift_diffraction=(0.0, 0.0)
@@ -442,8 +451,10 @@ class LensletChain(eqx.Module):
             Complex detector-plane field, (len(px_coords), len(px_coords)), rows y.
         """
         stop = self.stop_field(wavelength_nm, pupil, shift_diffraction)
-        u_det = jnp.asarray(px_coords) / self.px_per_diffraction(wavelength_nm)
-        return cmft_fwd(stop, jnp.asarray(_grid_axis(self.stop_grid)), u_det)
+        u_det = like(px_coords, stop) / like(
+            self.px_per_diffraction(wavelength_nm), stop
+        )
+        return cmft_fwd(stop, self._axis(self.stop_grid), u_det)
 
     def psflet_intensity(
         self, wavelength_nm, px_coords, pupil=None, shift_diffraction=(0.0, 0.0)
@@ -604,15 +615,16 @@ def psflet_template(chain, wavelength_nm, offsets, pupil=None, n_quad=8):
     must be concrete (the function cannot be traced by ``jit`` or ``vmap``),
     and ``(cx, cy)`` are NumPy scalars.
     """
-    fine, stride = _fine_axis(np.asarray(offsets), n_quad)
-    fine = jnp.asarray(fine)
-    offsets = jnp.asarray(offsets)
+    host_fine, stride = _fine_axis(np.asarray(offsets), n_quad)
+    fine = like(host_fine, chain.pupil_field)
+    offsets = like(offsets, chain.pupil_field)
     stop = chain.stop_field(wavelength_nm, pupil)
-    x_stop = jnp.asarray(_grid_axis(chain.stop_grid))
-    ppd = chain.px_per_diffraction(wavelength_nm)
+    x_stop = chain._axis(chain.stop_grid)
+    host_ppd = chain.px_per_diffraction(wavelength_nm)
+    ppd = like(host_ppd, stop)
     cx = cy = 0.0
     for render in range(5):
-        _check_stop_band(chain, wavelength_nm, fine, cx, cy, ppd)
+        _check_stop_band(chain, wavelength_nm, host_fine, cx, cy, host_ppd)
         field = cmft_fwd(stop, x_stop, (fine + cy) / ppd, (fine + cx) / ppd)
         template = pixel_integrate(field.real**2 + field.imag**2, n_quad, stride)
         # Measure on the stored pixel integrals in their local coordinates.
@@ -807,17 +819,23 @@ def detector_scene(
             "or shrink patch_half_px"
         )
 
-    total = jnp.zeros((ny, nx))
-    win = jnp.arange(n_win)
+    def first_offset(start, centroid):
+        # Subtract the centroid from the whole pixel before adding the
+        # subpixel midpoint, so translating the patch preserves its samples.
+        pixel, subpixel = np.divmod(start, ovs)
+        return (pixel - centroid) + ((subpixel + 0.5) / ovs - 0.5)
+
+    first_y = first_offset(fy0, yc)
+    first_x = first_offset(fx0, xc)
+    total = jnp.zeros((ny, nx), dtype=precision_of(chain))
+    ramp = jnp.arange(n_win, dtype=total.dtype) / ovs
     for i, lam in enumerate(lams):
         pupil = chain.pupil_field[i] if chain.pupil_field.ndim == 3 else None
         tiles = chain.tile_fields(lam, centers_pitch, pupil)
 
         def add_patch(canvas, per_lenslet, lam=lam):
-            tile, y0, x0, cy, cx = per_lenslet
-            off_y = (y0 + win + 0.5) / ovs - 0.5 - cy
-            off_x = (x0 + win + 0.5) / ovs - 0.5 - cx
-            patch = chain.detector_patch(tile, lam, off_y, off_x)
+            tile, y0, x0, dy, dx = per_lenslet
+            patch = chain.detector_patch(tile, lam, dy + ramp, dx + ramp)
             block = lax.dynamic_slice(canvas, (y0, x0), (n_win, n_win))
             return lax.dynamic_update_slice(canvas, block + patch, (y0, x0)), None
 
@@ -827,13 +845,13 @@ def detector_scene(
             canvas,
             (
                 tiles,
-                jnp.asarray(fy0[:, i]),
-                jnp.asarray(fx0[:, i]),
-                jnp.asarray(yc[:, i]),
-                jnp.asarray(xc[:, i]),
+                jnp.asarray(fy0[:, i], dtype=jnp.int32),
+                jnp.asarray(fx0[:, i], dtype=jnp.int32),
+                like(first_y[:, i], tiles),
+                like(first_x[:, i], tiles),
             ),
         )
         fine = jnp.abs(canvas) ** 2
         pixels = pixel_integrate(fine, ovs, ovs)
-        total = total + w[i] * pixels
+        total = total + like(w[i], pixels) * pixels
     return total

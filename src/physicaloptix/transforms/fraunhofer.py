@@ -30,8 +30,8 @@ import warnings
 
 import equinox as eqx
 import jax
-import jax.numpy as jnp
 import numpy as np
+from hwoutils.precision import like
 from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind, validate_field
@@ -157,8 +157,8 @@ class Fraunhofer(eqx.Module):
         validate_field(
             field, plane=self.plane_in, grid=self.grid_in, context="Fraunhofer"
         )
-        x = jnp.asarray(_grid_axis(self.grid_in))
-        u = jnp.asarray(_grid_axis(self.grid_out))
+        x = _grid_axis(self.grid_in)
+        u = like(_grid_axis(self.grid_out), field.data)
         scaling = self._chromatic_scaling(field)
         if scaling is None:
             data = cmft_fwd(field.data, x, u)
@@ -195,8 +195,8 @@ class Fraunhofer(eqx.Module):
         validate_field(
             field, plane=self.plane_out, grid=self.grid_out, context="Fraunhofer"
         )
-        x = jnp.asarray(_grid_axis(self.grid_in))
-        u = jnp.asarray(_grid_axis(self.grid_out))
+        x = _grid_axis(self.grid_in)
+        u = like(_grid_axis(self.grid_out), field.data)
         scaling = self._chromatic_scaling(field)
         if scaling is None:
             data = cmft_bwd(field.data, x, u)

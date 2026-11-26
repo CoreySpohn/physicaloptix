@@ -12,6 +12,7 @@ import equinox as eqx
 import jax.numpy as jnp
 from hwoutils.conversions import arcsec_to_lambda_d
 from hwoutils.leaves import as_float_leaf
+from hwoutils.precision import like
 from jaxtyping import Array
 
 from physicaloptix.core import Field
@@ -89,7 +90,12 @@ def point_source(
             "define the fixed angle"
         )
     px, py = (0.0, 0.0) if position_lod is None else position_lod
-    coords = jnp.asarray(_grid_axis(field.grid))
+    coords = like(_grid_axis(field.grid), field.data)
+    px, py = like(px, field.data), like(py, field.data)
+    if reference_wavelength_nm is not None:
+        reference_wavelength_nm = like(reference_wavelength_nm, field.data)
+    if opd_nm is not None:
+        opd_nm = like(opd_nm, field.data)
     phase = px * coords[None, :] + py * coords[:, None]
     if spectrum is None:
         data = field.data * jnp.exp(2j * jnp.pi * phase)
@@ -207,13 +213,16 @@ class PointSource(eqx.Module):
         Returns:
             The tilted entrance ``Field``.
         """
-        x = jnp.asarray(_grid_axis(entrance.grid))
-        lod = arcsec_to_lambda_d(self.position_arcsec, wavelength_nm, pupil_diameter_m)
-        phase = (parity[0] * lod[0]) * x[jnp.newaxis, :] + (parity[1] * lod[1]) * x[
-            :, jnp.newaxis
-        ]
+        x = like(_grid_axis(entrance.grid), entrance.data)
+        lod = arcsec_to_lambda_d(
+            like(self.position_arcsec, entrance.data),
+            like(wavelength_nm, entrance.data),
+            like(pupil_diameter_m, entrance.data),
+        )
+        px, py = like(parity, entrance.data) * lod
+        phase = px * x[jnp.newaxis, :] + py * x[:, jnp.newaxis]
         return Field(
-            data=entrance.data * jnp.exp(2j * jnp.pi * 1.0 * phase),
+            data=entrance.data * jnp.exp(2j * jnp.pi * phase),
             grid=entrance.grid,
             plane=entrance.plane,
             spectrum=entrance.spectrum,

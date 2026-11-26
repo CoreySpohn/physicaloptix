@@ -15,6 +15,15 @@ the one used here.
 
 import jax
 import jax.numpy as jnp
+from hwoutils.constants import two_pi
+from hwoutils.conversions import nm_to_um
+from hwoutils.precision import complex_of, precision_of
+
+
+def _wavelengths(wavelengths_nm, *properties):
+    """Give host wavelengths and optical constants the precision of the JAX inputs."""
+    dtype = precision_of((wavelengths_nm, properties))
+    return jnp.asarray(wavelengths_nm, dtype=dtype)
 
 
 def sellmeier(wavelengths_nm, b, c_um2):
@@ -22,13 +31,22 @@ def sellmeier(wavelengths_nm, b, c_um2):
 
     Args:
         wavelengths_nm: Wavelengths in nanometers, shape ``(w,)``.
-        b: The three B coefficients, shape ``(3,)``.
-        c_um2: The three C coefficients in square microns, shape ``(3,)``.
+        b: The three real or complex B coefficients, shape ``(3,)``.
+        c_um2: The three real or complex C coefficients in square microns,
+            shape ``(3,)``.
 
     Returns:
         ``n(lambda)``, shape ``(w,)``.
     """
-    lam2 = (jnp.asarray(wavelengths_nm) / 1000.0) ** 2
+    lam2 = nm_to_um(_wavelengths(wavelengths_nm, b, c_um2)) ** 2
+
+    def coefficients(values):
+        complex_values = any(jnp.iscomplexobj(v) for v in jax.tree.leaves(values))
+        dtype = complex_of(lam2.dtype) if complex_values else lam2.dtype
+        return jnp.asarray(values, dtype=dtype)
+
+    b = coefficients(b)
+    c_um2 = coefficients(c_um2)
     terms = b * lam2[:, None] / (lam2[:, None] - c_um2)
     return jnp.sqrt(1.0 + jnp.sum(terms, axis=1))
 
@@ -55,15 +73,17 @@ def multilayer_response(
         ``(r, t)`` complex amplitude coefficients, each shape ``(w,)``, in
         the library's ``e^{+ikz}`` convention.
     """
-    wavelengths = jnp.asarray(wavelengths_nm, dtype=float)
+    layers = tuple(zip(layer_indices, layer_thicknesses_nm, strict=True))
+    wavelengths = _wavelengths(wavelengths_nm, layers, n_incident, n_substrate)
+    dtype = complex_of(wavelengths.dtype)
     w = wavelengths.shape[0]
-    m00 = jnp.ones(w, dtype=complex)
-    m01 = jnp.zeros(w, dtype=complex)
-    m10 = jnp.zeros(w, dtype=complex)
-    m11 = jnp.ones(w, dtype=complex)
-    for n_layer, d in zip(layer_indices, layer_thicknesses_nm, strict=True):
-        n_l = jnp.broadcast_to(jnp.asarray(n_layer, dtype=complex), (w,))
-        delta = 2.0 * jnp.pi * n_l * d / wavelengths
+    m00 = jnp.ones(w, dtype=dtype)
+    m01 = jnp.zeros(w, dtype=dtype)
+    m10 = jnp.zeros(w, dtype=dtype)
+    m11 = jnp.ones(w, dtype=dtype)
+    for n_layer, d in layers:
+        n_l = jnp.broadcast_to(jnp.asarray(n_layer, dtype=dtype), (w,))
+        delta = two_pi * n_l * jnp.asarray(d, dtype=wavelengths.dtype) / wavelengths
         cos_d, sin_d = jnp.cos(delta), jnp.sin(delta)
         # Conjugate of the textbook matrix: library e^{+ikz} convention.
         a00, a01 = cos_d, -1j * sin_d / n_l
@@ -74,8 +94,8 @@ def multilayer_response(
             m10 * a00 + m11 * a10,
             m10 * a01 + m11 * a11,
         )
-    n0 = jnp.broadcast_to(jnp.asarray(n_incident, dtype=complex), (w,))
-    ns = jnp.broadcast_to(jnp.asarray(n_substrate, dtype=complex), (w,))
+    n0 = jnp.broadcast_to(jnp.asarray(n_incident, dtype=dtype), (w,))
+    ns = jnp.broadcast_to(jnp.asarray(n_substrate, dtype=dtype), (w,))
     b = m00 + m01 * ns
     c = m10 + m11 * ns
     r = (n0 * b - c) / (n0 * b + c)
@@ -124,7 +144,14 @@ def thickness_kernel(
     """
     if output not in ("r", "t"):
         raise ValueError(f"output must be 'r' or 't', got {output!r}")
-    thicknesses = [jnp.asarray(d, dtype=float) for d in layer_thicknesses_nm]
+    layer_indices = tuple(layer_indices)
+    layer_thicknesses_nm = tuple(layer_thicknesses_nm)
+    wavelengths_nm = _wavelengths(
+        wavelengths_nm, layer_indices, layer_thicknesses_nm, n_incident, n_substrate
+    )
+    thicknesses = [
+        jnp.asarray(d, dtype=wavelengths_nm.dtype) for d in layer_thicknesses_nm
+    ]
 
     def log_response(d_layer):
         stack = list(thicknesses)

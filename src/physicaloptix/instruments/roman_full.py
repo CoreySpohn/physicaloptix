@@ -37,8 +37,10 @@ from typing import NamedTuple
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
-from hwoutils.leaves import as_leaf
+from hwoutils.leaves import canonical
+from hwoutils.precision import complex_of, like, precision_of
 
+from physicaloptix.elements.base import _array_leaf
 from physicaloptix.instruments._proper_beam import (
     PilotBeam,
     plan_lens,
@@ -140,7 +142,7 @@ def compile_train(steps, *, lam_m, n, beam_diameter_m, pupil_diam_pix):
 
 
 def _as_arrays(arrays):
-    return {k: as_leaf(v) for k, v in arrays.items()}
+    return {k: _array_leaf(v) for k, v in arrays.items()}
 
 
 class RomanFull(eqx.Module):
@@ -159,9 +161,9 @@ class RomanFull(eqx.Module):
     arrays: dict = eqx.field(converter=_as_arrays)
     program: tuple = eqx.field(static=True)
     n: int = eqx.field(static=True)
-    lam_m: float = eqx.field(static=True)
-    pupil_diam_pix: float = eqx.field(static=True)
-    final_dx_m: float = eqx.field(static=True)
+    lam_m: float = eqx.field(converter=float, static=True)
+    pupil_diam_pix: float = eqx.field(converter=float, static=True)
+    final_dx_m: float = eqx.field(converter=float, static=True)
 
     def __call__(self, *, taps=()):
         """Run the train.
@@ -173,7 +175,7 @@ class RomanFull(eqx.Module):
             Dict of the requested tap fields and ``"end"``, the field at the last
             plane, all centered.
         """
-        a = jnp.ones((self.n, self.n), dtype=complex)
+        a = jnp.ones((self.n, self.n), dtype=complex_of(precision_of(self.arrays)))
         out = {}
         for ins in self.program:
             kind = ins[0]
@@ -185,7 +187,7 @@ class RomanFull(eqx.Module):
             elif kind == "multiply":
                 a = a * shift_center(self.arrays[ins[1]])
             elif kind == "wavefront":
-                opd = shift_center(self.arrays[ins[1]])
+                opd = shift_center(like(self.arrays[ins[1]], a))
                 a = a * jnp.exp(2 * jnp.pi * 1j / self.lam_m * opd)
             elif kind == "normalize":
                 a = a / jnp.sqrt(jnp.sum(jnp.abs(a) ** 2))
@@ -252,9 +254,12 @@ def source_tilt(n, pupil_diam_pix, source_x_lod, source_y_lod, lam0_m, lam_m):
     Returns:
         Complex tilt phasor of shape (n, n) to multiply into the entrance field.
     """
-    xt = source_y_lod * lam0_m / lam_m
-    yt = source_x_lod * lam0_m / lam_m
-    x = (jnp.arange(n) - n // 2) / (pupil_diam_pix / 2.0)
+    geometry = (source_x_lod, source_y_lod, lam0_m, lam_m, pupil_diam_pix)
+    pupil_diam_pix = like(pupil_diam_pix, geometry)
+    lam0_m, lam_m = like(lam0_m, pupil_diam_pix), like(lam_m, pupil_diam_pix)
+    xt = like(source_y_lod, pupil_diam_pix) * lam0_m / lam_m
+    yt = like(source_x_lod, pupil_diam_pix) * lam0_m / lam_m
+    x = (jnp.arange(n, dtype=pupil_diam_pix.dtype) - n // 2) / (pupil_diam_pix / 2.0)
     return jnp.exp(1j * jnp.pi * (xt * x[None, :] + yt * x[:, None]))
 
 
@@ -277,16 +282,20 @@ def detector_image(field, *, dx_m, lam_m, defocus_c, output_dim, mag=None):
     Returns:
         Complex detector-frame field of shape (output_dim, output_dim).
     """
+    geometry = (field, dx_m, lam_m, defocus_c, mag)
+    field = like(canonical(field, precision=precision_of(geometry)), geometry)
+    dx_m = like(dx_m, field)
+    lam_m, defocus_c = like(lam_m, dx_m), like(defocus_c, dx_m)
     n = field.shape[-1]
-    x2 = (jnp.arange(n, dtype=float) - n // 2) ** 2
+    x2 = (jnp.arange(n, dtype=dx_m.dtype) - n // 2) ** 2
     rsqr = (jnp.sqrt(x2[None, :] + x2[:, None]) * dx_m) ** 2
     field = field * jnp.exp((1j * jnp.pi / lam_m * defocus_c) * rsqr)
-    field = field * jnp.exp(-1j * 0.1)
+    field = field * jnp.exp(like(-0.1j, field))
     field = jnp.roll(jnp.rot90(jnp.fliplr(field), 3), (1, 1), axis=(0, 1))
     if mag is None:
         return proper_trim(field, output_dim)
-    w = jnp.asarray(szoom_weights(n, output_dim, mag))
-    return (w @ field @ w.T) / mag
+    w = like(szoom_weights(n, output_dim, mag), field)
+    return (w @ field @ w.T) / like(mag, field)
 
 
 def _zernike_basis(x, y):

@@ -5,8 +5,9 @@ import json
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hwoutils.leaves import canonical
 from hwoutils.numerics import eps
-from hwoutils.testing import ulps
+from hwoutils.testing import assert_precision_closed, precision_pair, ulps
 from jax.scipy.special import erf
 from optixstuff import PsfletPack, load_psflet_pack, save_psflet_pack
 from optixstuff.grids import PixelGrid
@@ -537,6 +538,38 @@ class TestPack:
 
 
 class TestArrayScene:
+    @pytest.mark.parametrize("axis", [0, 1], ids=["rows", "columns"])
+    def test_integer_translation_preserves_fractional_centroid(self, axis):
+        """Identical lenslets at an integer separation have identical patches.
+
+        The subpixel offset is exactly representable on the host at both
+        positions, but is smaller than a float32 ULP at the far edge.
+        """
+        chain = canonical(
+            make_chain(n_tile=8, n_mp=12, n_stop=8, mp_half_extent=2.0),
+            precision="float32",
+        )
+        shift = 4096
+        centers = np.full((2, 2, 1), 4 + 1 / 8192)
+        centers[axis, 1] += shift
+        shape = [8, 8]
+        shape[axis] += shift
+        image = detector_scene(
+            chain,
+            np.zeros((2, 2)),
+            centers[1],
+            centers[0],
+            [LAM_REF],
+            det_shape=tuple(shape),
+            oversample=2,
+            patch_half_px=2,
+        )
+        image = np.asarray(image)
+        near = np.take(image, np.arange(8), axis=axis)
+        far = np.take(image, shift + np.arange(8), axis=axis)
+        assert near.max() > 0
+        np.testing.assert_array_equal(far, near)
+
     def test_single_lenslet_scene_matches_template_path(self):
         """One on-axis lenslet through the array machinery reproduces the
         single-lenslet template pipeline exactly on interior pixels.
@@ -633,3 +666,64 @@ class TestArrayScene:
         chain = make_chain(illumination="flat")
         with pytest.raises(ValueError, match="psf"):
             chain.tile_fields(LAM_REF, np.zeros((1, 2)))
+
+
+@pytest.mark.float64_only(reason="trace a float32 lenslet chain with x64 available")
+@pytest.mark.parametrize(
+    "forward",
+    [
+        lambda c, w, x: c.local_field(w),
+        lambda c, w, x: c.tile_fields(w, x[None, :]),
+        lambda c, w, x: c.micropupil_field(w),
+        lambda c, w, x: c.stop_field(w, shift_diffraction=x),
+        lambda c, w, x: c.detector_patch(c.local_field(w), w, x, -x),
+        lambda c, w, x: c.detector_field(w, x),
+        lambda c, w, x: c.psflet_intensity(w, x),
+        lambda c, w, x: c.energies(w),
+        lambda c, w, x: c.detector_field(
+            np.float64(LAM_REF), [0.25, 0.5], shift_diffraction=(np.float64(0.1), 0)
+        ),
+        lambda c, w, x: pixel_integrate(c.pupil_field, 2, 1),
+        lambda c, w, x: detector_scene(
+            c,
+            [[0.0, 0.0]],
+            [[2.25]],
+            [[2.5]],
+            [LAM_REF],
+            det_shape=(6, 6),
+            oversample=2,
+            patch_half_px=1,
+        ),
+    ],
+    ids=[
+        "local",
+        "tiles",
+        "micro",
+        "stop",
+        "patch",
+        "detector",
+        "intensity",
+        "energies",
+        "host-geometry",
+        "pixels",
+        "scene",
+    ],
+)
+def test_lenslet_precision(forward):
+    """Fails if a host axis, phase screen, or detector accumulator widens.
+
+    Four two-axis MFTs contract axes of length 64, 8, 12 and 8. Allow four
+    real roundings per complex multiply-add and twice the field error in
+    intensity, measured at the peak to include destructive interference.
+    """
+    chain = make_chain(
+        n_tile=8,
+        n_mp=12,
+        n_stop=8,
+        mp_half_extent=2.0,
+        pinhole_radius=1.0,
+        stop_opd_nm=jnp.arange(64).reshape(8, 8) * 0.125,
+    )
+    args = chain, jnp.asarray(LAM_REF), jnp.array([-0.375, 0.125])
+    assert_precision_closed(forward, *canonical(args, precision="float32"))
+    precision_pair(forward, args, bound=ulps(16 * (64 + 8 + 12 + 8), np.float32(1)))

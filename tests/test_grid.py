@@ -83,11 +83,11 @@ def test_shared_coordinates_equal_old_formula():
             np.testing.assert_array_equal(y, np.broadcast_to(old[:, None], (n, n)))
 
 
-def test_explicit_spectrum_psf_equals_parent_formula():
-    """Fails for changed propagation arithmetic: bitwise parent MFT formula.
+def test_explicit_spectrum_psf_equals_quadrature_formula():
+    """Compare the complex field bitwise to the continuous Fourier sum.
 
-    The independent reference uses the documented continuous Fourier sum and
-    old coordinate expression, with explicit nodes isolating grid migration.
+    The host grid sets the integration interval. The field precision sets
+    the sampled phase coordinates and arithmetic at each spectral node.
 
     Three spectral terms and division by the band width account for four relative
     roundings.
@@ -97,7 +97,9 @@ def test_explicit_spectrum_psf_equals_parent_formula():
     from physicaloptix import Field, Fraunhofer, PlaneKind, point_source
 
     n, m, step = 24, 32, 0.5
-    x = jnp.asarray((np.arange(n) - n / 2 + 0.5) * (1.0 / n))
+    pupil_axis = (np.arange(n) - n / 2 + 0.5) * (1.0 / n)
+    x = jnp.asarray(pupil_axis)
+    dx = jnp.asarray(pupil_axis[1] - pupil_axis[0], dtype=x.dtype)
     u = jnp.asarray((np.arange(m) - m / 2 + 0.5) * step)
     disk = ((x[:, None] ** 2 + x[None, :] ** 2) <= 0.25).astype(complex)
     nodes, weights = jnp.array([450.0, 500.0, 550.0]), jnp.array([0.25, 0.5, 0.25])
@@ -109,13 +111,13 @@ def test_explicit_spectrum_psf_equals_parent_formula():
         source.grid, PixelGrid.focal(m, step, TEST_FRAME), reference_wavelength_nm=500.0
     ).forward(source)
 
-    def old_slice(data, scale):
+    def reference_slice(data, scale):
         kernel = jnp.exp(-2j * jnp.pi * jnp.outer(u * scale, x))
-        return (x[1] - x[0]) ** 2 * (kernel @ data @ kernel.T) * scale
+        return dx**2 * (kernel @ data @ kernel.T) * scale
 
-    old = jax.vmap(old_slice)(source.data, 500.0 / nodes)
-    np.testing.assert_array_equal(propagated.data, old)
-    expected = jnp.tensordot(weights, old.real**2 + old.imag**2, axes=1)
+    reference = jax.vmap(reference_slice)(source.data, 500.0 / nodes)
+    np.testing.assert_array_equal(propagated.data, reference)
+    expected = jnp.tensordot(weights, reference.real**2 + reference.imag**2, axes=1)
     # Dimensional-weight reduction divides by the width after summation.
     np.testing.assert_allclose(
         propagated.intensity().data,

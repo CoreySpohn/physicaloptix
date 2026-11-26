@@ -5,6 +5,7 @@ from dataclasses import replace
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.precision import like
 from optixstuff.grids import (
     Image,
     Measure,
@@ -124,12 +125,16 @@ def uniform_sky_image(core_path, science, base, *, n_screens, seed, sky_band_nm=
         screen = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
         # Consume the same draw even for a monochromatic or discrete spectrum.
         fraction = rng.uniform()
-        data = base.data * jnp.asarray(screen)
+        data = base.data * like(screen, base.data)
         spectrum = base.spectrum
         if band is not None:
             wavelength = band.low_nm + band.width_nm * fraction
             # Each Monte Carlo draw estimates the mean over the same static band.
-            spectrum = Quadrature((band,), [[wavelength]], [[band.width_nm or 1.0]])
+            spectrum = Quadrature(
+                (band,),
+                like([[wavelength]], base.data),
+                like([[band.width_nm or 1.0]], base.data),
+            )
             data = data[None] * (wavelength / science.reference_wavelength_nm)
         source = Field(data, base.grid, base.plane, spectrum)
         sky = sky + _screen_intensity(core_path, science, source)

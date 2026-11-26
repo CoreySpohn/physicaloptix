@@ -269,7 +269,7 @@ def plan_lens(beam, lens_fl):
 
 
 def _ptp_array(a, lam, dz, dx, n):
-    x = ((jnp.arange(n, dtype=float) - n // 2) / (n * dx)) ** 2
+    x = ((jnp.arange(n, dtype=a.real.dtype) - n // 2) / (n * dx)) ** 2
     rhosqr = shift_center(x[None, :] + x[:, None])
     a = fft_forward(a, n)
     a = a * jnp.exp((-1j * jnp.pi * lam * dz) * rhosqr)
@@ -277,13 +277,13 @@ def _ptp_array(a, lam, dz, dx, n):
 
 
 def _qphase_array(a, lam, c, dx, n):
-    xsqr = ((jnp.arange(n, dtype=float) - n / 2.0) * dx) ** 2
+    xsqr = ((jnp.arange(n, dtype=a.real.dtype) - n / 2.0) * dx) ** 2
     rsqr = shift_center(xsqr[None, :] + xsqr[:, None])
     return a * jnp.exp(1j * jnp.pi / (lam * c) * rsqr)
 
 
 def _lens_array(a, lam, lens_phase, dx, n):
-    x2 = (jnp.arange(n, dtype=float) - n // 2) ** 2
+    x2 = (jnp.arange(n, dtype=a.real.dtype) - n // 2) ** 2
     rho = jnp.sqrt(x2[None, :] + x2[:, None]) * dx
     phase = -(rho**2) * (lens_phase / 2.0)
     return a * jnp.exp(2 * jnp.pi * 1j / lam * shift_center(phase))

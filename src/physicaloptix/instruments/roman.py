@@ -29,15 +29,20 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from hwoutils.leaves import as_leaf
+from hwoutils.leaves import as_float_leaf, canonical
 from hwoutils.map_coordinates import map_coordinates
+from hwoutils.precision import like, precision_of
 from jax.scipy.signal import fftconvolve
 from jaxtyping import Array
 from optixstuff.grids import Frame, PixelGrid
 
 from physicaloptix.core import Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis
-from physicaloptix.elements.base import _optional_float_leaf, _optional_leaf
+from physicaloptix.elements.base import (
+    _array_leaf,
+    _optional_float_leaf,
+    _optional_leaf,
+)
 from physicaloptix.sources import point_source
 from physicaloptix.transforms import Fraunhofer, Fresnel
 
@@ -62,6 +67,18 @@ def proper_trim(a, n):
     x1 = n // 2 - m // 2
     pad = [(0, 0)] * (a.ndim - 2) + [(x1, n - m - x1), (x1, n - m - x1)]
     return jnp.pad(a, pad)
+
+
+def _actuator_leaf(values, *inputs):
+    """Convert real commands with range checks at the shared input precision."""
+    owners = (values, inputs)
+    dtype = precision_of(owners)
+    if not any(isinstance(x, jax.Array) for x in jax.tree.leaves(values)):
+        values = np.asarray(values)
+        if values.dtype.kind not in "fc":
+            # Commands are real even when their host representation is integer.
+            values = np.asarray(values, dtype=np.float64)
+    return as_float_leaf(like(canonical(values, precision=dtype), owners))
 
 
 def dm_surface(
@@ -120,8 +137,17 @@ def dm_surface(
             side, its magnification is not an integer, or it is wider than the
             nine-actuator margin of the convolution grid.
     """
-    influence = jnp.asarray(influence, dtype=float)
-    strokes = jnp.asarray(strokes_m, dtype=float)
+    strokes = _actuator_leaf(
+        strokes_m,
+        influence,
+        influence_dx_m,
+        influence_pitch_m,
+        pitch_m,
+        center_act,
+        grid_dx_m,
+        tilt_deg,
+    )
+    influence = like(influence, strokes)
     if strokes.ndim != 2 or influence.ndim != 2:
         raise ValueError("strokes_m and influence must be 2-D arrays")
     if influence.shape[0] % 2 == 0 or influence.shape[1] % 2 == 0:
@@ -144,7 +170,7 @@ def dm_surface(
     ny_dm, nx_dm = strokes.shape
     nx_grid, ny_grid = nx_dm * mag + 2 * margin, ny_dm * mag + 2 * margin
     off = margin + mag // 2
-    fine = jnp.zeros((ny_grid, nx_grid), dtype=float)
+    fine = jnp.zeros((ny_grid, nx_grid), dtype=strokes.dtype)
     fine = fine.at[off : off + ny_dm * mag : mag, off : off + nx_dm * mag : mag].set(
         strokes
     )
@@ -152,9 +178,13 @@ def dm_surface(
 
     xdim = min(int(np.round(np.sqrt(2) * nx_grid * dx_inf / grid_dx_m)), grid_npix)
     ydim = min(int(np.round(np.sqrt(2) * ny_grid * dx_inf / grid_dx_m)), grid_npix)
-    x = ((jnp.arange(xdim) - xdim // 2) * grid_dx_m)[None, :]
-    y = ((jnp.arange(ydim) - ydim // 2) * grid_dx_m)[:, None]
-    a, b, g = (jnp.deg2rad(jnp.asarray(t, dtype=float)) for t in tilt_deg)
+    grid_dx_m = like(grid_dx_m, strokes)
+    pitch_m = like(pitch_m, strokes)
+    dx_inf = like(dx_inf, strokes)
+    xc, yc = (like(c, strokes) for c in center_act)
+    x = ((jnp.arange(xdim, dtype=strokes.dtype) - xdim // 2) * grid_dx_m)[None, :]
+    y = ((jnp.arange(ydim, dtype=strokes.dtype) - ydim // 2) * grid_dx_m)[:, None]
+    a, b, g = (jnp.deg2rad(like(t, strokes)) for t in tilt_deg)
     ca, sa, cb, sb, cg, sg = (
         jnp.cos(a),
         jnp.sin(a),
@@ -171,22 +201,87 @@ def dm_surface(
     det = dx_dxs * dy_dys
     xs = (x / dx_dxs - y * dx_dys / det) / (1 - dy_dxs * dx_dys / det)
     ys = (y / dy_dys - x * dy_dxs / det) / (1 - dx_dys * dy_dxs / det)
-    xdm = (xs + center_act[0] * pitch_m) / dx_inf + off
-    ydm = (ys + center_act[1] * pitch_m) / dx_inf + off
+    xdm = (xs + xc * pitch_m) / dx_inf + off
+    ydm = (ys + yc * pitch_m) / dx_inf + off
     xdm, ydm = jnp.broadcast_arrays(xdm, ydm)
-    values = map_coordinates(fine, [ydm, xdm], order=3, mode="constant", cval=0.0)
+    values = map_coordinates(
+        fine, [ydm, xdm], order=3, mode="constant", cval=jnp.zeros((), dtype=fine.dtype)
+    )
 
     y0, x0 = grid_npix // 2 - ydim // 2, grid_npix // 2 - xdim // 2
-    out = jnp.zeros((grid_npix, grid_npix), dtype=float)
+    out = jnp.zeros((grid_npix, grid_npix), dtype=strokes.dtype)
     return out.at[y0 : y0 + ydim, x0 : x0 + xdim].set(values)
 
 
 def _check_increasing(name, values):
-    if isinstance(values, jax.core.Tracer):
+    if any(isinstance(x, jax.core.Tracer) for x in jax.tree.leaves(values)):
         return
     v = np.asarray(values)
-    if v.ndim != 1 or not np.all(np.diff(v) > 0):
+    if v.ndim != 1 or not v.size or not np.all(np.diff(v) > 0):
         raise ValueError(f"{name} must be a strictly increasing 1-D array")
+
+
+def _voltage_array(values, ref):
+    """Keep a host coordinate on the host, or a traced coordinate on device."""
+    if any(isinstance(x, jax.Array) for x in jax.tree.leaves(values)):
+        return like(values, ref)
+    return np.asarray(values)
+
+
+def _search_voltage(values, ref, *, upper):
+    """Round a host search key outward and retain its residual for interpolation."""
+    if isinstance(values, jax.Array):
+        return values, values, jnp.zeros_like(values)
+    rounded = values.astype(ref.dtype)
+    direction = np.inf if upper else -np.inf
+    adjust = values > rounded if upper else values < rounded
+    keys = np.nextafter(
+        rounded, ref.dtype.type(direction), out=rounded.copy(), where=adjust
+    )
+    residual = np.subtract(
+        values, rounded, out=np.zeros_like(rounded), where=np.isfinite(values)
+    )
+    return like(keys, ref), like(rounded, ref), like(residual, ref)
+
+
+def _interpolate_calibration(volts, ref, nodes, table):
+    """Interpolate stroke or coupling channels with local voltage differences."""
+    if len(nodes) == 1:
+        return table[0]
+
+    q, axis = _voltage_array(volts, ref), _voltage_array(nodes, ref)
+    if isinstance(q, np.ndarray) and isinstance(axis, np.ndarray):
+        left = np.clip(np.searchsorted(axis, q, side="right") - 1, 0, len(nodes) - 2)
+        fraction = like((q - axis[left]) / np.diff(axis)[left], ref)
+        below, above = q < axis[0], q > axis[-1]
+    else:
+        # At most one side is host data. Rounding its knots upward (or its
+        # queries downward) preserves the interval chosen by a device query.
+        query_key, q_high, q_tail = _search_voltage(q, ref, upper=False)
+        axis_key, axis_high, axis_tail = _search_voltage(axis, ref, upper=True)
+        left = jnp.clip(
+            jnp.searchsorted(axis_key, query_key, side="right") - 1, 0, len(nodes) - 2
+        )
+        offset = (q_high - axis_high[left]) + (q_tail - axis_tail[left])
+        width = np.diff(axis) if isinstance(axis, np.ndarray) else jnp.diff(axis)
+        fraction = offset / like(width, ref)[left]
+        below = (q_high - axis_high[0]) + (q_tail - axis_tail[0]) < 0
+        above = (q_high - axis_high[-1]) + (q_tail - axis_tail[-1]) > 0
+    y, x = jnp.indices(ref.shape, dtype=jnp.int32)
+    shape = ref.shape + (1,) * (table.ndim - 3)
+    # A strict clamp returns the tabulated endpoint. At the knot itself the
+    # one-sided interpolation slope remains available to differentiation.
+    fraction = jnp.where(below | above, 0, fraction).reshape(shape)
+    lower, upper = table[left, y, x], table[left + 1, y, x]
+    delta = upper - lower
+    interpolated = jnp.where(
+        fraction <= 0.5, lower + fraction * delta, upper + (fraction - 1) * delta
+    )
+    return jnp.where(
+        below.reshape(shape),
+        lower,
+        jnp.where(above.reshape(shape), upper, interpolated),
+    )
 
 
 def volts_to_stroke(volts, *, stroke_volts, stroke_table_m, coupling_volts, coupling):
@@ -217,28 +312,49 @@ def volts_to_stroke(volts, *, stroke_volts, stroke_table_m, coupling_volts, coup
         ValueError: If a table's shape does not match ``volts`` or its voltage
             axis is not strictly increasing.
     """
-    v = jnp.asarray(volts, dtype=float)
+    v = _actuator_leaf(volts, stroke_volts, stroke_table_m, coupling_volts, coupling)
     if v.ndim != 2:
         raise ValueError("volts must be a 2-D array")
     ny, nx = v.shape
     n_v, n_c = len(stroke_volts), len(coupling_volts)
-    if jnp.shape(stroke_table_m) != (n_v, ny, nx):
+    stroke_table_m = like(stroke_table_m, v)
+    coupling = like(coupling, v)
+    if stroke_table_m.shape != (n_v, ny, nx):
         raise ValueError(f"stroke_table_m must have shape {(n_v, ny, nx)}")
-    if jnp.shape(coupling) != (n_c, ny, nx, 3, 3):
+    if coupling.shape != (n_c, ny, nx, 3, 3):
         raise ValueError(f"coupling must have shape {(n_c, ny, nx, 3, 3)}")
     _check_increasing("stroke_volts", stroke_volts)
     _check_increasing("coupling_volts", coupling_volts)
-    interp = jax.vmap(jnp.interp, in_axes=(0, None, 0))
-    table = jnp.asarray(stroke_table_m, dtype=float).reshape(n_v, -1).T
-    stroke = interp(v.reshape(-1), jnp.asarray(stroke_volts), table).reshape(ny, nx)
-    kernels = jnp.asarray(coupling, dtype=float).reshape(n_c, -1).T
-    c = interp(jnp.repeat(v.reshape(-1), 9), jnp.asarray(coupling_volts), kernels)
-    c = c.reshape(ny, nx, 3, 3).at[:, :, 1, 1].set(1.0)
-    padded = jnp.zeros((ny + 2, nx + 2), dtype=float)
+    stroke = _interpolate_calibration(volts, v, stroke_volts, stroke_table_m)
+    c = _interpolate_calibration(volts, v, coupling_volts, coupling)
+    c = c.at[:, :, 1, 1].set(1.0)
+    padded = jnp.zeros((ny + 2, nx + 2), dtype=v.dtype)
     for j in range(3):
         for i in range(3):
             padded = padded.at[j : j + ny, i : i + nx].add(c[:, :, j, i] * stroke)
     return -padded[1:-1, 1:-1]
+
+
+def _live_median(values, live):
+    # nanquantile passes a wide NaN to its internal sort even for a typed rank.
+    missing = like(jnp.nan, values)
+    if not values.size:
+        return missing
+    valid = jnp.asarray(live, dtype=bool) & ~jnp.isnan(values)
+    ordered = jnp.sort(jnp.where(valid, values, missing), axis=None)
+    count = jnp.sum(valid)
+    lower = ordered[jnp.maximum(count - 1, 0) // 2]
+    upper = ordered[count // 2]
+    # Halving a near-minimum normal can flush it to zero. Halve first only
+    # when adding the operands could overflow, and preserve this order in XLA.
+    half_max = float(jnp.finfo(values.dtype).max) / 2
+    safe_sum = (jnp.abs(lower) <= half_max) & (jnp.abs(upper) <= half_max)
+    midpoint = jnp.where(
+        safe_sum,
+        jax.lax.optimization_barrier(lower + upper) * 0.5,
+        jax.lax.optimization_barrier(lower * 0.5) + upper * 0.5,
+    )
+    return jnp.where(count % 2, upper, midpoint)
 
 
 def dm_strokes_from_volts(
@@ -277,10 +393,14 @@ def dm_strokes_from_volts(
     Raises:
         ValueError: If ``live`` does not have the shape of ``volts``.
     """
-    v = jnp.asarray(volts, dtype=float)
-    if jnp.shape(live) != v.shape:
+    v = _actuator_leaf(
+        volts, stroke_volts, stroke_table_m, coupling_volts, coupling, volt_quantum
+    )
+    live = jnp.asarray(live, dtype=bool)
+    if live.shape != v.shape:
         raise ValueError(f"live must have the shape of volts {v.shape}")
-    step = jnp.floor(v / volt_quantum) * volt_quantum
+    quantum = like(volt_quantum, v)
+    step = jnp.floor(v / quantum) * quantum
     quantized = v + jax.lax.stop_gradient(step - v)
     stroke = volts_to_stroke(
         quantized,
@@ -289,7 +409,7 @@ def dm_strokes_from_volts(
         coupling_volts=coupling_volts,
         coupling=coupling,
     )
-    median = jnp.nanmedian(jnp.where(jnp.asarray(live), stroke, jnp.nan))
+    median = _live_median(stroke, live)
     return -(stroke - median)
 
 
@@ -311,12 +431,14 @@ def dm_median_volts(volts, *, volt_quantum, live):
     Raises:
         ValueError: If ``live`` does not have the shape of ``volts``.
     """
-    v = jnp.asarray(volts, dtype=float)
-    if jnp.shape(live) != v.shape:
+    v = _actuator_leaf(volts, volt_quantum)
+    live = jnp.asarray(live, dtype=bool)
+    if live.shape != v.shape:
         raise ValueError(f"live must have the shape of volts {v.shape}")
-    step = jnp.floor(v / volt_quantum) * volt_quantum
+    quantum = like(volt_quantum, v)
+    step = jnp.floor(v / quantum) * quantum
     quantized = v + jax.lax.stop_gradient(step - v)
-    return jnp.nanmedian(jnp.where(jnp.asarray(live), quantized, jnp.nan))
+    return _live_median(quantized, live)
 
 
 class RomanCompact(eqx.Module):
@@ -350,20 +472,20 @@ class RomanCompact(eqx.Module):
             conventions as dm1_wfe_m.
     """
 
-    pupil: Array = eqx.field(converter=as_leaf)
-    lyot: Array = eqx.field(converter=as_leaf)
+    pupil: Array = eqx.field(converter=_array_leaf)
+    lyot: Array = eqx.field(converter=_array_leaf)
     pupil_mask: Array | None = eqx.field(converter=_optional_leaf)
     fpm: Array | None = eqx.field(converter=_optional_leaf)
     kind: str = eqx.field(static=True)
     n_small: int = eqx.field(static=True)
     n_big: int = eqx.field(static=True)
-    pupil_diam_pix: float = eqx.field(static=True)
-    fpm_sampling_lod: float = eqx.field(static=True)
-    fpm_lam0_nm: float = eqx.field(static=True)
-    lam0_nm: float = eqx.field(static=True)
-    primary_diameter_m: float = eqx.field(static=True, default=2.4)
-    beam_diameter_m: float = eqx.field(static=True, default=0.0463)
-    dm_separation_m: float = eqx.field(static=True, default=1.0)
+    pupil_diam_pix: float = eqx.field(converter=float, static=True)
+    fpm_sampling_lod: float = eqx.field(converter=float, static=True)
+    fpm_lam0_nm: float = eqx.field(converter=float, static=True)
+    lam0_nm: float = eqx.field(converter=float, static=True)
+    primary_diameter_m: float = eqx.field(converter=float, static=True, default=2.4)
+    beam_diameter_m: float = eqx.field(converter=float, static=True, default=0.0463)
+    dm_separation_m: float = eqx.field(converter=float, static=True, default=1.0)
     dm1_surface_m: Array | None = eqx.field(
         default=None, converter=_optional_float_leaf
     )
@@ -443,14 +565,17 @@ class RomanCompact(eqx.Module):
         dx = 1.0 / self.pupil_diam_pix
         stages = {}
 
-        field = self._as_field(self.pupil, self.n_small)
+        field = self._as_field(
+            like(self.pupil, (self, source_x_lod, source_y_lod)), self.n_small
+        )
         field = Field(
             data=field.data / jnp.sqrt(field.energy()),
             grid=field.grid,
             plane=field.plane,
         )
         scale = self.lam0_nm / wl
-        px, py = source_y_lod * scale, source_x_lod * scale
+        px = like(source_y_lod, field.data) * scale
+        py = like(source_x_lod, field.data) * scale
         field = point_source(field, position_lod=(px, py))
         if self.n_small % 2 == 0:
             # the tilt is referenced to half-pixel coordinates; restore the
@@ -505,7 +630,7 @@ class RomanCompact(eqx.Module):
         if self.n_small % 2 == 0:
             # on an even grid, physicaloptix pupil samples sit half a pixel from the
             # prescription's integer-centered samples: a known linear image phase
-            u = jnp.asarray(_grid_axis(to_image.grid_out))
+            u = like(_grid_axis(to_image.grid_out), data)
             data = data * jnp.exp(1j * jnp.pi * dx * (u[:, None] + u[None, :]))
         stages["image"] = jnp.transpose(data)
         return stages
@@ -526,7 +651,7 @@ class RomanCompact(eqx.Module):
         data = (at_mask.data * dout)[::-1, ::-1]
         if pupil_grid.shape[0] % 2 == 0:
             # half-pixel pupil samples on an even grid: remove the known linear phase
-            u = jnp.asarray(_grid_axis(at_mask.grid))
+            u = like(_grid_axis(at_mask.grid), data)
             data = data * jnp.exp(
                 -1j * jnp.pi * pupil_grid.step * (u[:, None] + u[None, :])
             )
@@ -534,12 +659,13 @@ class RomanCompact(eqx.Module):
 
     def _focal_mask(self, field, wl, stages):
         assert self.fpm is not None, "fpm must be present when applying a focal mask"
-        m = self.fpm.shape[0]
+        fpm = like(self.fpm, field.data)
+        m = fpm.shape[0]
         dout = self.fpm_sampling_lod * self.fpm_lam0_nm / wl
         focal = PixelGrid.focal(
             m, dout, Frame(wl, self.primary_diameter_m, "circumscribed")
         )
-        flipped = self.fpm[::-1, ::-1]
+        flipped = fpm[::-1, ::-1]
         if self.kind == "spc":
             fwd = Fraunhofer(
                 field.grid,
@@ -561,7 +687,7 @@ class RomanCompact(eqx.Module):
                 on_undersampled="record",
             )
             return back.backward(masked)
-        clear = self.fpm[0, 0]
+        clear = fpm[0, 0]
         field = Field(data=field.data * clear, grid=field.grid, plane=field.plane)
         mft = Fraunhofer(
             field.grid,
@@ -572,8 +698,10 @@ class RomanCompact(eqx.Module):
         )
         at_mask = mft.forward(field)
         stages["fpm"] = self._mask_plane_record(at_mask, field.grid, dout)
-        region = jnp.real(self.fpm) != jnp.real(clear)
-        correction = jnp.where(region, self.fpm - 1.0, 0.0)[::-1, ::-1]
+        region = jnp.real(fpm) != jnp.real(clear)
+        correction = jnp.where(region, fpm - 1.0, jnp.zeros((), dtype=fpm.dtype))[
+            ::-1, ::-1
+        ]
         back = mft.backward(
             Field(data=at_mask.data * correction, grid=focal, plane=PlaneKind.FOCAL)
         )

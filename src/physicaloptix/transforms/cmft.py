@@ -15,7 +15,32 @@ forward-model primitive (semi-analytic Lyot chains), not just a gradient.
 Leading batch axes (e.g. wavelength) broadcast through the matrix products.
 """
 
+import jax
 import jax.numpy as jnp
+import numpy as np
+from hwoutils.precision import like
+
+
+def _field_samples(data, *axes):
+    """Use the precision of the field and device axes, or the axes for a mask."""
+    data = jnp.asarray(data)
+    coords = jax.tree.leaves(axes)
+    owners = [
+        value
+        for value in (data, *coords)
+        if isinstance(value, jax.Array) and jnp.issubdtype(value.dtype, jnp.inexact)
+    ]
+    return data.astype(jnp.result_type(*(owners or coords), 0.0))
+
+
+def _spacing(axis, samples):
+    """Difference host coordinates before rounding and avoid integer overflow."""
+    a, b = axis[0], axis[1]
+    if isinstance(a, jax.Array) or isinstance(b, jax.Array):
+        return like(b, samples) - like(a, samples)
+    # Native Python integers can represent the full signed or unsigned gap.
+    a, b = np.asarray((a, b)).tolist()
+    return like(b - a, samples)
 
 
 def cmft_fwd(f, x, u, ux=None):
@@ -31,9 +56,11 @@ def cmft_fwd(f, x, u, ux=None):
         Complex focal field, shape ``(..., len(u), len(u))``, or
         ``(..., len(u), len(ux))`` when column coordinates are supplied.
     """
+    f = _field_samples(f, x, u, u if ux is None else ux)
+    dx = _spacing(x, f)
+    x, u = like(x, f), like(u, f)
     k = jnp.exp(-2j * jnp.pi * jnp.outer(u, x))  # (nfoc, npup)
-    kx = k if ux is None else jnp.exp(-2j * jnp.pi * jnp.outer(ux, x))
-    dx = x[1] - x[0]
+    kx = k if ux is None else jnp.exp(-2j * jnp.pi * jnp.outer(like(ux, f), x))
     return dx**2 * (k @ f @ kx.T)
 
 
@@ -48,6 +75,8 @@ def cmft_bwd(field, x, u):
     Returns:
         Complex pupil field, shape ``(..., len(x), len(x))``.
     """
+    field = _field_samples(field, x, u)
+    du = _spacing(u, field)
+    x, u = like(x, field), like(u, field)
     k = jnp.exp(2j * jnp.pi * jnp.outer(x, u))  # (npup, nfoc)
-    du = u[1] - u[0]
     return du**2 * (k @ field @ k.T)
