@@ -174,6 +174,7 @@ def _integral(line):
     return float(np.trapezoid(y, x))
 
 
+@pytest.mark.float64_only(reason="float64 reference probability densities")
 def test_histogram_and_laws_integrate_to_the_same_total():
     """The units gate.
 
@@ -198,6 +199,7 @@ def test_histogram_and_laws_integrate_to_the_same_total():
     plt.close("all")
 
 
+@pytest.mark.float64_only(reason="float64 reference probability densities")
 def test_dropping_the_jacobian_would_fail_the_units_gate():
     """Pin that the gate above has teeth, not just a generous tolerance."""
     draws = _circular_draws()
@@ -210,6 +212,7 @@ def test_dropping_the_jacobian_would_fail_the_units_gate():
     plt.close("all")
 
 
+@pytest.mark.float64_only(reason="float64 reference probability densities")
 def test_rician_is_the_p_to_zero_limit_of_the_exact_law():
     draws = _circular_draws(n=1000)
     _, ax = plt.subplots()
@@ -224,6 +227,7 @@ def test_rician_is_the_p_to_zero_limit_of_the_exact_law():
     plt.close("all")
 
 
+@pytest.mark.float64_only(reason="float64 reference probability densities")
 def test_an_improper_field_departs_from_the_rician():
     """|P| > 0 must actually change the exact law, or the overlay says nothing."""
     draws = _circular_draws(n=1000)
@@ -238,6 +242,7 @@ def test_an_improper_field_departs_from_the_rician():
     plt.close("all")
 
 
+@pytest.mark.float64_only(reason="float64 reference probability densities")
 def test_a_sequence_of_laws_draws_distinct_line_weights():
     draws = _circular_draws(n=1000)
     _, ax = plt.subplots()

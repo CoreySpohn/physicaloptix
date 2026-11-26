@@ -24,6 +24,7 @@ than an approximation (see :func:`annulus_variance_budget`).
 
 import equinox as eqx
 import jax.numpy as jnp
+from hwoutils.precision import like
 from jaxtyping import Array
 
 __all__ = [
@@ -135,7 +136,7 @@ class SensitivityOperators(eqx.Module):
             A :class:`SensitivityBudget` whose ``total`` is the exact
             dark-zone-mean contrast variance.
         """
-        r2 = jnp.asarray(per_mode_variance)
+        r2 = like(per_mode_variance, self.pastis)
         return SensitivityBudget(
             heterodyne=2.0 * self.heterodyne @ r2,
             imbalance=2.0 * self.imbalance @ r2,
@@ -160,8 +161,7 @@ class SensitivityOperators(eqx.Module):
         Returns:
             The scalar variance the circular model predicts.
         """
-        r2 = jnp.asarray(per_mode_variance)
-        gamma_bar = self.mean_residual_power(r2)
+        gamma_bar = self.mean_residual_power(per_mode_variance)
         return 2.0 * self.mean_intensity * gamma_bar + gamma_bar**2
 
     def mean_residual_power(self, per_mode_variance):
@@ -178,7 +178,7 @@ class SensitivityOperators(eqx.Module):
             Scalar dark-zone-mean residual power, in the squared units of the
             focal-plane field.
         """
-        return jnp.diagonal(self.pastis) @ jnp.asarray(per_mode_variance)
+        return jnp.diagonal(self.pastis) @ like(per_mode_variance, self.pastis)
 
 
 class SensitivityBudget(eqx.Module):

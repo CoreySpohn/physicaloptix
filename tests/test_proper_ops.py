@@ -3,6 +3,8 @@
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hwoutils.numerics import eps
+from hwoutils.testing import ulps
 
 from physicaloptix.instruments._proper_ops import (
     cubic_conv_weights,
@@ -23,18 +25,26 @@ def test_shift_center_moves_center_to_corner_and_back():
 
 
 def test_ffts_round_trip():
+    """Two 2D FFTs each round six operations per axis per butterfly at the peak field
+    scale.
+    """
     rng = np.random.default_rng(0)
     a = jnp.asarray(rng.standard_normal((16, 16)) + 1j * rng.standard_normal((16, 16)))
-    assert jnp.max(jnp.abs(ffts(ffts(a, -1), 1) - a)) < 1e-14
+    assert jnp.max(jnp.abs(ffts(ffts(a, -1), 1) - a)) < float(
+        ulps(24 * int(np.ceil(np.log2(a.shape[-1]))), jnp.max(jnp.abs(a)))
+    )
 
 
 def test_mft2_is_the_centered_dft_on_complete_grids():
+    """The separable MFT sums n terms twice, against a 2D FFT of logarithmic depth."""
     n = 16
     rng = np.random.default_rng(1)
     a = jnp.asarray(rng.standard_normal((n, n)).astype(complex))
     # dout / d = 1 / n makes mft2 the centered DFT times 1 / n; ffts divides by n**2
     out = mft2(a, 1.0, float(n), n, -1)
-    assert jnp.max(jnp.abs(out - ffts(a, -1) * n)) < 1e-12
+    assert jnp.max(jnp.abs(out - ffts(a, -1) * n)) < float(
+        ulps(2 * n + 12 * int(np.log2(n)), jnp.max(jnp.abs(out)))
+    )
 
 
 def test_ellipse_area_and_symmetry():
@@ -84,9 +94,12 @@ def test_szoom_rejects_windows_off_the_grid():
 
 
 def test_noll_z6_normalization():
+    """At a cardinal point the polynomial is unity; its normalization rounds the square
+    root and product.
+    """
     z = noll_z6(64, 1.0, 16.0)
-    assert float(z[32, 48]) == pytest.approx(np.sqrt(6.0), rel=1e-14)
-    assert float(z[48, 32]) == pytest.approx(-np.sqrt(6.0), rel=1e-14)
+    assert float(z[32, 48]) == pytest.approx(np.sqrt(6.0), rel=2 * eps(z.dtype), abs=0)
+    assert float(z[48, 32]) == pytest.approx(-np.sqrt(6.0), rel=2 * eps(z.dtype), abs=0)
 
 
 def test_ffts_batched_matches_single():

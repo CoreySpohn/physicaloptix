@@ -18,6 +18,7 @@ edges converge at ~first order, which the convergence pin would catch.
 import jax.numpy as jnp
 import numpy as np
 from conftest import TEST_FRAME
+from hwoutils.testing import ulps
 from optixstuff.grids import PixelGrid
 from scipy.special import j0, j1
 
@@ -99,7 +100,8 @@ class TestFourierIdentities:
     def test_tilt_shift_theorem_is_exact(self):
         """A pupil tilt e^{2 pi i (a x + b y)} shifts the focal field by
         EXACTLY (a, b) lambda/D -- exact for the continuous-FT MFT, so it is
-        asserted at 1e-12. Anisotropic (a != b) so an x/y transpose cannot
+        limited by two length-n complex dot products per transform. Anisotropic (a != b)
+        so an x/y transpose cannot
         pass."""
         npup = 128
         grid = PixelGrid.pupil(npup)
@@ -117,7 +119,8 @@ class TestFourierIdentities:
         np.testing.assert_allclose(
             ft[shift_y_px:, shift_x_px:],
             f0[: -shift_y_px or None, : -shift_x_px or None],
-            atol=1e-12,
+            rtol=0,
+            atol=float(ulps(4 * npup, np.max(np.abs(f0)))),
         )
 
     def test_phase_grating_j0_extinction(self):
@@ -146,6 +149,9 @@ class TestFourierIdentities:
 
     def test_even_pupil_transforms_to_a_real_field(self):
         """A real, even pupil on the symmetric half-pixel grid has a purely
-        real MFT (Hermitian symmetry): imaginary residual at roundoff."""
+        real MFT (Hermitian symmetry): imaginary residual at roundoff.
+
+        Each of the two separable matrix products accumulates 128 complex terms.
+        """
         _, _, foc, _, _, _ = _airy_setup(128)
-        assert np.abs(foc.imag).max() < 1e-13 * np.abs(foc.real).max()
+        assert np.abs(foc.imag).max() < float(ulps(2 * 128, np.abs(foc.real).max()))

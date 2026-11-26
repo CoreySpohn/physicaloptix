@@ -12,6 +12,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from conftest import TEST_FRAME
+from hwoutils.testing import ulps
 from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind
@@ -69,6 +70,8 @@ def _coronagraph_path(npix):
 
 class TestJitMatchesEager:
     def test_fresnel_forward(self):
+        """The forward and inverse two-dimensional FFTs traverse four log2(N) butterfly
+        stages, plus phase and transfer-factor arithmetic at unit field amplitude."""
         npix = 128
         prop = Fresnel(
             grid=PixelGrid.pupil(npix),
@@ -81,12 +84,15 @@ class TestJitMatchesEager:
         eager = prop.forward(field)
         jitted = eqx.filter_jit(prop.forward)(field)
         np.testing.assert_allclose(
-            np.asarray(jitted.data), np.asarray(eager.data), atol=1e-15
+            np.asarray(jitted.data),
+            np.asarray(eager.data),
+            rtol=0,
+            atol=float(ulps(4 * int(np.log2(npix)) + 4, abs(field.data).max())),
         )
 
     def test_vortex_coronagraph_chain(self):
-        """The full deep-null chain compiles to the same numbers it computes
-        eagerly (atol 1e-15 on O(1) fields)."""
+        """A separable science MFT accumulates over two pupil axes after the vortex
+        relay. Compare compiled and eager fields at the peak output scale."""
         path = _coronagraph_path(NPUP)
         field = _pupil_field(NPUP)
         eager, _ = path.propagate(field)
@@ -97,7 +103,10 @@ class TestJitMatchesEager:
             return out.data
 
         np.testing.assert_allclose(
-            np.asarray(run(path, field)), np.asarray(eager.data), atol=1e-15
+            np.asarray(run(path, field)),
+            np.asarray(eager.data),
+            rtol=0,
+            atol=float(ulps(2 * NPUP, abs(eager.data).max())),
         )
 
 

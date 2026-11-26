@@ -6,18 +6,43 @@ and phases are frozen at construction.
 """
 
 from dataclasses import dataclass, replace
+from math import factorial
 from typing import ClassVar
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.numerics import COARSEST
+from hwoutils.precision import float_dtype, like
 from jaxtyping import Array
 from optixstuff import FocalResponse, LinearSpeckleField
 from optixstuff.grids import PixelGrid
 from optixstuff.spectral import trapezoid_weights
 
 from physicaloptix.transforms.fraunhofer import Fraunhofer
+
+
+def _exposure_parts(exposure_s):
+    """Represent seconds as a normal mantissa and a binary exponent."""
+    mantissa, exponent = jnp.frexp(exposure_s)
+    # JAX frexp flushes subnormals. Decode their integer significand before
+    # any arithmetic touches the stored seconds.
+    dtype = mantissa.dtype
+    info = jnp.finfo(dtype)
+    bits = exposure_s.astype(dtype).view(np.dtype(f"u{dtype.itemsize}"))
+    fraction = bits & ((1 << info.nmant) - 1)
+    subnormal = (fraction != 0) & (((bits >> info.nmant) & ((1 << info.nexp) - 1)) == 0)
+    fraction_mantissa, fraction_exponent = jnp.frexp(fraction.astype(dtype))
+    negative = (bits >> (info.bits - 1)) != 0
+    return (
+        jnp.where(
+            subnormal,
+            jnp.where(negative, -fraction_mantissa, fraction_mantissa),
+            mantissa,
+        ),
+        jnp.where(subnormal, fraction_exponent + info.minexp - info.nmant, exponent),
+    )
 
 
 def ou_exposure_neff(timescales_s, exposure_s):
@@ -43,13 +68,13 @@ def ou_exposure_neff(timescales_s, exposure_s):
     Args:
         timescales_s: Per-mode decorrelation timescale in seconds, a scalar
             or shape ``(m,)``.
-        exposure_s: Exposure length in seconds, a scalar or an array
+        exposure_s: Nonnegative exposure length in seconds, a scalar or an array
             broadcast against the mode axis.
 
     Returns:
         ``N_eff`` with shape ``(m,) + jnp.shape(exposure_s)``, matching
         ``physicaloptix.SpeckleProcess.exposure_neff``. A zero-length exposure
-        gives exactly 1.
+        gives exactly 1 and has a slope of 1 / (3 tau).
 
     Raises:
         ValueError: If a timescale is not strictly positive.
@@ -57,22 +82,67 @@ def ou_exposure_neff(timescales_s, exposure_s):
     tau = np.atleast_1d(np.asarray(timescales_s, dtype=float))
     if not np.all(tau > 0.0):
         raise ValueError("timescales_s must be positive")
-    t_exp = jnp.asarray(exposure_s, dtype=float)
-    u = t_exp.reshape(-1)[None, :] / jnp.asarray(tau)[:, None]  # (m, t)
-    # Two branches around u ~ 1e-4. Above it, evaluate directly, writing
-    # u - 1 + exp(-u) as u + expm1(-u) so the leading cancellation is exact.
-    # Below it even that loses the answer: the numerator vanishes as u^2 / 2,
-    # so subtracting two O(u) terms leaves only a few digits. There the
-    # Maclaurin series is the accurate form, and its own truncation error is
-    # O(u^4). Both branches are evaluated, so each must stay finite to keep
-    # the gradient clean -- hence the guarded arguments.
-    small = u < 1e-4
-    safe = jnp.where(small, 1.0, u)
-    direct = 2.0 * (safe + jnp.expm1(-safe)) / safe**2
-    tiny = jnp.where(small, u, 0.0)
-    series = 1.0 - tiny / 3.0 + tiny**2 / 12.0 - tiny**3 / 60.0
-    reduction = jnp.where(small, series, direct)
-    return (1.0 / reduction).reshape((tau.size, *t_exp.shape))
+    tau_mantissa, tau_exponent = np.frexp(tau)
+    if isinstance(exposure_s, jax.Array | jax.core.Tracer):
+        duration = jnp.asarray(exposure_s, dtype=jnp.result_type(exposure_s, 1.0))
+        result = _ou_device_neff(
+            duration, like(tau_mantissa, duration), jnp.asarray(tau_exponent)
+        )
+        return result.reshape((tau.size, *duration.shape))
+
+    mantissa, exponent = np.frexp(np.asarray(exposure_s, dtype=np.float64))
+    mantissa = jnp.asarray(mantissa, dtype=float_dtype())
+    half = _ou_half_ratio(
+        mantissa,
+        jnp.asarray(exponent),
+        like(tau_mantissa, mantissa),
+        jnp.asarray(tau_exponent),
+    )
+    return _ou_neff_from_half_ratio(half).reshape((tau.size, *mantissa.shape))
+
+
+def _ou_half_ratio(mantissa, exponent, tau_mantissa, tau_exponent):
+    """Scale before division and keep u/2 even when u would overflow."""
+    return jnp.ldexp(
+        mantissa.reshape(-1)[None, :] / tau_mantissa[:, None],
+        exponent.reshape(-1)[None, :] - tau_exponent[:, None] - 1,
+    )
+
+
+def _ou_neff_from_half_ratio(half):
+    """Evaluate the reciprocal variance reduction from half the ratio."""
+    # Below u=1/8 the alternating series through u**10 has a remainder
+    # <= 2*(1/8)**11/13!. Guard both branches for the zero-exposure tangent.
+    small = half.astype(COARSEST) <= 0.0625
+    safe = jnp.where(small, 0.5, half)
+    twice = 2.0 * jnp.minimum(safe, jnp.finfo(safe.dtype).max / 2)
+    direct = safe / (1.0 + jnp.expm1(-twice) * (0.5 / safe))
+    tiny = 2.0 * jnp.where(small, half, 0.0)
+    series = 2.0 / factorial(12)
+    for k in reversed(range(10)):
+        series = 2.0 / factorial(k + 2) - tiny * series
+    return jnp.where(small, 1.0 / series, direct)
+
+
+@jax.custom_jvp
+def _ou_device_neff(exposure, tau_mantissa, tau_exponent):
+    """Evaluate from the bits of a device duration."""
+    mantissa, exponent = _exposure_parts(exposure)
+    half = _ou_half_ratio(mantissa, exponent, tau_mantissa, tau_exponent)
+    return _ou_neff_from_half_ratio(half)
+
+
+@_ou_device_neff.defjvp
+def _ou_device_neff_jvp(primals, tangents):
+    """Differentiate the ratio before applying its time scale."""
+    exposure, tau_mantissa, tau_exponent = primals
+    exposure_dot, _, _ = tangents
+    mantissa, exponent = _exposure_parts(exposure)
+    half = _ou_half_ratio(mantissa, exponent, tau_mantissa, tau_exponent)
+    value, slope = jax.jvp(_ou_neff_from_half_ratio, (half,), (jnp.ones_like(half),))
+    # The slope with respect to seconds can fit when 1/tau does not.
+    rate = jnp.ldexp(slope / tau_mantissa[:, None], -tau_exponent[:, None] - 1)
+    return value, rate * exposure_dot.reshape(-1)[None, :]
 
 
 def telescope_peak(field, grid_out):
@@ -812,8 +882,8 @@ class SpeckleProcess(eqx.Module):
         Returns:
             ``rho`` with shape ``(m,) + jnp.shape(lag_s)``.
         """
-        tau = jnp.asarray(lag_s, dtype=float)
         f = self.frequencies_hz()
+        tau = like(lag_s, f)
         if f.ndim == 1:
             f = jnp.broadcast_to(f, (self.response.G.shape[-3], self.n_freq))
         w = self.line_weights()
@@ -1126,7 +1196,7 @@ class SpeckleProcess(eqx.Module):
             )
         annulus_mean = annulus_var = None
         if mask is not None:
-            w = jnp.asarray(mask, dtype=float)
+            w = like(mask, mean_map)
             denom = jnp.sum(w)
             annulus_mean = jnp.sum(mean_map * w) / denom
             annulus_var = jnp.sum(var_map * w) / denom
@@ -1214,7 +1284,7 @@ class SpeckleProcess(eqx.Module):
         )
         annulus_mean = annulus_cov = None
         if mask is not None:
-            weights = jnp.asarray(mask, dtype=float)
+            weights = like(mask, mean)
             total = jnp.sum(weights)
             annulus_mean = jnp.einsum("wyx,yx->w", mean, weights) / total
             annulus_cov = jnp.einsum("ijyx,yx->ij", cov, weights) / total

@@ -5,6 +5,8 @@ import json
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hwoutils.numerics import eps
+from hwoutils.testing import ulps
 from jax.scipy.special import erf
 from optixstuff import PsfletPack, load_psflet_pack, save_psflet_pack
 from optixstuff.grids import PixelGrid
@@ -50,7 +52,11 @@ def make_chain(**overrides):
 class TestFlatSinc:
     def test_direct_quadrature_matches_analytic_sinc2(self):
         """One FT of the flat tile is the closed-form Dirichlet kernel (the
-        midpoint-rule discretization of sinc), converging to sinc^2 in n."""
+        midpoint-rule discretization of sinc), converging to sinc^2 in n.
+
+        The two n-term Fourier contractions are compared at the normalized peak,
+        including destructive interference in the wings.
+        """
         chain = make_chain(illumination="flat")
         n = chain.n_tile
         px = jnp.linspace(-4.0, 4.0, 33)
@@ -64,7 +70,10 @@ class TestFlatSinc:
             )
         exact2d = np.outer(dirichlet, dirichlet) ** 2
         np.testing.assert_allclose(
-            intensity / intensity.max(), exact2d / exact2d.max(), atol=1e-12
+            intensity / intensity.max(),
+            exact2d / exact2d.max(),
+            rtol=0,
+            atol=float(ulps(2 * n, intensity.dtype.type(1.0))),
         )
         analytic = np.outer(np.sinc(u), np.sinc(u)) ** 2
         assert np.max(np.abs(exact2d - analytic)) < 6e-3
@@ -186,7 +195,11 @@ def first_moment(image, x, y):
 class TestShiftTheoremAndWavecal:
     def test_stop_tilt_is_an_exact_shift(self):
         """A linear OPD across the stop translates the PSFlet by exactly
-        (gradient / lambda) * px_per_diffraction pixels (shift theorem)."""
+        (gradient / lambda) * px_per_diffraction pixels (shift theorem).
+
+        The two stop-axis Fourier sums each contain one term per stop sample;
+        use the peak intensity to cover cancellation in the wings.
+        """
         base = make_chain(illumination="flat")
         ppd = float(base.px_per_diffraction(LAM_REF))
         grad_nm = 0.3 * LAM_REF / ppd  # a 0.3 px shift
@@ -200,11 +213,18 @@ class TestShiftTheoremAndWavecal:
         i_base = np.asarray(base.psflet_intensity(LAM_REF, px))
         sl_a, sl_b = _shifted_slices(round(0.3 / step), n)
         np.testing.assert_allclose(
-            i_tilt[:, sl_a], i_base[:, sl_b], rtol=1e-7, atol=1e-9 * i_base.max()
+            i_tilt[:, sl_a],
+            i_base[:, sl_b],
+            rtol=0,
+            atol=float(ulps(2 * base.n_stop, i_base.max())),
         )
 
     def test_dispersion_shift_hook_is_an_exact_shift(self):
-        """The disperser hook translates the PSFlet on both axes exactly."""
+        """The disperser hook translates the PSFlet on both axes exactly.
+
+        The two stop-axis Fourier sums each contain one term per stop sample;
+        use the peak intensity to cover cancellation in the wings.
+        """
         chain = make_chain(illumination="flat")
         ppd = float(chain.px_per_diffraction(LAM_REF))
         step = 0.05
@@ -220,7 +240,10 @@ class TestShiftTheoremAndWavecal:
         ax, bx = _shifted_slices(kx, n)
         ay, by = _shifted_slices(ky, n)
         np.testing.assert_allclose(
-            i_shift[ay, ax], i_base[by, bx], rtol=1e-7, atol=1e-9 * i_base.max()
+            i_shift[ay, ax],
+            i_base[by, bx],
+            rtol=0,
+            atol=float(ulps(2 * chain.n_stop, i_base.max())),
         )
 
     def test_pack_records_tilt_in_centroids(self, tilted_pack):
@@ -307,9 +330,15 @@ class TestPixelIntegrate:
         [((19, 23), 2), ((19, 23), 4), ((19, 23), 6), ((3, 9), 4), ((9, 3), 2)],
     )
     def test_window_means(self, shape, stride):
-        """Float rounding allows 1e-12 for sums of 16 bounded samples.
+        """Compare sums of 16 bounded samples.
 
         Fails if windows use the wrong footprint or empty outputs are rejected.
+
+        The 4 by 4 positive-sample mean allows one rounding per term.
+
+        Args:
+            shape: Fine image shape in rows and columns.
+            stride: Fine samples between successive window origins.
         """
         fine = np.random.default_rng(0).random(shape)
         ny, nx = (max(0, (n - 4) // stride + 1) for n in shape)
@@ -323,7 +352,10 @@ class TestPixelIntegrate:
             ]
         ).reshape(ny, nx)
         np.testing.assert_allclose(
-            pixel_integrate(jnp.asarray(fine), 4, stride), expected, rtol=1e-12
+            pixel_integrate(jnp.asarray(fine), 4, stride),
+            expected,
+            rtol=16 * eps(jnp.asarray(fine).dtype),
+            atol=0,
         )
 
     def test_constant_field_is_preserved(self):
@@ -411,6 +443,13 @@ class TestPack:
 
     @pytest.mark.parametrize("dy", [0.0, -0.3], ids=["unaberrated", "negative-y-tilt"])
     def test_templates_are_nonnegative_and_centered(self, dy, precision):
+        """Each image sums two stop axes and integrates a 4 by 4 window. The peak
+        sets the scale for signed Fourier sums.
+
+        Args:
+            dy: Signed stop tilt expressed as a detector displacement.
+            precision: Numeric dtype of the active precision lane.
+        """
         base = make_chain()
         chain = base
         if dy:
@@ -439,7 +478,12 @@ class TestPack:
             axis=(-2, -1)
         )
         assert plane.dtype == reference.dtype == precision
-        np.testing.assert_allclose(plane, reference, rtol=1e-10, atol=0)
+        np.testing.assert_allclose(
+            plane,
+            reference,
+            rtol=0,
+            atol=float(ulps(2 * chain.n_stop + 16, plane.max())),
+        )
 
     def test_chromatic_pupil_slices(self):
         pupil, grid = disk_pupil()
@@ -495,7 +539,10 @@ class TestPack:
 class TestArrayScene:
     def test_single_lenslet_scene_matches_template_path(self):
         """One on-axis lenslet through the array machinery reproduces the
-        single-lenslet template pipeline exactly on interior pixels."""
+        single-lenslet template pipeline exactly on interior pixels.
+
+        Each propagated patch sums two stop axes and integrates 25 subpixels.
+        """
         chain = make_chain()
         xc, yc = np.array([[12.0]]), np.array([[12.0]])
         scene = detector_scene(
@@ -512,7 +559,10 @@ class TestArrayScene:
             chain, LAM_REF, np.arange(-5.0, 5.5, 1.0), n_quad=5
         )
         np.testing.assert_allclose(
-            np.asarray(scene)[7:18, 7:18], np.asarray(template), rtol=1e-9
+            np.asarray(scene)[7:18, 7:18],
+            np.asarray(template),
+            rtol=0,
+            atol=float(ulps(2 * chain.n_stop + 25, template.max())),
         )
 
     def test_distant_lenslets_add_exactly(self):

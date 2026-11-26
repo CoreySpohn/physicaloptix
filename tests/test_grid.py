@@ -3,6 +3,7 @@
 import jax
 import numpy as np
 from conftest import TEST_FRAME
+from hwoutils.testing import ulps
 from optixstuff.grids import PixelGrid
 from optixstuff.spectral import Band, Quadrature
 
@@ -69,11 +70,15 @@ class TestGridStaticness:
 
 
 def test_shared_coordinates_equal_old_formula():
-    """Fails for a half-pixel shift: exact algebra for even/odd pupil/focal grids."""
+    """Fails for a half-pixel shift: exact algebra for even/odd pupil/focal grids.
+
+    Compute the independent expression with the returned coordinates' precision,
+    retaining exact equality for the centered axis and its rounded pitch.
+    """
     for n in (16, 17):
         for grid in (PixelGrid.pupil(n), PixelGrid.focal(n, 0.3, TEST_FRAME)):
-            old = (np.arange(n) - n / 2 + 0.5) * grid.step
             x, y = grid.coordinates()
+            old = (np.arange(n, dtype=x.dtype) - n / 2 + 0.5) * x.dtype.type(grid.step)
             np.testing.assert_array_equal(x, np.broadcast_to(old, (n, n)))
             np.testing.assert_array_equal(y, np.broadcast_to(old[:, None], (n, n)))
 
@@ -83,6 +88,9 @@ def test_explicit_spectrum_psf_equals_parent_formula():
 
     The independent reference uses the documented continuous Fourier sum and
     old coordinate expression, with explicit nodes isolating grid migration.
+
+    Three spectral terms and division by the band width account for four relative
+    roundings.
     """
     import jax.numpy as jnp
 
@@ -110,5 +118,8 @@ def test_explicit_spectrum_psf_equals_parent_formula():
     expected = jnp.tensordot(weights, old.real**2 + old.imag**2, axes=1)
     # Dimensional-weight reduction divides by the width after summation.
     np.testing.assert_allclose(
-        propagated.intensity().data, expected, atol=0, rtol=4 * np.finfo(float).eps
+        propagated.intensity().data,
+        expected,
+        atol=0,
+        rtol=float(ulps(4, expected.dtype.type(1))),
     )

@@ -443,7 +443,7 @@ class RomanCompact(eqx.Module):
         dx = 1.0 / self.pupil_diam_pix
         stages = {}
 
-        field = self._as_field(self.pupil.astype(jnp.complex128), self.n_small)
+        field = self._as_field(self.pupil, self.n_small)
         field = Field(
             data=field.data / jnp.sqrt(field.energy()),
             grid=field.grid,

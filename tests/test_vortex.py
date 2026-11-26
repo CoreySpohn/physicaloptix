@@ -3,6 +3,7 @@
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hwoutils.numerics import eps
 from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind
@@ -29,7 +30,10 @@ class TestBuildLadder:
             assert not np.any(np.asarray(u) == 0.0)
 
     def test_finest_level_keeps_pure_ramp_center(self):
-        """The last level is the untapered charge-n ramp (unit modulus)."""
+        """The last level is the untapered charge-n ramp (unit modulus).
+
+        Sine, cosine and complex magnitude round at unit amplitude.
+        """
         _, levels = build_multiscale_vortex(
             charge=2,
             npup=64,
@@ -39,7 +43,9 @@ class TestBuildLadder:
             band_subtract=False,
         )
         _, mask = levels[-1]
-        np.testing.assert_allclose(np.abs(np.asarray(mask)), 1.0, atol=1e-12)
+        np.testing.assert_allclose(
+            np.abs(np.asarray(mask)), 1.0, rtol=0, atol=4 * eps(mask.dtype)
+        )
 
     def test_hann_symmetric_matches_scipy_tukey(self):
         scipy_windows = pytest.importorskip("scipy.signal.windows")

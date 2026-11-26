@@ -6,6 +6,8 @@ import numpy as np
 import pytest
 from conftest import TEST_FRAME
 from hwoutils.constants import m2nm
+from hwoutils.numerics import eps
+from hwoutils.testing import ulps
 from optixstuff.grids import PixelGrid
 from optixstuff.spectral import Band, Quadrature
 
@@ -140,34 +142,52 @@ class TestFresnelSamplingGate:
 
 class TestFresnelParaxial:
     def test_forward_backward_round_trip(self):
-        """Backward (the adjoint = propagate -z) inverts forward, to roundoff."""
+        """Backward (the adjoint = propagate -z) inverts forward, to roundoff.
+
+        Four 2D FFTs allow six roundings per axis and butterfly stage.
+        """
         npix = 256
         field = _pupil(_asymmetric_field(npix), npix)
         prop = _fresnel(PixelGrid.pupil(npix), 3e-3)
         back = prop.backward(prop.forward(field))
         np.testing.assert_allclose(
-            np.asarray(back.data), np.asarray(field.data), atol=1e-12
+            np.asarray(back.data),
+            np.asarray(field.data),
+            rtol=0,
+            atol=float(
+                ulps(48 * int(np.ceil(np.log2(npix))), jnp.max(jnp.abs(field.data)))
+            ),
         )
 
     def test_round_trip_odd_npix(self):
-        """The no-fftshift form must be exact for odd npix too (shift guard)."""
+        """The no-fftshift form must be exact for odd npix too (shift guard).
+
+        Four 2D FFTs allow six roundings per axis and butterfly stage.
+        """
         npix = 255
         field = _pupil(_asymmetric_field(npix), npix)
         prop = _fresnel(PixelGrid.pupil(npix), 3e-3)
         back = prop.backward(prop.forward(field))
         np.testing.assert_allclose(
-            np.asarray(back.data), np.asarray(field.data), atol=1e-12
+            np.asarray(back.data),
+            np.asarray(field.data),
+            rtol=0,
+            atol=float(
+                ulps(48 * int(np.ceil(np.log2(npix))), jnp.max(jnp.abs(field.data)))
+            ),
         )
 
     def test_conserves_energy(self):
+        """Parseval allows two 2D FFTs, squaring the field and a pairwise pixel sum."""
         npix = 256
         field = _pupil(_asymmetric_field(npix), npix)
         prop = _fresnel(PixelGrid.pupil(npix), 5e-3)
-        e_in = float(jnp.sum(jnp.abs(field.data) ** 2))
-        e_out = float(jnp.sum(jnp.abs(prop.forward(field).data) ** 2))
-        assert abs(e_out - e_in) / e_in < 1e-12
+        e_in = jnp.sum(jnp.abs(field.data) ** 2)
+        e_out = jnp.sum(jnp.abs(prop.forward(field).data) ** 2)
+        assert abs(e_out - e_in) < float(ulps(50 * int(np.log2(npix)) + 3, e_in))
 
     def test_zero_distance_is_identity(self):
+        """Two 2D FFTs allow six roundings per axis and butterfly stage."""
         npix = 128
         field = _pupil(_asymmetric_field(npix), npix)
         prop = Fresnel(
@@ -180,7 +200,12 @@ class TestFresnelParaxial:
         )
         out = prop.forward(field)
         np.testing.assert_allclose(
-            np.asarray(out.data), np.asarray(field.data), atol=1e-14
+            np.asarray(out.data),
+            np.asarray(field.data),
+            rtol=0,
+            atol=float(
+                ulps(24 * int(np.ceil(np.log2(npix))), jnp.max(jnp.abs(field.data)))
+            ),
         )
 
     def test_tilt_shifts_beam_by_alpha_nu0(self):
@@ -310,6 +335,16 @@ class TestPlaneWaveEigenfunction:
     @pytest.mark.parametrize("npix", [128, 127])
     @pytest.mark.parametrize("method", ["fresnel", "exact"])
     def test_carrier_picks_up_exactly_the_transfer_phase(self, npix, method):
+        """A unit carrier passes through two 2D FFTs with six roundings per butterfly
+        per axis.
+
+        The exact reference also rounds eight operations at its full double-precision
+        phase.
+
+        Args:
+            npix: Grid samples along one axis.
+            method: Angular spectrum approximation under test.
+        """
         nx, ny = 3.0, -2.0
         alpha = 2e-3
         x = _coords(npix, 1.0 / npix)
@@ -327,11 +362,18 @@ class TestPlaneWaveEigenfunction:
             transfer = np.exp(
                 2j * np.pi * (gamma / beta) * np.sqrt(1.0 - beta**2 * nu2)
             )
+        budget = 24 * int(np.ceil(np.log2(npix))) * eps(carrier.dtype)
+        if method == "exact":
+            # The independent double reference rounds the unreduced carrier angle.
+            budget += 8 * eps(np.float64) * (2 * np.pi * abs(gamma / beta))
         np.testing.assert_allclose(
-            np.asarray(out.data), np.asarray(carrier) * transfer, atol=1e-12
+            np.asarray(out.data), np.asarray(carrier) * transfer, rtol=0, atol=budget
         )
 
     def test_backward_applies_the_conjugate_phase(self):
+        """A unit carrier passes through two 2D FFTs with six roundings per butterfly
+        per axis.
+        """
         npix = 128
         nx, ny = 5.0, 1.0
         alpha = 3e-3
@@ -346,13 +388,19 @@ class TestPlaneWaveEigenfunction:
         )
         transfer = np.exp(1j * np.pi * alpha * (nx**2 + ny**2))
         np.testing.assert_allclose(
-            np.asarray(out.data), np.asarray(carrier) * transfer, atol=1e-12
+            np.asarray(out.data),
+            np.asarray(carrier) * transfer,
+            rtol=0,
+            atol=24 * int(np.ceil(np.log2(npix))) * eps(carrier.dtype),
         )
 
 
 class TestFresnelChromatic:
     def test_matches_per_slice_mono(self):
-        """Each chromatic slice propagates with its own lambda-scaled alpha."""
+        """Each chromatic slice propagates with its own lambda-scaled alpha.
+
+        Four 2D FFTs allow six roundings per axis and butterfly stage.
+        """
         npix = 128
         spectrum = Quadrature.build(
             (Band(500.0 * (1 - 0.2 / 2), 500.0 * (1 + 0.2 / 2)),), order=3
@@ -382,10 +430,16 @@ class TestFresnelChromatic:
                 on_undersampled="record",
             ).forward(base)
             np.testing.assert_allclose(
-                np.asarray(out.data[k]), np.asarray(mono.data), atol=1e-12
+                np.asarray(out.data[k]),
+                np.asarray(mono.data),
+                rtol=0,
+                atol=float(
+                    ulps(48 * int(np.ceil(np.log2(npix))), jnp.max(jnp.abs(mono.data)))
+                ),
             )
 
     def test_chromatic_round_trip(self):
+        """Four 2D FFTs allow six roundings per axis and butterfly stage."""
         npix = 128
         spectrum = Quadrature.build(
             (Band(600.0 * (1 - 0.15 / 2), 600.0 * (1 + 0.15 / 2)),), order=4
@@ -402,7 +456,12 @@ class TestFresnelChromatic:
         )
         back = prop.backward(prop.forward(chrom))
         np.testing.assert_allclose(
-            np.asarray(back.data), np.asarray(chrom.data), atol=1e-12
+            np.asarray(back.data),
+            np.asarray(chrom.data),
+            rtol=0,
+            atol=float(
+                ulps(48 * int(np.ceil(np.log2(npix))), jnp.max(jnp.abs(chrom.data)))
+            ),
         )
 
     def test_gate_uses_reddest_wavelength(self):
@@ -425,7 +484,10 @@ class TestFresnelChromatic:
 
 class TestFresnelExact:
     def test_exact_matches_paraxial_at_beam_scale(self):
-        """At the design beam scale (beta << 1) exact and paraxial agree."""
+        """At the design beam scale (beta << 1) exact and paraxial agree.
+
+        The analytic 1e-8 truncation band adds roundoff from the two FFT pairs.
+        """
         npix = 128
         field = _pupil(_gaussian(npix, 0.12, carrier_nu0=2.0), npix)
         alpha = 3e-3
@@ -436,7 +498,7 @@ class TestFresnelExact:
         rel = np.linalg.norm(
             np.asarray(exact.data) - np.asarray(paraxial.data)
         ) / np.linalg.norm(np.asarray(paraxial.data))
-        assert rel < 1e-8
+        assert rel < 1e-8 + 48 * int(np.ceil(np.log2(npix))) * eps(exact.data.dtype)
 
     def test_exact_diverges_from_paraxial_at_wide_angle(self):
         """A small beam (large beta) makes the non-paraxial term measurable."""
@@ -462,7 +524,10 @@ class TestFresnelExact:
 
     def test_exact_evanescent_attenuates_never_amplifies(self):
         """Beyond the evanescent cutoff the transfer function decays (|H| < 1),
-        it does not clamp to |H| = 1 or amplify."""
+        it does not clamp to |H| = 1 or amplify.
+
+        Complex exponential and magnitude allow four roundings at unit modulus.
+        """
         npix = 64
         prop = Fresnel(
             grid=PixelGrid.pupil(npix),
@@ -481,8 +546,246 @@ class TestFresnelExact:
         assert breaks[0] < WL < breaks[-1]
         transfer = np.asarray(prop._transfer(WL, npix))
         mag = np.abs(transfer)
-        assert mag.max() <= 1.0 + 1e-9  # never amplifies
+        assert mag.max() <= 1.0 + 4 * eps(mag.dtype)  # never amplifies
         assert mag.min() < 0.9  # an evanescent (attenuating) region exists
+
+    @pytest.mark.parametrize("cutoff", [500.0, 500.00001])
+    def test_grazing_mode_static_and_traced(self, cutoff):
+        """Compare either side of cutoff to the binary64 angular spectrum.
+
+        Subtraction is exact near cutoff by Sterbenz's lemma. Allow sixteen
+        roundings for the radicand, root and transfer, scaled by the
+        unwrapped phase or attenuation exponent.
+
+        Args:
+            cutoff: Axial cutoff, either exactly stored or split in float32.
+        """
+        n = 8
+        spacing = float(np.spacing(np.float32(cutoff)))
+        prop = Fresnel(
+            PixelGrid.pupil(n),
+            distance_m=0.001,
+            beam_diameter_m=cutoff / m2nm,
+            wavelength_nm=cutoff,
+            method="exact",
+            on_undersampled="record",
+        )
+        cutoff = prop.spectral_breaks_nm()[-1]
+
+        def mode(wl):
+            return prop._transfer(wl, n)[0, 1]
+
+        compiled = jax.jit(mode)
+        static_compiled = jax.jit(mode, static_argnums=0)
+        for wl in (
+            cutoff - spacing / 4,
+            cutoff,
+            cutoff + spacing / 4,
+            500.0,
+            500.0 + spacing,
+        ):
+            node = jnp.asarray(wl)
+            for represented, actual in (
+                (wl, mode(wl)),
+                (wl, static_compiled(wl)),
+                (float(node), mode(node)),
+                (float(node), compiled(node)),
+            ):
+                # Factor the difference of squares without rounding a ratio near 1.
+                vertical = np.sqrt(
+                    complex((cutoff - represented) * (cutoff + represented))
+                )
+                phase = (
+                    2
+                    * np.pi
+                    * prop.distance_m
+                    * m2nm
+                    * vertical
+                    / (cutoff * represented)
+                )
+                np.testing.assert_allclose(
+                    actual,
+                    np.exp(1j * phase),
+                    rtol=0,
+                    atol=16 * eps(actual.dtype) * (1 + abs(phase)),
+                )
+
+    @pytest.mark.parametrize("tagged_mono", [True, False])
+    def test_spectral_construction_preserves_host_grazing_detuning(self, tagged_mono):
+        """Host spectral metadata preserves phase and decay through a cutoff.
+
+        The host phase and the two length-eight FFTs contribute eight
+        arithmetic roundings and six radix-two stages at unit field scale.
+
+        Args:
+            tagged_mono: Read one exact band tag or bind two original host nodes.
+        """
+        cutoff = 500.0
+        spacing = float(np.spacing(np.float32(cutoff)))
+        nodes = (
+            (cutoff + spacing / 4,)
+            if tagged_mono
+            else (
+                cutoff - spacing / 4,
+                cutoff + spacing / 4,
+            )
+        )
+        prop = Fresnel(
+            PixelGrid.pupil(8),
+            distance_m=0.001,
+            beam_diameter_m=cutoff / m2nm,
+            wavelength_nm=cutoff,
+            method="exact",
+            on_undersampled="record",
+            **({} if tagged_mono else {"spectral_nodes_nm": nodes}),
+        )
+        rule = (
+            Quadrature.monochromatic(nodes[0])
+            if tagged_mono
+            else Quadrature((Band(499.0, 501.0),), [nodes], [[1.0, 1.0]])
+        )
+        mono = _pupil(
+            jnp.broadcast_to(jnp.exp(2j * jnp.pi * jnp.arange(8) / 8), (8, 8)), 8
+        )
+        field = broadcast_to_spectrum(mono, rule)
+        wl = np.asarray(nodes)
+        root = np.sqrt(((cutoff - wl) * (cutoff + wl)).astype(complex))
+        expected = np.exp(2j * np.pi * prop.distance_m * m2nm * root / (cutoff * wl))
+        for evaluate in (prop.forward, jax.jit(lambda f: prop.forward(f))):
+            out = evaluate(field)
+            reference = expected[:, None, None] * np.asarray(mono.data)
+            np.testing.assert_allclose(
+                out.data,
+                reference,
+                rtol=0,
+                atol=ulps(8 + 6 * 4, out.data.real.dtype.type(1)),
+            )
+
+    def test_exact_phase_at_evaluation_switch(self):
+        """Resolve a non-DC phase after millions of carrier cycles.
+
+        The host reference reduces binary64 cycles before evaluating the
+        exponential. Its budget is eight binary64 roundings of the original
+        path cycles (including the root with condition number four). The
+        traced float32 budget counts 32 second-order roundings from the
+        compensated phase arithmetic, plus eight at the reduced angle.
+        The analytic wavelength tangent also budgets eight roundings for
+        the squared wavelength, root and scale.
+        """
+        n = 8
+        switch = 512.0
+        cutoff = switch / np.sqrt(0.75)
+        prop = Fresnel(
+            PixelGrid.pupil(n),
+            distance_m=2.123456789,
+            beam_diameter_m=cutoff / m2nm,
+            wavelength_nm=switch,
+            method="exact",
+            on_undersampled="record",
+        )
+        cutoff = prop.spectral_breaks_nm()[-1]
+
+        def mode(wl):
+            return prop._transfer(wl, n)[0, 1]
+
+        def reference(wl, unit):
+            path_cycles = prop.distance_m * m2nm / wl
+            root = np.sqrt((1 - wl / cutoff) * (1 + wl / cutoff))
+            cycles = path_cycles * root
+            phasor = np.exp(2j * np.pi * np.fmod(cycles, 1))
+            atol = (
+                2
+                * np.pi
+                * (
+                    (8 * np.finfo(np.float64).eps + 32 * unit**2) * path_cycles
+                    + 8 * unit
+                )
+            )
+            derivative = -2j * np.pi * path_cycles / (wl * root) * phasor
+            return phasor, derivative, atol
+
+        compiled = jax.jit(mode)
+        static_compiled = jax.jit(mode, static_argnums=0)
+        spacing = float(np.spacing(np.float32(switch)))
+        for wl in (
+            float(np.nextafter(np.float32(switch), np.float32(0))),
+            switch - spacing / 16,
+            switch,
+            switch + spacing / 16,
+            float(np.nextafter(np.float32(switch), np.float32(np.inf))),
+        ):
+            node = jnp.asarray(wl)
+            unit = eps(node.dtype)
+            expected, _, atol = reference(wl, unit)
+            for static_fn in (mode, static_compiled):
+                np.testing.assert_allclose(static_fn(wl), expected, rtol=0, atol=atol)
+            expected, tangent_reference, atol = reference(float(node), unit)
+            for fn in (mode, compiled):
+                actual, tangent = jax.jvp(fn, (node,), (jnp.ones_like(node),))
+                np.testing.assert_allclose(actual, expected, rtol=0, atol=atol)
+                np.testing.assert_allclose(
+                    tangent, tangent_reference, rtol=atol + 8 * unit, atol=0
+                )
+
+    def test_chromatic_carrier_retains_fractional_cycle(self):
+        """A traced spectral node resolves a subcycle after millions of cycles.
+
+        Wavelengths are exactly representable in both lanes. At zero spatial
+        frequency the host remainder is an independent float64 reference. The
+        reduced remainders, division, angle and phasor allow eight roundings.
+        The analytic wavelength tangent adds a square and a scale to that
+        phase budget.
+        """
+        prop = Fresnel(
+            PixelGrid.pupil(8),
+            distance_m=2.123456789,
+            beam_diameter_m=DIAM_M,
+            wavelength_nm=WL,
+            method="exact",
+            on_undersampled="record",
+        )
+        wavelengths = np.array([499.0, 500.0, 512.5])
+        reference = np.exp(
+            2j * np.pi * np.fmod(prop.distance_m * m2nm, wavelengths) / wavelengths
+        )
+        carrier = jax.vmap(lambda wl: prop._transfer(wl, 8)[0, 0])
+        for fn in (carrier, jax.jit(carrier)):
+            actual = fn(jnp.asarray(wavelengths))
+            np.testing.assert_allclose(
+                actual,
+                reference,
+                atol=8 * eps(actual.dtype) * 2 * np.pi,
+                rtol=0,
+            )
+
+        nodes = jnp.asarray(wavelengths)
+        _, tangent = jax.jvp(carrier, (nodes,), (jnp.ones_like(nodes),))
+        expected_tangent = (
+            -2j * np.pi * prop.distance_m * m2nm / wavelengths**2 * reference
+        )
+        np.testing.assert_allclose(
+            tangent,
+            expected_tangent,
+            rtol=(8 * 2 * np.pi + 2) * eps(tangent.dtype),
+            atol=0,
+        )
+
+    def test_chromatic_path_above_single_precision_nanometer_range(self):
+        """A finite path can exceed the storage range in nanometers.
+
+        A binary wavelength gives an integer number of cycles for this path.
+        """
+        prop = Fresnel(
+            PixelGrid.pupil(4),
+            distance_m=2.0**100,
+            beam_diameter_m=2.0**50,
+            wavelength_nm=2.0**28,
+            method="exact",
+            on_undersampled="record",
+        )
+        node = jnp.asarray(prop.wavelength_nm)
+        assert prop._transfer(node, 4)[0, 0] == 1
+        assert jax.jit(lambda w: prop._transfer(w, 4)[0, 0])(node) == 1
 
     def test_rejects_bad_method(self):
         with pytest.raises(ValueError, match="method"):

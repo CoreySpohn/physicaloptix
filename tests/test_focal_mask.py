@@ -10,6 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TEST_FRAME
+from hwoutils.testing import ulps
 from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind
@@ -18,7 +19,6 @@ from physicaloptix.elements import FocalPlaneMask, mask_window, select_mask_tran
 from physicaloptix.transforms import Fraunhofer, FullBandFraunhofer
 
 CASES = [(15, 2), (16, 2), (16, 3)]
-TOL = 1e-12
 
 
 def _pupil_field(npup):
@@ -65,6 +65,14 @@ class TestFullBandMaskStage:
 
     @pytest.mark.parametrize(("npup", "oversample"), CASES)
     def test_forward_adjoint_and_stage_output_match_the_mft(self, npup, oversample):
+        """The two separable matrix products per direction have npup or nfocal terms;
+        use the peak field to bound residuals at nulls.
+
+        Args:
+            npup: Pupil samples along one axis.
+            oversample: Focal samples per lambda/D.
+        """
+        n_ops = 2 * npup * (1 + oversample)
         pupil, stages = _stages(npup, oversample)
         assert isinstance(stages["fft"].transform, FullBandFraunhofer)
         assert isinstance(stages["mft"].transform, Fraunhofer)
@@ -73,29 +81,41 @@ class TestFullBandMaskStage:
         assert fwd["fft"].grid == fwd["mft"].grid
         scale = np.abs(fwd["mft"].data).max()
         np.testing.assert_allclose(
-            fwd["fft"].data, fwd["mft"].data, rtol=0, atol=TOL * scale
+            fwd["fft"].data, fwd["mft"].data, rtol=0, atol=float(ulps(n_ops, scale))
         )
         bwd = {k: s.transform.backward(fwd["mft"]) for k, s in stages.items()}
         np.testing.assert_allclose(
             bwd["fft"].data,
             bwd["mft"].data,
             rtol=0,
-            atol=TOL * np.abs(bwd["mft"].data).max(),
+            atol=float(ulps(n_ops, np.abs(bwd["mft"].data).max())),
         )
         # The full band is complete, so the round trip is the identity.
         np.testing.assert_allclose(
-            bwd["fft"].data, field.data, rtol=0, atol=TOL * np.abs(field.data).max()
+            bwd["fft"].data,
+            field.data,
+            rtol=0,
+            atol=float(ulps(n_ops, np.abs(field.data).max())),
         )
         out = {k: s(field).data for k, s in stages.items()}
         np.testing.assert_allclose(
-            out["fft"], out["mft"], rtol=0, atol=TOL * np.abs(out["mft"]).max()
+            out["fft"],
+            out["mft"],
+            rtol=0,
+            atol=float(ulps(n_ops, np.abs(out["mft"]).max())),
         )
         plane = {k: s.mask_plane(field).data for k, s in stages.items()}
         np.testing.assert_allclose(
-            plane["fft"], plane["mft"], rtol=0, atol=TOL * np.abs(plane["mft"]).max()
+            plane["fft"],
+            plane["mft"],
+            rtol=0,
+            atol=float(ulps(n_ops, np.abs(plane["mft"]).max())),
         )
 
     def test_gradient_matches_the_mft(self):
+        """Forward and reverse each traverse two length-15 dots and two length-45 dots
+        through the mask stage.
+        """
         pupil, stages = _stages(15, 3)
         base = _pupil_field(15)
         weight = jnp.asarray(np.random.default_rng(0).uniform(0.5, 1.5, base.shape))
@@ -108,7 +128,10 @@ class TestFullBandMaskStage:
         grads = {k: np.asarray(jax.grad(loss)(phase0, s)) for k, s in stages.items()}
         assert np.abs(grads["mft"]).max() > 0
         np.testing.assert_allclose(
-            grads["fft"], grads["mft"], rtol=0, atol=1e-10 * np.abs(grads["mft"]).max()
+            grads["fft"],
+            grads["mft"],
+            rtol=0,
+            atol=float(ulps(4 * (15 + 45), np.abs(grads["mft"]).max())),
         )
 
     def test_auto_picks_fft_on_the_full_band_and_mft_on_a_window(self):

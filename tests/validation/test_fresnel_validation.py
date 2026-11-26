@@ -21,6 +21,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TEST_FRAME
+from hwoutils.testing import ulps
 from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind
@@ -230,17 +231,23 @@ class TestExternalReferences:
 
     @pytest.mark.parametrize("alpha", [1e-4, 5e-4, 1e-3, 3e-3, 8e-3])
     def test_energy_conserved_across_alpha(self, alpha):
+        """Two 2D FFTs, intensity squaring and pairwise pixel reduction set the Parseval
+        bound.
+
+        Args:
+            alpha: Dimensionless Fresnel propagation parameter.
+        """
         npix = 256
         x = _coords(npix)
         xg, yg = np.meshgrid(x, x)
         envelope = np.exp(-(xg**2 + yg**2) / 0.15**2)
         e_in = (envelope * np.exp(2j * np.pi * 3 * xg)).astype(complex)
         field = _pupil(e_in, npix)
-        e0 = float(jnp.sum(jnp.abs(field.data) ** 2))
+        e0 = jnp.sum(jnp.abs(field.data) ** 2)
         for method in ("fresnel", "exact"):
             out = _fresnel(PixelGrid.pupil(npix), alpha, method=method).forward(field)
             e1 = float(jnp.sum(jnp.abs(out.data) ** 2))
-            assert abs(e1 - e0) / e0 < 1e-9
+            assert abs(e1 - e0) < float(ulps(50 * int(np.log2(npix)) + 3, e0))
 
 
 class TestAnalyticLaws:
@@ -268,7 +275,11 @@ class TestAnalyticLaws:
 
     def test_paraxial_exact_gap_scales_with_beta_squared(self):
         """Exact and paraxial agree at beam scale, and the gap shrinks like
-        beta^2 = (lambda/D)^2 as the beam grows."""
+        beta^2 = (lambda/D)^2 as the beam grows.
+
+        Keep alpha fixed and use integer carrier cycles to resolve the beta-squared
+        term.
+        """
         npix = 128
         x = _coords(npix)
         xg, yg = np.meshgrid(x, x)
@@ -276,10 +287,10 @@ class TestAnalyticLaws:
         e_in = (envelope * np.exp(2j * np.pi * 5 * xg)).astype(complex)
         field = _pupil(e_in, npix)
         gaps = []
-        for diameter_m in (5e-4, 1e-3):  # beta halves as D doubles
+        for diameter_m in (4e-5, 8e-5):  # beta halves as D doubles
             common = dict(
                 grid=PixelGrid.pupil(npix),
-                distance_m=2e-4,
+                distance_m=_distance_for_alpha(5e-3, diameter_m=diameter_m),
                 beam_diameter_m=diameter_m,
                 wavelength_nm=WL,
                 plane_in=PlaneKind.PUPIL,

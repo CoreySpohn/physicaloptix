@@ -9,7 +9,9 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TEST_FRAME
+from hwoutils.numerics import eps
 from hwoutils.precision import like
+from hwoutils.testing import ulps
 from optixstuff import SimplePrimary
 from optixstuff.coronagraph import (
     AbstractImagingCoronagraph,
@@ -136,8 +138,10 @@ class TestConformance:
         Aperture rules are stated in build-centre lambda/D, so the default
         0.7 radius is the same sky aperture in both builds. The 8-pixel grid
         encloses it one pixel off axis.
-        Both builds sample the same sky angles and apertures, so 1e-12 relative
-        allows float64 roundoff in propagation, aperture sums and profile fits.
+        Both builds sample the same sky angles and apertures.
+
+        Two pupil-axis Fourier sums cover roundoff in the native and build-frame
+        photometry.
 
         Args:
             small_path: Disk stop followed by a camera.
@@ -171,6 +175,8 @@ class TestConformance:
 
         center = build(500.0, 0.3)
         native = build(600.0, 0.25)
+        field = native.input_field.data
+        photometry_rtol = 2 * field.shape[-1] * eps(field.dtype)
         assert native.curves() is native.performance_record
         for expected, actual in (
             (center.performance_record, native.curves(Circular(0.7))),
@@ -179,7 +185,10 @@ class TestConformance:
             angle = expected.separation_lod * expected.frame.lod_to_arcsec(500.0)
             lod_arcsec = actual.frame.lod_to_arcsec(500.0)
             np.testing.assert_allclose(
-                actual.separation_lod * lod_arcsec, angle, rtol=1e-12, atol=0
+                actual.separation_lod * lod_arcsec,
+                angle,
+                rtol=photometry_rtol,
+                atol=0,
             )
             assert actual.frame == expected.frame
             assert actual.rule == expected.rule
@@ -187,25 +196,28 @@ class TestConformance:
                 np.testing.assert_allclose(
                     actual.evaluate(quantity, angle / lod_arcsec),
                     expected.evaluate(quantity, expected.separation_lod),
-                    rtol=1e-12,
+                    rtol=photometry_rtol,
                     atol=0,
                 )
             for name in ("iwa_lod", "data_extent_lod", "stellar_diameters_lod"):
                 np.testing.assert_allclose(
-                    getattr(actual, name), getattr(expected, name), rtol=1e-12, atol=0
+                    getattr(actual, name),
+                    getattr(expected, name),
+                    rtol=photometry_rtol,
+                    atol=0,
                 )
             for profile in (actual.uniform_sky, native.uniform_sky_profile):
                 assert profile.frame == expected.frame
                 np.testing.assert_allclose(
                     profile.separation_lod,
                     expected.uniform_sky.separation_lod,
-                    rtol=1e-12,
+                    rtol=photometry_rtol,
                     atol=0,
                 )
                 np.testing.assert_allclose(
                     profile.evaluate(expected.uniform_sky.separation_lod),
                     expected.uniform_sky.values,
-                    rtol=1e-12,
+                    rtol=photometry_rtol,
                     atol=0,
                 )
 
@@ -242,6 +254,14 @@ class TestConformance:
         The three-node flat illumination spans 450 to 550 nm. Serving
         wavelengths select the same propagation, so both the native pixel
         values and the scale selection must agree exactly.
+
+        Grid conversion can displace coordinates by the axis length times
+        roundoff on each of two axes; interpolation error scales with
+        peak brightness.
+
+        Args:
+            small_path: Pupil-stop and camera stages.
+            chromatic_field: Entrance field sampled across the build band.
         """
         coro = PathCoronagraph.from_path(
             OpticalPath(stages=small_path.stages[:1]),
@@ -260,7 +280,7 @@ class TestConformance:
         np.testing.assert_array_equal(blue, coro.stellar_map(550.0, 0.0).data)
         # A renderer places a band product at a traced band centre. The traced
         # grid equals the native sky grid up to the round trip through arcsec,
-        # so it reads the native transmission to roundoff (1e-12 relative).
+        # so it reads the native transmission to roundoff.
         sky = coro.calibration.sky
 
         @jax.jit
@@ -269,7 +289,10 @@ class TestConformance:
             return coro.uniform_sky_map(scale_nm, grid=grid).data
 
         np.testing.assert_allclose(
-            traced_sky(485.0), sky.data, rtol=1e-12, atol=1e-12 * sky.data.max()
+            traced_sky(485.0),
+            sky.data,
+            rtol=0,
+            atol=float(ulps(2 * sky.grid.shape[0], sky.data.max())),
         )
 
     def test_imaging_capabilities(self, vortex_coronagraph):
@@ -736,7 +759,17 @@ class TestChromaticBuild:
 
 
 def _reference_leakage(star, planet, separation_lod, rule):
-    """Integrate the reconstructed star on an independently clipped fine grid."""
+    """Integrate the stellar reconstruction on an independently clipped fine grid.
+
+    Args:
+        star: Integrated stellar image.
+        planet: Integrated off-axis image defining the aperture.
+        separation_lod: Position of the aperture along the x axis.
+        rule: Circular or half-maximum aperture rule.
+
+    Returns:
+        The integrated leakage and its Fourier-sum absolute error scale.
+    """
     from optixstuff.apertures import Circular
     from scipy.integrate import quad
     from scipy.optimize import root
@@ -746,20 +779,19 @@ def _reference_leakage(star, planet, separation_lod, rule):
     # Three native pixels on either side enclose both cores of this telescope.
     factor = 10
     dy = (np.arange(-3 * factor, 3 * factor) + 0.5) / factor
-    subpixels = (jnp.arange(6 * factor) + 0.5) / factor
+    subpixels = (np.arange(6 * factor) + 0.5) / factor
     y = int(np.floor(center.y)) - 2 + subpixels - 0.5
     x = int(np.floor(center.x)) - 2 + subpixels - 0.5
-    fy, fx = (jnp.fft.fftfreq(n) for n in grid.shape)
+    fy, fx = (np.fft.fftfreq(n) for n in grid.shape)
 
     def reconstruct(spectrum, ys, xs):
-        # Keep the native JAX FFT precision in the faint halo. Different FFT
-        # backends lose different low bits to cancellation six lambda/D out.
-        by = jnp.exp(2j * jnp.pi * jnp.asarray(ys)[:, None] * fy) / len(fy)
-        bx = jnp.exp(2j * jnp.pi * jnp.asarray(xs)[:, None] * fx) / len(fx)
+        by = np.exp(2j * np.pi * np.asarray(ys)[:, None] * fy) / len(fy)
+        bx = np.exp(2j * np.pi * np.asarray(xs)[:, None] * fx) / len(fx)
         return np.asarray((by @ spectrum @ bx.T).real)
 
-    spectrum = jnp.fft.fft2(planet.data)
-    halo = reconstruct(jnp.fft.fft2(star.data), y, x)
+    spectrum = np.fft.fft2(np.asarray(planet.data, dtype=np.float64))
+    star_spectrum = np.fft.fft2(np.asarray(star.data, dtype=np.float64))
+    halo = reconstruct(star_spectrum, y, x)
     if isinstance(rule, Circular):
         radius = rule.radius_lod / grid.step * factor
         yy, xx = np.meshgrid(dy * factor, dy * factor, indexing="ij")
@@ -787,8 +819,8 @@ def _reference_leakage(star, planet, separation_lod, rule):
             weights[iy, ix] = quad(chord, lo, hi, points=crossings, epsabs=1e-13)[0]
     else:
         # For the open pupil, the only half-maximum component is the core.
-        grad_y = 2j * jnp.pi * fy[:, None] * spectrum
-        grad_x = 2j * jnp.pi * fx * spectrum
+        grad_y = 2j * np.pi * fy[:, None] * spectrum
+        grad_x = 2j * np.pi * fx * spectrum
 
         def gradient(yx):
             return [reconstruct(g, [yx[0]], [yx[1]]).item() for g in (grad_y, grad_x)]
@@ -818,14 +850,24 @@ def _reference_leakage(star, planet, separation_lod, rule):
                 return max(0.0, min(1.0, 0.5 + (c + b * xp) / a))
 
             weights[iy, ix] = quad(height, -0.5, 0.5, points=crossings)[0]
-    return np.sum(halo * weights) / factor**2
+    # An absolute error in the reconstructed halo is integrated over this area.
+    scale = np.mean(np.abs(star_spectrum)) * weights.sum() / factor**2
+    return np.sum(halo * weights) / factor**2, scale
 
 
 def test_rule_records_and_absolute_leakage(bare_telescope):
     """Fails for per-pixel/density confusion or duplicated half-maximum masks.
 
-    Same-image records agree at 16 float64 eps. The independent aperture
+    The same-image records share their aperture weights. The independent aperture
     sum has no pixel-area division: a factor step**-2 would fail by 4x.
+
+    Sixteen relative rounding steps cover the aperture-area products, pairwise
+    pixel reduction and interpolation. The independent host float64 transform
+    adds two image-width sums at the absolute Fourier scale (mean spectral
+    magnitude times aperture area), allowing cancellation in the faint halo.
+
+    Args:
+        bare_telescope: Calibrated clear circular pupil.
     """
     from optixstuff.apertures import Circular, HalfMaximum
     from optixstuff.performance import performance_curves
@@ -856,14 +898,17 @@ def test_rule_records_and_absolute_leakage(bare_telescope):
         np.testing.assert_allclose(
             getattr(record, name),
             getattr(expected, name),
-            rtol=16 * np.finfo(float).eps,
+            rtol=16 * eps(star.data.dtype),
             atol=0,
         )
     for rule in (HalfMaximum(0.5), Circular(0.7)):
-        absolute_sum = _reference_leakage(star, off(6.0), 6.0, rule)
+        absolute_sum, scale = _reference_leakage(star, off(6.0), 6.0, rule)
         measured = c.curves(rule).evaluate("leakage_fraction", 6.0)
         np.testing.assert_allclose(
-            measured, absolute_sum, rtol=16 * np.finfo(float).eps, atol=0
+            measured,
+            absolute_sum,
+            rtol=16 * eps(star.data.dtype),
+            atol=2 * star.grid.shape[0] * eps(np.float64) * scale,
         )
 
 
@@ -1027,7 +1072,15 @@ def test_uniform_sky_transmission_uses_sky_area(square_telescope):
 
     The blue camera samples angles scaled by 5/6, so each sample sees the
     same screen Fourier coefficient. The dimensionless sky response agrees
-    to 1e-12 relative in float64, including the camera's area conversion.
+    after the camera area conversion.
+
+    A random screen can interfere destructively in any pixel. Compare the
+    dimensionless transmission in absolute units of the reference peak,
+    allowing one rounding per term in each of the two pupil-axis sums.
+    Dropping the area conversion changes the map by the squared pitch ratio.
+
+    Args:
+        square_telescope: Calibrated square pupil and camera.
     """
     c = square_telescope
     ratio = 500 / 600
@@ -1043,11 +1096,12 @@ def test_uniform_sky_transmission_uses_sky_area(square_telescope):
         n_sky_screens=c.n_sky_screens,
         seed=c.seed,
     )
+    reference = c.uniform_sky_map(600.0, grid=c.grid).data
     np.testing.assert_allclose(
         blue.uniform_sky_map(500.0, grid=blue.grid).data,
-        c.uniform_sky_map(600.0, grid=c.grid).data,
-        rtol=1e-12,
-        atol=0,
+        reference,
+        rtol=0,
+        atol=float(ulps(2 * c.input_field.grid.shape[-1], reference.max())),
     )
 
 
@@ -1059,7 +1113,11 @@ def test_local_zodi_rate_reads_the_record_sky(vortex_coronagraph):
     Truth: the hand product of the collecting area, the optics throughput,
     the zodi radiance, the adapter's own ``uniform_sky_response`` and the
     record's core area times (lambda/D)**2 in steradians at the band centre.
-    Basis: float64 roundoff over a few products, rtol 1e-12.
+    Allow sixteen relative rounding steps for angle conversion, interpolation
+    of the sky and core area and the final product of six positive factors.
+
+    Args:
+        vortex_coronagraph: Calibrated coronagraph with a uniform-sky profile.
     """
     jaxedith = pytest.importorskip("jaxedith")
     pytest.importorskip("skyscapes")
@@ -1103,7 +1161,9 @@ def test_local_zodi_rate_reads_the_record_sky(vortex_coronagraph):
     )
     quadrature = Quadrature.build((Band(550.0, 650.0),), order=1)
     sources = scene.sources(
-        quadrature, Resolution.build(quadrature, *scene.spectral_tables()), 0.0
+        quadrature,
+        Resolution.build(quadrature, *scene.spectral_tables()),
+        np.array([0.0]),
     )
     rates = jaxedith.rates(
         record,
@@ -1132,4 +1192,6 @@ def test_local_zodi_rate_reads_the_record_sky(vortex_coronagraph):
         * _lod_rad(600.0) ** 2
     )
     assert 0 < float(c.uniform_sky_response(separation)) < 1
-    np.testing.assert_allclose(rates.local_zodi[0, 0], expected, rtol=1e-12, atol=0)
+    np.testing.assert_allclose(
+        rates.local_zodi[0, 0], expected, rtol=16 * eps(rates.local_zodi.dtype), atol=0
+    )

@@ -4,6 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from astropy.io import fits
+from hwoutils.numerics import eps
 from optixstuff.grids import Frame, Measure, PixelGrid
 from optixstuff.spectral import Band, Quadrature
 from yippy import open_yip
@@ -88,7 +89,10 @@ class TestEmittedPackage:
         """Fails if FITS geometry or sample axes use the propagation reference.
 
         Integer wavelengths are exact. The angular pitch and axes have only
-        float64 unit-conversion roundoff (1e-14 relative).
+        unit-conversion roundoff.
+
+        Four relative rounding steps cover the native-to-build pitch ratio,
+        squared pixel area and FITS flux conversion.
 
         Args:
             vortex_setup: Vortex train and entrance field.
@@ -125,14 +129,14 @@ class TestEmittedPackage:
                     products[key].grid.to_arcsec(center_nm).step,
                 ],
                 grid.to_arcsec(reference_nm).step,
-                rtol=1e-14,
+                rtol=4 * eps(field.data.dtype),
                 atol=0,
             )
             if key != "sky_transmission":
                 np.testing.assert_allclose(
                     products[key].data * header["PIXSCALE"] ** 2,
                     fits.getdata(tmp_path / filename),
-                    rtol=1e-14,
+                    rtol=4 * eps(field.data.dtype),
                     atol=0,
                 )
         package = open_yip(tmp_path)
@@ -140,8 +144,12 @@ class TestEmittedPackage:
             ("offsets_xy_lod", [[0.6, 0.0]]),
             ("stellar_diameters_lod", [0.12]),
         ):
-            np.testing.assert_allclose(getattr(package, key), expected, rtol=1e-14)
-            np.testing.assert_allclose(products[key], expected, rtol=1e-14)
+            np.testing.assert_allclose(
+                getattr(package, key), expected, rtol=4 * eps(field.data.dtype)
+            )
+            np.testing.assert_allclose(
+                products[key], expected, rtol=4 * eps(field.data.dtype)
+            )
 
     def test_all_files_written(self, emitted):
         out_dir, _ = emitted

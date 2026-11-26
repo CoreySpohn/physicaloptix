@@ -18,8 +18,8 @@ midpoint error must fall at the formal second order as the oversampling
 doubles, which a second (double) pixel integration or a missing one would
 not do.
 
-Tolerances: identities between two exact finite sums use the floating-point
-floor 1e-10 of the peak (measured residuals are below 1e-14). The
+Identities between exact finite sums use the roundoff budget of their
+transform or reduction. Measured float64 residuals are below 1e-14. The
 pixel-integration order band [1.8, 2.2] brackets the formal order 2 of the
 midpoint rule; the measured orders are listed in that test.
 """
@@ -38,6 +38,8 @@ import numpy as np
 import pytest
 from astropy.io import fits
 from conftest import as_image
+from hwoutils.numerics import eps
+from hwoutils.testing import ulps
 
 from physicaloptix.ifs import pixel_integrate as ifs_pixel_integrate
 from physicaloptix.instruments import (
@@ -54,7 +56,6 @@ ARCSEC_TO_RAD = np.pi / (180.0 * 3600.0)
 NM_TO_M = 1e-9
 DIAMETER_M = 6.5
 NPUP = 48
-FLOOR = 1e-10
 
 
 class _ArrayEqual:
@@ -162,7 +163,12 @@ class TestTwoWavelengths:
         source sits (+3, -2) output samples off axis on an odd grid, so a box
         centered on that sample holds a symmetric image and its centroid is
         the source angle at every wavelength. Converting the source offset
-        at one wavelength only would move the centroid at the other."""
+        at one wavelength only would move the centroid at the other.
+
+        The two weighted first moments each reduce 21 rows or columns on the
+        absolute detector coordinate scale before subtracting the
+        center.
+        """
         det_npix, oversample = 11, 3
         step = self.SCALE / oversample
         source = (3 * step, -2 * step)
@@ -185,7 +191,14 @@ class TestTwoWavelengths:
                 ((box * xx).sum() / box.sum() - center) * step,
                 ((box * yy).sum() / box.sum() - center) * step,
             )
-            np.testing.assert_allclose(centroid, source, rtol=0, atol=FLOOR * step)
+            np.testing.assert_allclose(
+                centroid,
+                source,
+                rtol=0,
+                atol=float(
+                    ulps(2 * (2 * half + 1), np.asarray(center * step, dtype=box.dtype))
+                ),
+            )
             images.append(image)
         assert np.abs(images[0] - images[1]).max() > 0.1 * images[0].max()
 
@@ -193,7 +206,11 @@ class TestTwoWavelengths:
         """With no OPD the energy density per (lambda/D)**2 is one function
         of theta * D / lambda. At twice the wavelength, sample k of a grid
         with pitch s / 2 is therefore sample k + n / 2 of the half-wavelength
-        image on a grid with pitch s / 4 (the same angle divided by two)."""
+        image on a grid with pitch s / 4 (the same angle divided by two).
+
+        Use one rounding per pupil sample in each of the two Fourier sums.
+        Their peak sets the absolute scale for cancellation in faint samples.
+        """
         det_npix = 10
         long_cfg = _config(3600.0, det_npix, 2, self.SCALE)
         short_cfg = _config(1800.0, det_npix, 4, self.SCALE)
@@ -204,12 +221,20 @@ class TestTwoWavelengths:
         n = density_long.shape[0]
         matched = density_short[n // 2 : n // 2 + n, n // 2 : n // 2 + n]
         np.testing.assert_allclose(
-            density_long, matched, rtol=0, atol=FLOOR * density_long.max()
+            density_long,
+            matched,
+            rtol=0,
+            atol=float(ulps(2 * NPUP, density_long.max())),
         )
 
     def test_opd_phase_falls_as_one_over_wavelength(self):
         """The fixed OPD gives phase 2 pi OPD / lambda in the entrance pupil
-        (|OPD| < 375 nm, so no wrap at 1800 nm)."""
+        (|OPD| < 375 nm, so no wrap at 1800 nm).
+
+        Eight rounding steps cover phase construction, complex exponential,
+        phase extraction and conversion back to nanometers.
+        The phase ratio has the same eight-step budget in radians.
+        """
         opd_nm = _asymmetric_opd_nm()
         lit = _asymmetric_pupil() > 0
         phases = []
@@ -218,10 +243,18 @@ class TestTwoWavelengths:
             _, taps = _propagate(config, _inputs(opd_nm=opd_nm), taps=("ote_opd",))
             phase = np.angle(np.asarray(taps["ote_opd"].data))[lit]
             np.testing.assert_allclose(
-                phase * wavelength_nm / (2 * np.pi), opd_nm[lit], rtol=0, atol=1e-9
+                phase * wavelength_nm / (2 * np.pi),
+                opd_nm[lit],
+                rtol=0,
+                atol=float(ulps(8, np.abs(opd_nm[lit]).max().astype(phase.dtype))),
             )
             phases.append(phase)
-        np.testing.assert_allclose(phases[0], 2 * phases[1], rtol=0, atol=1e-12)
+        np.testing.assert_allclose(
+            phases[0],
+            2 * phases[1],
+            rtol=0,
+            atol=float(ulps(8, np.abs(phases[0]).max())),
+        )
 
 
 class TestBandImage:
@@ -239,7 +272,15 @@ class TestBandImage:
         its own wavelength, as a fraction of entrance-pupil energy per
         sample. The same sum with the pupil phase frozen at one node (a
         cached monochromatic field) differs by far more than the floor
-        (measured 3e-3 of the peak; a monochromatic image 7e-3)."""
+        (measured 3e-3 of the peak; a monochromatic image 7e-3).
+
+        Use one rounding per pupil sample in each of the two Fourier sums.
+        Their peak sets the absolute scale for cancellation in faint samples.
+
+        Args:
+            det_npix: Detector pixels per axis.
+            oversample: Samples per detector pixel on each axis.
+        """
         opd_nm = 3.0 * _asymmetric_opd_nm()
         band = NIRCamBand(wavelengths_nm=self.NODES_NM, weights=self.RAW_WEIGHTS)
         config = _config(
@@ -270,7 +311,9 @@ class TestBandImage:
             )
             for lam, w in zip(self.NODES_NM, weights, strict=True)
         )
-        np.testing.assert_allclose(image, expected, rtol=0, atol=FLOOR * expected.max())
+        np.testing.assert_allclose(
+            image, expected, rtol=0, atol=float(ulps(2 * NPUP, image.max()))
+        )
         frozen = sum(
             w
             * _expected_fraction(
@@ -293,7 +336,11 @@ class TestBandImage:
         """Per-node post-mask SI OPDs: node k carries a tilt that moves its
         image by m_k output samples in +x (library convention, exit frame).
         The band image must be the weighted sum of the node images each
-        shifted by its own m_k; reusing one node's OPD shifts all alike."""
+        shifted by its own m_k; reusing one node's OPD shifts all alike.
+
+        Use one rounding per pupil sample in each of the two Fourier sums.
+        Their peak sets the absolute scale for cancellation in faint samples.
+        """
         det_npix, oversample = 10, 2
         nodes = (3000.0, 3600.0)
         shifts = (1, 3)
@@ -315,7 +362,7 @@ class TestBandImage:
             )
             expected += w * flat[:, top - m : n - m]
         np.testing.assert_allclose(
-            image[:, top:], expected, rtol=0, atol=FLOOR * expected.max()
+            image[:, top:], expected, rtol=0, atol=float(ulps(2 * NPUP, image.max()))
         )
 
     def test_monochromatic_si_opd_is_refused_at_other_nodes(self):
@@ -379,6 +426,15 @@ class TestPixelIntegration:
         return density.reshape(n, order, n, order).sum(axis=(1, 3))
 
     def _pixels(self, oversample):
+        """The blocked and unblocked positive sums each have at most
+        bit_length(image.size) pairwise reduction levels.
+
+        Args:
+            oversample: Samples per detector pixel on each axis.
+
+        Returns:
+            Flux integrated over each detector pixel.
+        """
         config = _config(
             self.WAVELENGTH_NM,
             self.DET_NPIX,
@@ -389,7 +445,12 @@ class TestPixelIntegration:
         )
         image = _fraction_image(config, _inputs(opd_nm=_asymmetric_opd_nm()))
         pixels = np.asarray(integrate_detector_pixels(as_image(image), oversample).data)
-        np.testing.assert_allclose(pixels.sum(), image.sum(), rtol=1e-14)
+        np.testing.assert_allclose(
+            pixels.sum(),
+            image.sum(),
+            rtol=2 * image.size.bit_length() * eps(pixels.dtype),
+            atol=0,
+        )
         return pixels
 
     def test_midpoint_pixels_converge_at_second_order(self):
@@ -413,14 +474,23 @@ class TestPixelIntegration:
     def test_block_sum_is_q_squared_times_the_ifs_window_mean(self):
         """The detector rule sums energies; ``ifs.pixel_integrate`` averages
         an intensity. On aligned, non-overlapping windows they differ by the
-        sample count per pixel exactly (to rounding)."""
+        sample count per pixel exactly (to rounding).
+
+        Each window contains q squared positive summands, allowing one rounding
+        per sample.
+        """
         q = 4
         image = np.random.default_rng(3).random((12 * q, 12 * q))
         summed = np.asarray(integrate_detector_pixels(as_image(image), q).data)
         mean = np.asarray(ifs_pixel_integrate(jnp.asarray(image), q, q))
-        np.testing.assert_allclose(summed, q**2 * mean, rtol=1e-14)
         np.testing.assert_allclose(
-            summed, image.reshape(12, q, 12, q).sum(axis=(1, 3)), rtol=1e-14
+            summed, q**2 * mean, rtol=q**2 * eps(summed.dtype), atol=0
+        )
+        np.testing.assert_allclose(
+            summed,
+            image.reshape(12, q, 12, q).sum(axis=(1, 3)),
+            rtol=q**2 * eps(summed.dtype),
+            atol=0,
         )
 
     @pytest.mark.parametrize(("shape", "oversample"), [((9, 9), 2), ((8, 6), 2)])

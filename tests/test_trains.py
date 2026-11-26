@@ -4,6 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TEST_FRAME
+from hwoutils.testing import ulps
 from optixstuff.grids import PixelGrid
 from optixstuff.spectral import Band, Quadrature
 
@@ -40,14 +41,25 @@ class TestSynthesizePsdSurface:
         np.testing.assert_array_equal(a, b)
         assert not np.array_equal(a, c)
 
-    def test_band_limited(self):
+    def test_band_limited(self, precision):
+        """The inverse 2-D FFT traverses two log2(N) butterfly chains before host
+        recentering and normalization. By Parseval, fractional leakage power is
+        bounded by squared relative amplitude roundoff at synthesis precision.
+
+        Args:
+            precision: Floating dtype used for the JAX calculation.
+        """
         grid = PixelGrid.pupil(128)
         surf = synthesize_psd_surface(1, grid, rms_nm=1.0, k_min=4.0, k_max=20.0)
         k = np.fft.fftfreq(grid.shape[0], d=grid.step)
         kk = np.hypot(*np.meshgrid(k, k))
         power = np.abs(np.fft.fft2(surf)) ** 2
         out_of_band = power[(kk > 0) & ((kk < 4.0) | (kk > 20.0))].sum()
-        assert out_of_band < 1e-20 * power.sum()
+        assert (
+            out_of_band
+            < float(ulps(2 * int(np.log2(grid.shape[0])) + 2, precision.type(1))) ** 2
+            * power.sum()
+        )
 
     def test_power_law_slope(self):
         grid = PixelGrid.pupil(128)
@@ -123,6 +135,9 @@ class TestBuildMirrorTrain:
         assert path.stages[-1].op.plane_out == PlaneKind.PUPIL
 
     def test_zero_error_train_is_identity(self):
+        """The 3 Fresnel hops each use an FFT, a phase multiply and an inverse FFT, with
+        four log2(N) butterfly stages per hop. Bound absolute error at incident peak
+        amplitude."""
         grid = PixelGrid.pupil(128)
         specs = tuple(
             MirrorSpec(
@@ -138,7 +153,12 @@ class TestBuildMirrorTrain:
         field = _aperture_field(grid)
         out, _ = path.propagate(field)
         np.testing.assert_allclose(
-            np.asarray(out.data), np.asarray(field.data), atol=5e-14
+            np.asarray(out.data),
+            np.asarray(field.data),
+            rtol=0,
+            atol=float(
+                ulps(3 * (4 * int(np.log2(grid.shape[0])) + 1), abs(field.data).max())
+            ),
         )
 
     def test_pupil_mirror_matches_direct_phasor(self):
@@ -156,6 +176,9 @@ class TestBuildMirrorTrain:
         np.testing.assert_allclose(np.asarray(out.data), expected, atol=1e-12)
 
     def test_drift_stage_present_with_zero_coeffs_is_inert(self):
+        """The 2 Fresnel hops each use an FFT, a phase multiply and an inverse FFT, with
+        four log2(N) butterfly stages per hop. Bound absolute error at incident peak
+        amplitude."""
         grid = PixelGrid.pupil(128)
         drift = ModeBasis(
             B=jnp.stack(
@@ -178,7 +201,12 @@ class TestBuildMirrorTrain:
         field = _aperture_field(grid)
         out, _ = path.propagate(field)
         np.testing.assert_allclose(
-            np.asarray(out.data), np.asarray(field.data), atol=5e-14
+            np.asarray(out.data),
+            np.asarray(field.data),
+            rtol=0,
+            atol=float(
+                ulps(2 * (4 * int(np.log2(grid.shape[0])) + 1), abs(field.data).max())
+            ),
         )
 
     def test_chromatic_field_propagates(self):

@@ -6,6 +6,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TEST_FRAME
+from hwoutils.numerics import eps
+from hwoutils.testing import ulps
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from optixstuff.grids import PixelGrid
@@ -23,7 +25,7 @@ def _rng_field(rng, n):
 
 class TestCmftPair:
     def test_independent_focal_axes(self):
-        """Float rounding in 16-term DFT sums allows 1e-12 absolute error.
+        """The direct DFT has sixteen terms plus phase and weight roundoff.
 
         Fails if row/column offsets are swapped or the cell weight is missing.
         """
@@ -39,7 +41,10 @@ class TestCmftPair:
                         for row, y in enumerate(x)
                         for col, z in enumerate(x)
                     )
-        np.testing.assert_allclose(cmft_fwd(f, x, uy, ux), expected, atol=1e-12)
+        scale = (x[1] - x[0]) ** 2 * np.max(np.sum(np.abs(f), axis=(-2, -1)))
+        np.testing.assert_allclose(
+            cmft_fwd(f, x, uy, ux), expected, rtol=0, atol=float(ulps(16 + 6, scale))
+        )
 
     @given(
         npup=st.integers(min_value=8, max_value=24),
@@ -48,7 +53,16 @@ class TestCmftPair:
     )
     @settings(deadline=None, max_examples=25)
     def test_adjoint_identity(self, npup, nfoc, q):
-        """<F f, g>_u == <f, B g>_x with the grids' integration weights."""
+        """<F f, g>_u == <f, B g>_x with the grids' integration weights.
+
+        Bound cancellation at the absolute-product sum, allowing two complex
+        contractions on each grid.
+
+        Args:
+            npup: Pupil samples along one axis.
+            nfoc: Focal samples along one axis.
+            q: Focal oversampling factor.
+        """
         rng = np.random.default_rng(0)
         pupil_grid = PixelGrid.pupil(npup)
         focal_grid = PixelGrid.focal(nfoc, 1.0 / q, TEST_FRAME)
@@ -56,12 +70,20 @@ class TestCmftPair:
         u = jnp.asarray(_grid_axis(focal_grid))
         f = jnp.asarray(_rng_field(rng, npup))
         g = jnp.asarray(_rng_field(rng, nfoc))
-        lhs = jnp.vdot(cmft_fwd(f, x, u), g) * focal_grid.pixel_area
+        forward = cmft_fwd(f, x, u)
+        lhs = jnp.vdot(forward, g) * focal_grid.pixel_area
         rhs = jnp.vdot(f, cmft_bwd(g, x, u)) * pupil_grid.pixel_area
-        np.testing.assert_allclose(complex(lhs), complex(rhs), rtol=1e-12)
+        scale = jnp.sum(jnp.abs(forward * g)) * focal_grid.pixel_area
+        np.testing.assert_allclose(
+            lhs, rhs, atol=float(ulps(2 * (npup + nfoc), scale)), rtol=0
+        )
 
     def test_round_trip_on_complete_conjugate_grid(self):
-        """bwd(fwd(f)) == f when the focal grid spans the full band."""
+        """bwd(fwd(f)) == f when the focal grid spans the full band.
+
+        Two length-n pupil dots and two length-m focal dots accumulate roundoff at the
+        peak field scale.
+        """
         npup, q = 32, 2
         pupil_grid = PixelGrid.pupil(npup)
         focal_grid = PixelGrid.focal(
@@ -72,9 +94,17 @@ class TestCmftPair:
         rng = np.random.default_rng(0)
         f = jnp.asarray(_rng_field(rng, npup))
         back = cmft_bwd(cmft_fwd(f, x, u), x, u)
-        np.testing.assert_allclose(np.asarray(back), np.asarray(f), atol=1e-12)
+        np.testing.assert_allclose(
+            np.asarray(back),
+            np.asarray(f),
+            rtol=0,
+            atol=float(ulps(2 * (npup + npup * q), jnp.max(jnp.abs(f)))),
+        )
 
     def test_parseval_on_complete_conjugate_grid(self):
+        """Squaring doubles two length-n dot-product errors and the energy sums add
+        logarithmic depth.
+        """
         npup, q = 32, 2
         pupil_grid = PixelGrid.pupil(npup)
         focal_grid = PixelGrid.focal(npup * q, 1.0 / q, TEST_FRAME)
@@ -85,7 +115,13 @@ class TestCmftPair:
         e_pupil = float(jnp.sum(jnp.abs(f) ** 2) * pupil_grid.pixel_area)
         foc = cmft_fwd(f, x, u)
         e_focal = float(jnp.sum(jnp.abs(foc) ** 2) * focal_grid.pixel_area)
-        np.testing.assert_allclose(e_focal, e_pupil, rtol=1e-12)
+        np.testing.assert_allclose(
+            e_focal,
+            e_pupil,
+            rtol=(4 * npup + 2 * int(np.ceil(np.log2(focal_grid.shape[0]))))
+            * eps(foc.dtype),
+            atol=0,
+        )
 
     def test_airy_first_null(self):
         """A circular aperture's first null lands at 1.22 lambda/D."""
@@ -151,6 +187,9 @@ class TestFraunhofer:
             prop.forward(field)
 
     def test_backward_is_adjoint_round_trip(self):
+        """Two length-n pupil dots and two length-m focal dots accumulate roundoff at
+        the peak field scale.
+        """
         npup, q = 32, 2
         pupil_grid = PixelGrid.pupil(npup)
         focal_grid = PixelGrid.focal(npup * q, 1.0 / q, TEST_FRAME)
@@ -160,7 +199,12 @@ class TestFraunhofer:
         field = Field(data=f, grid=pupil_grid, plane=PlaneKind.PUPIL)
         back = prop.backward(prop.forward(field))
         assert back.plane is PlaneKind.PUPIL
-        np.testing.assert_allclose(np.asarray(back.data), np.asarray(f), atol=1e-12)
+        np.testing.assert_allclose(
+            np.asarray(back.data),
+            np.asarray(f),
+            rtol=0,
+            atol=float(ulps(2 * (npup + npup * q), jnp.max(jnp.abs(f)))),
+        )
 
     def test_undersampled_kernel_raises_on_policy(self):
         """A focal grid far past the kernel Nyquist limit trips the gate."""
@@ -253,6 +297,15 @@ class TestChromaticFixedGridAdjoint:
     def test_weighted_inner_product_identity(
         self, npup, nfoc, pixel_scale_lod, wavelength_nm
     ):
+        """Two complex contractions per grid contribute at the weighted absolute-product
+        sum.
+
+        Args:
+            npup: Pupil samples along one axis.
+            nfoc: Focal samples along one axis.
+            pixel_scale_lod: Focal pixel pitch in reference lambda/D.
+            wavelength_nm: Monochromatic wavelength in nanometers.
+        """
         pupil = PixelGrid.pupil(npup)
         focal = PixelGrid.focal(nfoc, pixel_scale_lod, TEST_FRAME)
         spectrum = _mono_spectrum(wavelength_nm)
@@ -268,14 +321,21 @@ class TestChromaticFixedGridAdjoint:
             low_nm=wavelength_nm,
             on_undersampled="record",
         )
-        lhs = complex(jnp.vdot(prop.forward(x).data, b) * focal.pixel_area)
+        fx = prop.forward(x).data
+        lhs = complex(jnp.vdot(fx, b) * focal.pixel_area)
         rhs = complex(jnp.vdot(a, prop.backward(y).data) * pupil.pixel_area)
         assert abs(lhs) > 1e-3
-        np.testing.assert_allclose(rhs, lhs, rtol=1e-12)
-        np.testing.assert_allclose(rhs / lhs, 1.0 + 0.0j, atol=1e-12)
+        scale = jnp.sum(jnp.abs(fx * b)) * focal.pixel_area
+        np.testing.assert_allclose(
+            rhs, lhs, atol=float(ulps(2 * (npup + nfoc), scale)), rtol=0
+        )
 
     def test_identity_holds_per_slice_of_a_chromatic_stack(self):
-        """One vmapped stack: every slice pairs on the same fixed-grid measure."""
+        """One vmapped stack: every slice pairs on the same fixed-grid measure.
+
+        Two complex contractions per grid contribute at each slice's absolute-product
+        sum.
+        """
         npup, nfoc = 24, 40
         pupil = PixelGrid.pupil(npup)
         focal = PixelGrid.focal(nfoc, 0.4, TEST_FRAME)
@@ -302,7 +362,10 @@ class TestChromaticFixedGridAdjoint:
         for i in range(5):
             lhs = complex(jnp.vdot(fa[i], b[i]) * focal.pixel_area)
             rhs = complex(jnp.vdot(a[i], bb[i]) * pupil.pixel_area)
-            np.testing.assert_allclose(rhs, lhs, rtol=1e-12)
+            scale = jnp.sum(jnp.abs(fa[i] * b[i])) * focal.pixel_area
+            np.testing.assert_allclose(
+                rhs, lhs, rtol=0, atol=float(ulps(2 * (npup + nfoc), scale))
+            )
 
     @pytest.mark.parametrize("wavelength_nm", OFF_REFERENCE_NM)
     @pytest.mark.parametrize(("npup", "nfoc"), [(32, 64), (24, 40)])
@@ -316,6 +379,17 @@ class TestChromaticFixedGridAdjoint:
         the continuous-FT pair is exact: a unit-amplitude clear aperture
         returns with unit amplitude, and the fixed-grid focal energy equals
         the pupil energy.
+
+        Two length-n pupil dots and two length-m focal dots accumulate roundoff at the
+        peak field scale.
+
+        Squaring doubles the forward MFT error and the pairwise pixel sum adds
+        logarithmic depth.
+
+        Args:
+            npup: Pupil samples along one axis.
+            nfoc: Focal samples along one axis.
+            wavelength_nm: Monochromatic wavelength in nanometers.
         """
         scale = REF_NM / wavelength_nm
         pupil = PixelGrid.pupil(npup)
@@ -337,9 +411,20 @@ class TestChromaticFixedGridAdjoint:
         focal_field = prop.forward(field)
         e_pupil = float(jnp.sum(jnp.abs(field.data) ** 2) * pupil.pixel_area)
         e_focal = float(jnp.sum(jnp.abs(focal_field.data) ** 2) * focal.pixel_area)
-        np.testing.assert_allclose(e_focal, e_pupil, rtol=1e-12)
+        np.testing.assert_allclose(
+            e_focal,
+            e_pupil,
+            rtol=(4 * npup + 2 * int(np.ceil(np.log2(nfoc))))
+            * eps(focal_field.data.dtype),
+            atol=0,
+        )
         back = prop.backward(focal_field)
-        np.testing.assert_allclose(np.asarray(back.data[0]), disk, atol=1e-12)
+        np.testing.assert_allclose(
+            np.asarray(back.data[0]),
+            disk,
+            rtol=0,
+            atol=2 * (npup + nfoc) * eps(field.data.dtype),
+        )
 
 
 class TestMftSamplingParameter:

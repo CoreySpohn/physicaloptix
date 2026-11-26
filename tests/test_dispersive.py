@@ -4,6 +4,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hwoutils.testing import ulps
 from optixstuff.grids import PixelGrid
 from optixstuff.spectral import Band, Quadrature
 
@@ -41,6 +42,8 @@ class TestOpdEquivalence:
     """D(lambda) = i 2 pi / lambda must reproduce PhaseScreen exactly."""
 
     def test_monochromatic(self):
+        """The unit-amplitude phasor allows a multiply and sum per mode, wavelength
+        scaling and the complex exponential."""
         grid = _grid()
         basis = _basis(grid)
         table = jnp.linspace(400.0, 700.0, 7)  # contains 550.0 as a node
@@ -49,10 +52,15 @@ class TestOpdEquivalence:
         reference = PhaseScreen(basis, grid, wavelength_nm=WL0)
         field = _flat_field(grid)
         np.testing.assert_allclose(
-            screen(field).data, reference(field).data, rtol=0, atol=1e-12
+            screen(field).data,
+            reference(field).data,
+            rtol=0,
+            atol=float(ulps(2 * basis.n_modes + 4, abs(field.data).max())),
         )
 
     def test_chromatic(self):
+        """The unit-amplitude phasor allows a multiply and sum per mode, wavelength
+        scaling and the complex exponential."""
         grid = _grid()
         basis = _basis(grid)
         spectrum = Quadrature.build(
@@ -64,7 +72,10 @@ class TestOpdEquivalence:
         reference = PhaseScreen(basis, grid, wavelength_nm=WL0)
         field = _flat_field(grid, spectrum)
         np.testing.assert_allclose(
-            screen(field).data, reference(field).data, rtol=0, atol=1e-12
+            screen(field).data,
+            reference(field).data,
+            rtol=0,
+            atol=float(ulps(2 * basis.n_modes + 4, abs(field.data).max())),
         )
 
 

@@ -7,6 +7,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
+from hwoutils.testing import ulps
 
 # The base install is deliberately eyepiece-free, so this module is only
 # collectible when the viz extra is present.
@@ -74,12 +75,18 @@ def test_ring_means_land_inside_their_own_rings():
     plt.close("all")
 
 
-def test_analytic_profile_matches_an_independent_annulus_computation():
+def test_analytic_profile_matches_an_independent_annulus_computation(precision):
     """A steep analytic map, checked against boolean-mask annuli.
 
     The expectation is built with explicit ``(r >= lo) & (r < hi)`` masks
     rather than the source's ``digitize``-and-clip, so an off-by-one in the
     bin assignment fails here instead of cancelling out.
+
+    A bin total adds one term per assigned pixel, then divides by its count. Bin
+    centers allow six roundings for radius, spacing, midpoint and scale.
+
+    Args:
+        precision: Floating dtype used for the JAX calculation.
     """
     radius = _radius_map()
     values = np.exp(-((radius / 9.0) ** 2)) + 1e-6
@@ -91,13 +98,21 @@ def test_analytic_profile_matches_an_independent_annulus_computation():
     nbins = int(max(_NY, _NX) // 2)
     edges = np.linspace(0.0, float(radius.max()), nbins + 1)
     expected = np.empty(nbins)
+    counts = np.empty(nbins, dtype=int)
     for b in range(nbins):
         lo, hi = edges[b], edges[b + 1]
         mask = (radius >= lo) & (radius < hi) if b < nbins - 1 else radius >= lo
+        counts[b] = np.count_nonzero(mask)
         expected[b] = values[mask].mean() if mask.any() else np.nan
 
-    np.testing.assert_allclose(profile, expected, rtol=1e-10)
-    np.testing.assert_allclose(r, (edges[1:] + edges[:-1]) / 2.0 * 0.5, rtol=1e-12)
+    bound = np.asarray(ulps(counts + 1, expected.astype(precision)))
+    np.testing.assert_array_less(abs(profile - expected), bound)
+    np.testing.assert_allclose(
+        r,
+        (edges[1:] + edges[:-1]) / 2.0 * 0.5,
+        rtol=float(ulps(6, precision.type(1))),
+        atol=0,
+    )
     plt.close("all")
 
 

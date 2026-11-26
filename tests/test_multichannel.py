@@ -4,6 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TEST_FRAME
+from hwoutils.testing import ulps
 from optixstuff.grids import PixelGrid
 from optixstuff.spectral import Band, Quadrature
 
@@ -132,7 +133,12 @@ def _channel_jacobian(system, field, name, screen_stage):
 
 class TestLinearizeShared:
     def test_entrance_screen_matches_jacfwd_per_channel(self):
-        """Fails if a chunked trunk derivative differs from either channel path."""
+        """Fails if a chunked trunk derivative differs from either channel path.
+
+        Both paths apply a splitter and a phase derivative; the camera adds two
+        pupil-width dot products. Bound the relative field norm at the Jacobian
+        precision.
+        """
         system, field, _basis = _entrance_system()
         mcl = linearize_shared(
             system, field, wavelength_nm=WL, shared_stage="screen", chunk_size=2
@@ -144,7 +150,7 @@ class TestLinearizeShared:
             truth = _channel_jacobian(system, field, name, "screen")
             got = mcl[name].g_shared
             rel = float(jnp.linalg.norm(got - truth) / jnp.linalg.norm(truth))
-            assert rel < 1e-10
+            assert rel < ulps(2 * NPIX + 3, truth.real.dtype.type(1))
 
     def test_e_nom_matches_container_propagation(self):
         system, field, _basis = _entrance_system()
@@ -197,6 +203,9 @@ class TestLinearizeShared:
 
 class TestNcpaDifferential:
     def test_differential_opd_between_branches(self):
+        """Both branch OPDs contract three modes before subtraction. The largest
+        coefficient times peak mode height bounds their scale at near-zero
+        differences."""
         grid, xx, yy, _disk = _grid_bits()
         focal = PixelGrid.focal(2 * NPIX, 0.5, TEST_FRAME)
         basis = _mode_basis(xx, yy)
@@ -228,4 +237,9 @@ class TestNcpaDifferential:
         expected = np.tensordot(
             np.asarray([1.0, 0.0, 0.5]), np.asarray(basis.B), axes=1
         ) - np.tensordot(np.asarray([0.0, 2.0, 0.0]), np.asarray(basis.B), axes=1)
-        np.testing.assert_allclose(np.asarray(diff), expected, atol=1e-12)
+        np.testing.assert_allclose(
+            np.asarray(diff),
+            expected,
+            rtol=0,
+            atol=float(ulps(2 * basis.n_modes + 1, abs(basis.B).max() * 2)),
+        )

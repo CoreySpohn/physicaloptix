@@ -7,10 +7,10 @@ a stop with a shift (``SampledOptic.shift_px``) and a per-node science grid
 - Per-node independent paths built the direct way (each node its own plain
   ``PhaseScreen`` and ``Fraunhofer``), summed with unit-sum weights: the
   late-bound fold is the same arithmetic, so the images agree to the
-  floating-point floor (measured bitwise; asserted at rtol 1e-14).
+  floating-point floor of the independent accumulation.
 - Linearity of the sum: the gradient of a shared leaf through the whole fold
   equals the weight-summed gradients of the one-node folds (exact-algebra,
-  asserted at rtol 1e-10).
+  with forward and reverse accumulation roundoff).
 - ``jax.test_util.check_grads`` per seam (finite-difference basis: central
   difference at eps 1e-6, truncation error about 1e-9 relative, measured
   2e-5 relative at the default eps 1e-4 for the source position; rtol 1e-6);
@@ -27,6 +27,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from hwoutils.numerics import eps
+from hwoutils.testing import ulps
 from jax.test_util import check_grads
 from optixstuff.grids import Frame, PixelGrid
 
@@ -172,6 +174,9 @@ def _direct_node_image(wavelength_nm, source, offset, shift):
 
 
 def test_image_equals_independent_per_node_paths_summed():
+    """Two length-N pupil dots, squaring, and the four weighted sources/nodes contribute
+    at the peak image scale.
+    """
     offset = jnp.asarray(np.random.default_rng(2).standard_normal((NPUP, NPUP)))
     shift = jnp.asarray([0.3, -0.4])
     model = _with_seams(_fold(), offset, shift)
@@ -190,7 +195,10 @@ def test_image_equals_independent_per_node_paths_summed():
                 weights[k] * source.flux * spectral
             ) * _direct_node_image(wl, source, offset, shift)
     np.testing.assert_allclose(
-        np.asarray(image), np.asarray(expected), rtol=1e-14, atol=0
+        np.asarray(image),
+        np.asarray(expected),
+        rtol=0,
+        atol=float(ulps(4 * NPUP + 4, jnp.max(expected))),
     )
     assert float(jnp.max(image)) > 0.0
 
@@ -249,19 +257,39 @@ _POINT = (
 
 
 def test_checkpoint_on_and_off_agree_in_value_and_gradient():
+    """Recomputation traverses two pupil dots per forward, two focal dots per adjoint,
+    and the weighted pixel sum.
+    """
     on, off = _loss_fn(True), _loss_fn(False)
-    np.testing.assert_allclose(on(*_POINT), off(*_POINT), rtol=1e-13, atol=0)
+    reference = off(*_POINT)
+    np.testing.assert_allclose(
+        on(*_POINT),
+        reference,
+        rtol=(2 * NPUP + 2 * int(np.ceil(np.log2(NFOCAL)))) * eps(reference.dtype),
+        atol=0,
+    )
     grads_on = jax.grad(on, argnums=(0, 1, 2, 3))(*_POINT)
     grads_off = jax.grad(off, argnums=(0, 1, 2, 3))(*_POINT)
     for g_on, g_off in zip(grads_on, grads_off, strict=True):
-        scale = float(jnp.max(jnp.abs(g_off)))
+        scale = jnp.max(jnp.abs(g_off))
         assert scale > 0.0
-        np.testing.assert_allclose(g_on, g_off, rtol=0, atol=1e-10 * scale)
+        np.testing.assert_allclose(
+            g_on,
+            g_off,
+            rtol=0,
+            atol=float(
+                ulps(2 * (NPUP + NFOCAL) + 2 * int(np.ceil(np.log2(NFOCAL))), scale)
+            ),
+        )
 
 
 def test_shared_leaf_gradient_is_the_sum_of_per_node_gradients():
     """The two-node gradient of the shared offset and shift equals the
-    unit-weight-normalized sum of the one-node gradients."""
+    unit-weight-normalized sum of the one-node gradients.
+
+    Two pupil dots and two focal adjoint dots dominate each path; the pixel sum adds two
+    logarithmic reduction depths.
+    """
     weights = np.asarray(RAW_WEIGHTS) / np.sum(RAW_WEIGHTS)
     source = _sources()[0]
     probe = jnp.asarray(np.random.default_rng(1).standard_normal((NFOCAL, NFOCAL)))
@@ -279,9 +307,16 @@ def test_shared_leaf_gradient_is_the_sum_of_per_node_gradients():
     ]
     for i in range(2):
         summed = sum(w * part[i] for w, part in zip(weights, parts, strict=True))
-        scale = float(jnp.max(jnp.abs(summed)))
+        scale = jnp.max(jnp.abs(summed))
         assert scale > 0.0
-        np.testing.assert_allclose(full[i], summed, rtol=0, atol=1e-10 * scale)
+        np.testing.assert_allclose(
+            full[i],
+            summed,
+            rtol=0,
+            atol=float(
+                ulps(2 * (NPUP + NFOCAL) + 2 * int(np.ceil(np.log2(NFOCAL))), scale)
+            ),
+        )
 
 
 @pytest.mark.parametrize(

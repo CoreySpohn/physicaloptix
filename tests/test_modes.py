@@ -6,6 +6,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import TEST_FRAME
+from hwoutils.testing import ulps
 from optixstuff.grids import PixelGrid
 
 from physicaloptix.apertures import eac1_primary, rasterize_primary, rasterize_segments
@@ -147,8 +148,8 @@ class TestNollIdentity:
 
     The RMS/orthogonality/piston tests all survive an index permutation or a
     sin/cos swap in the (n, m) mapping; a wrong Noll order silently corrupts
-    every downstream WFE budget labeled "Z4 defocus". Normalized correlation
-    against the explicit polynomials pins identity and sign; the swapped-
+    every downstream WFE budget labeled "Z4 defocus". Normalized samples
+    of explicit polynomials pin identity and sign; the swapped-
     parity control pins Noll's odd-j-is-sine rule.
     """
 
@@ -168,6 +169,9 @@ class TestNollIdentity:
         return 2.0 * np.hypot(x_grid, y_grid), np.arctan2(y_grid, x_grid)
 
     def test_modes_match_the_explicit_noll_polynomials(self):
+        """Compare normalized values directly with host polynomials. The quartic uses
+        two powers, coefficient products, adds and normalization, allowing 16
+        roundings at peak mode amplitude."""
         grid = PixelGrid.pupil(128)
         basis = zernike_basis(grid, 11, rms_nm=1.0)
         rho, theta = self._polar(grid)
@@ -175,8 +179,14 @@ class TestNollIdentity:
         for j, form in self._FORMS.items():
             mode = np.asarray(basis.B[j - 1])[aperture]
             ref = form(rho, theta)[aperture]
-            corr = (mode * ref).sum() / np.sqrt((mode**2).sum() * (ref**2).sum())
-            assert corr > 1.0 - 1e-9, f"Noll j={j}: correlation {corr:.12f}"
+            expected = ref / np.sqrt(np.mean(ref**2))
+            np.testing.assert_allclose(
+                mode,
+                expected,
+                rtol=0,
+                atol=float(ulps(16, abs(mode).max())),
+                err_msg=f"Noll j={j}",
+            )
 
     def test_parity_control_rejects_a_sin_cos_swap(self):
         """Noll j=5 is the SINE astigmatism: its correlation with the cosine
@@ -202,7 +212,12 @@ def _science_path(pupil, npix_focal=32):
 class TestLinearizeIntegration:
     def test_zernike_basis_linearizes_cleanly(self):
         """A Zernike basis feeds linearize: G has the right shape and the
-        linear model's error scales quadratically with the coefficient."""
+        linear model's error scales quadratically with the coefficient.
+
+        A quarter-nanometer command at 500 nm gives a milliradian-scale phase and a
+        resolvable quadratic residual; doubling the command must still quadruple the
+        residual.
+        """
         pupil = PixelGrid.pupil(48)
         aperture = _aperture(pupil).astype(float)
         path = _science_path(pupil)
@@ -215,13 +230,21 @@ class TestLinearizeIntegration:
         lin = linearize(path, field, basis, wavelength_nm=500.0)
         assert lin.G.shape == (6, 32, 32)
         direction = jnp.asarray(np.random.default_rng(0).standard_normal(6))
-        r1 = linearity_residual(path, field, basis, lin, 1e-3 * direction)
-        r2 = linearity_residual(path, field, basis, lin, 2e-3 * direction)
+        r1 = linearity_residual(path, field, basis, lin, 0.25 * direction)
+        r2 = linearity_residual(path, field, basis, lin, 0.5 * direction)
         assert r1 < 1e-4
         assert r2 / r1 == pytest.approx(4.0, rel=0.3)
 
     def test_segment_ptt_basis_linearizes_cleanly(self, primary):
-        """The segment PTT basis feeds linearize on the real EAC pupil."""
+        """The segment PTT basis feeds linearize on the real EAC pupil.
+
+        A quarter-nanometer command at 500 nm gives a milliradian-scale phase and a
+        resolvable quadratic residual; doubling the command must still quadruple the
+        residual.
+
+        Args:
+            primary: Segmented entrance pupil geometry.
+        """
         pupil = PixelGrid.pupil(48)
         pupil_arr = rasterize_primary(primary, 48, supersample=4)
         path = _science_path(pupil)
@@ -236,8 +259,8 @@ class TestLinearizeIntegration:
         direction = jnp.asarray(
             np.random.default_rng(1).standard_normal(3 * primary.n_segments)
         )
-        r1 = linearity_residual(path, field, basis, lin, 1e-3 * direction)
-        r2 = linearity_residual(path, field, basis, lin, 2e-3 * direction)
+        r1 = linearity_residual(path, field, basis, lin, 0.25 * direction)
+        r2 = linearity_residual(path, field, basis, lin, 0.5 * direction)
         assert r1 < 1e-4
         assert r2 / r1 == pytest.approx(4.0, rel=0.3)
 
