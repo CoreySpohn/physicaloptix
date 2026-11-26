@@ -15,8 +15,11 @@ ffts, mft2 and noll_z6 follow the Roman Preflight PROPER prescription. See the
 NOTICE file for the terms.
 """
 
+import math
+
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.precision import like
 
 
 def shift_center(a):
@@ -95,8 +98,8 @@ def mft2(field, dout, d, nout, direction):
         Transformed array of shape (nout, nout).
     """
     nin = field.shape[-1]
-    x = jnp.arange(nin) - nin // 2
-    u = (jnp.arange(nout) - nout // 2) * (dout / d)
+    x = jnp.arange(nin, dtype=field.real.dtype) - nin // 2
+    u = (jnp.arange(nout, dtype=field.real.dtype) - nout // 2) * (dout / d)
     xu = jnp.outer(x, u)
     expxu = dout / d * jnp.exp(direction * 2.0 * jnp.pi * 1j * xu)
     expyv = jnp.exp(direction * 2.0 * jnp.pi * 1j * xu).T
@@ -261,7 +264,9 @@ def noll_z6(n, dx_m, beam_radius_m):
     Returns:
         Dimensionless Z6 map of shape (n, n), centered on sample n // 2.
     """
-    x = (jnp.arange(n, dtype=float) - n // 2) * dx_m / beam_radius_m
+    dx_m = like(dx_m, (dx_m, beam_radius_m))
+    beam_radius_m = like(beam_radius_m, dx_m)
+    x = (jnp.arange(n, dtype=dx_m.dtype) - n // 2) * dx_m / beam_radius_m
     r2 = x[None, :] ** 2 + x[:, None] ** 2
     t = jnp.arctan2(x[:, None], x[None, :])
-    return jnp.sqrt(6.0) * r2 * jnp.cos(2 * t)
+    return math.sqrt(6.0) * r2 * jnp.cos(2 * t)

@@ -7,6 +7,8 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.leaves import as_complex_leaf, as_float_leaf
+from hwoutils.precision import complex_of
 from jaxtyping import Array
 from optixstuff.grids import PixelGrid
 
@@ -80,8 +82,8 @@ class DispersiveScreen(AbstractCommandableElement, AbstractChromaticOp):
             plane: The plane the screen acts in (default pupil).
         """
         self.basis = basis
-        self.kernel = jnp.asarray(kernel, dtype=complex)
-        self.table_wavelengths_nm = jnp.asarray(table_wavelengths_nm, dtype=float)
+        self.kernel = as_complex_leaf(kernel)
+        self.table_wavelengths_nm = as_float_leaf(table_wavelengths_nm)
         self.grid = grid
         self.wavelength_nm = float(wavelength_nm)
         self.plane = plane
@@ -156,10 +158,42 @@ class DispersiveScreen(AbstractCommandableElement, AbstractChromaticOp):
         Returns:
             The complex kernel evaluated per mode per query wavelength.
         """
-        wavelengths = jnp.atleast_1d(jnp.asarray(wavelengths_nm, dtype=float))
-        return jax.vmap(
-            lambda row: jnp.interp(wavelengths, self.table_wavelengths_nm, row)
-        )(self.kernel)
+        return self._kernel_at(wavelengths_nm)
+
+    def _kernel_at(self, wavelengths_nm, *owners):
+        """Interpolate at the common working width of the query, table and field."""
+        device_dtypes = [
+            v.dtype for v in jax.tree.leaves(wavelengths_nm) if isinstance(v, jax.Array)
+        ]
+        dtype = jnp.finfo(
+            jnp.result_type(
+                self.kernel, self.table_wavelengths_nm, *owners, *device_dtypes
+            )
+        ).dtype
+        table = self.table_wavelengths_nm.astype(dtype)
+        kernel = self.kernel.astype(complex_of(dtype))
+
+        def interpolate(query, nodes):
+            return jax.vmap(lambda row: jnp.interp(query, nodes, row))(kernel)
+
+        if not device_dtypes:
+            host = np.atleast_1d(wavelengths_nm)
+            if host.dtype.itemsize > dtype.itemsize:
+                # Put each query's origin on a representable wavelength. Its
+                # host residual can then resolve even adjacent table nodes.
+                with np.errstate(over="ignore"):
+                    origin = host.astype(dtype)
+                    origin = np.where(np.isfinite(origin), origin, 0)
+                    residual = (host - origin).astype(dtype)
+                if np.any(residual):
+                    result = jax.vmap(
+                        lambda base, delta: interpolate(delta, table - base),
+                        out_axes=1,
+                    )(origin.ravel(), residual.ravel())
+                    return result.reshape((kernel.shape[0], *host.shape))
+        return interpolate(
+            jnp.atleast_1d(jnp.asarray(wavelengths_nm, dtype=dtype)), table
+        )
 
     def __call__(self, field):
         """Apply the chromatic response (same plane and grid).
@@ -173,11 +207,13 @@ class DispersiveScreen(AbstractCommandableElement, AbstractChromaticOp):
         validate_field(
             field, plane=self.plane, grid=self.grid, context="DispersiveScreen"
         )
+        wavelengths = (
+            self.wavelength_nm if field.spectrum is None else field.spectrum.nodes_nm[0]
+        )
+        d = self._kernel_at(wavelengths, field.data, self.command, self.basis.B)
         if field.spectrum is None:
-            d = self.kernel_at(self.wavelength_nm)[:, 0]
-            log_response = jnp.tensordot(self.command * d, self.basis.B, axes=1)
+            log_response = jnp.tensordot(self.command * d[:, 0], self.basis.B, axes=1)
         else:
-            d = self.kernel_at(field.spectrum.nodes_nm[0])
             log_response = jnp.einsum("m,mw,myx->wyx", self.command, d, self.basis.B)
         return Field(
             data=field.data * jnp.exp(log_response),

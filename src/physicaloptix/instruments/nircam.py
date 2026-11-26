@@ -108,9 +108,9 @@ from pathlib import Path
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
-from hwoutils.constants import m2nm
+from hwoutils.constants import m2nm, two_pi
 from hwoutils.conversions import arcsec_to_lambda_d, lambda_d_to_arcsec
-from hwoutils.leaves import as_leaf
+from hwoutils.precision import complex_of, like
 from hwoutils.radial import get_center
 from jaxtyping import Array
 from optixstuff.grids import (
@@ -135,6 +135,7 @@ from physicaloptix.elements import (
 )
 from physicaloptix.elements.base import (
     Element,
+    _array_leaf,
     _optional_float_leaf,
     _optional_leaf,
 )
@@ -316,7 +317,7 @@ class NIRCamConfig(eqx.Module):
             ``"mft"`` (dense matrix transform on any window).
     """
 
-    wavelength_nm: float = eqx.field(static=True)
+    wavelength_nm: float = eqx.field(static=True, converter=float)
     pixel_scale_arcsec: float = eqx.field(static=True)
     detector_npix: int = eqx.field(static=True, default=81)
     oversample: int = eqx.field(static=True, default=4)
@@ -576,7 +577,7 @@ class NIRCamInputs(eqx.Module):
         provenance: Where the arrays came from (file names, checksums).
     """
 
-    pupil_amplitude: Array = eqx.field(converter=as_leaf)
+    pupil_amplitude: Array = eqx.field(converter=_array_leaf)
     pupil_diameter_m: float = eqx.field(static=True)
     ote_opd_nm: Array | None = eqx.field(default=None, converter=_optional_float_leaf)
     focal_mask: eqx.Module | None = None
@@ -943,7 +944,7 @@ def _focal_mask_stage(config, inputs, pupil_grid):
     transmission = inputs.focal_mask.transmission(
         theta[np.newaxis, :], theta[:, np.newaxis]
     )
-    return FocalPlaneMask(transform=transform, transmission=jnp.asarray(transmission))
+    return FocalPlaneMask(transform=transform, transmission=like(transmission, inputs))
 
 
 def build_nircam(
@@ -976,7 +977,7 @@ def build_nircam(
     """
     wavelength_nm = config.wavelength_nm
     diameter_m = inputs.pupil_diameter_m
-    amplitude = inputs.pupil_amplitude
+    amplitude = like(inputs.pupil_amplitude, inputs)
     npup = amplitude.shape[0]
     pupil_grid = PixelGrid.pupil(npup)
     n_focal = config.detector_npix * config.oversample
@@ -997,7 +998,10 @@ def build_nircam(
             raise ValueError(
                 "config.ote_opd is set but the inputs carry no OTE OPD map"
             )
-        basis = ModeBasis(B=inputs.ote_opd_nm[jnp.newaxis], coeffs=jnp.ones(1))
+        basis = ModeBasis(
+            B=inputs.ote_opd_nm[jnp.newaxis],
+            coeffs=jnp.ones(1, dtype=inputs.ote_opd_nm.dtype),
+        )
         stages.append(
             Stage(
                 "ote_opd", PhaseScreen(basis, pupil_grid, wavelength_nm=wavelength_nm)
@@ -1021,7 +1025,7 @@ def build_nircam(
             Stage(
                 "lyot_stop",
                 SampledOptic(
-                    transmission=inputs.lyot_amplitude,
+                    transmission=like(inputs.lyot_amplitude, amplitude),
                     grid=pupil_grid,
                     plane=PlaneKind.PUPIL,
                 ),
@@ -1040,7 +1044,8 @@ def build_nircam(
             if inputs.si_support is None
             else inputs.si_support
         )
-        phasor = support * jnp.exp(2j * jnp.pi * inputs.si_opd_nm / wavelength_nm)
+        phase = (inputs.si_opd_nm / like(wavelength_nm, inputs.si_opd_nm)) * two_pi
+        phasor = support * jnp.exp(1j * phase)
         stages.append(
             Stage(
                 "si_wfe",
@@ -1059,7 +1064,9 @@ def build_nircam(
 
     energy = jnp.sum(amplitude**2) * pupil_grid.pixel_area
     flat = Field(
-        data=jnp.full((npup, npup), 1.0 / jnp.sqrt(energy), dtype=complex),
+        data=jnp.full(
+            (npup, npup), 1.0 / jnp.sqrt(energy), dtype=complex_of(energy.real.dtype)
+        ),
         grid=pupil_grid,
         plane=PlaneKind.PUPIL,
     )
@@ -1309,10 +1316,10 @@ def nircam_band_image(config, inputs, band):
         A cell-integrated stellar_flux_fraction Image on the fixed arcsecond grid;
         data have shape (detector_npix * oversample,) on each spatial axis.
     """
-    weights = np.asarray(band.weights) / np.sum(band.weights)
+    total_weight = sum(band.weights)
     total = None
     for k, (wavelength_nm, weight) in enumerate(
-        zip(band.wavelengths_nm, weights, strict=True)
+        zip(band.wavelengths_nm, band.weights, strict=True)
     ):
         node_config = dataclasses.replace(config, wavelength_nm=wavelength_nm)
         node_inputs = inputs
@@ -1324,7 +1331,9 @@ def nircam_band_image(config, inputs, band):
         out, _ = path.propagate(field)
         intensity = out.intensity()
         image = (
-            dataclasses.replace(intensity, data=weight * intensity.data)
+            dataclasses.replace(
+                intensity, data=(weight / total_weight) * intensity.data
+            )
             .integrated()
             .data
         )
@@ -1402,7 +1411,7 @@ def build_nircam_band(config, inputs, band):
             entrance = field
     first = node_paths[0]
     pupil_grid = first["entrance_pupil"].grid
-    zero_opd = jnp.zeros((pupil_grid.shape[0], pupil_grid.shape[0]))
+    zero_opd = jnp.zeros_like(entrance.data.real)
 
     def table(name):
         return ChromaticTable(tuple(ops[name] for ops in node_paths), nodes)
@@ -1418,7 +1427,9 @@ def build_nircam_band(config, inputs, band):
         stages.append(
             Stage(
                 "lyot_stop",
-                dataclasses.replace(first["lyot_stop"], shift_px=jnp.zeros(2)),
+                dataclasses.replace(
+                    first["lyot_stop"], shift_px=jnp.zeros(2, dtype=zero_opd.dtype)
+                ),
             )
         )
     if "si_wfe" in first:
@@ -1433,7 +1444,9 @@ def build_nircam_band(config, inputs, band):
         inputs.pupil_diameter_m,
         source_parity=(1, -1),
     )
-    return model, PointSource(jnp.asarray(config.source_position_arcsec, dtype=float))
+    return model, PointSource(
+        like(config.source_position_arcsec, zero_opd), flux=like(1.0, zero_opd)
+    )
 
 
 def integrate_detector_pixels(image, oversample):

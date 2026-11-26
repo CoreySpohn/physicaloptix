@@ -6,7 +6,9 @@ from typing import Self
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.constants import two_pi
 from hwoutils.leaves import as_float_leaf
+from hwoutils.precision import like
 from jaxtyping import Array
 from optixstuff.grids import PixelGrid
 
@@ -113,12 +115,13 @@ class PhaseScreen(AbstractCommandableElement, AbstractChromaticOp):
             Field with the same grid, plane and spectrum, multiplied by the OPD phasor.
         """
         validate_field(field, plane=self.plane, grid=self.grid, context="PhaseScreen")
-        opd = self.opd()
+        opd = like(self.opd(), field.data)
         if field.spectrum is None:
-            phasor = jnp.exp(1j * 2.0 * jnp.pi * opd / self.wavelength_nm)
+            wavelengths = self.wavelength_nm
         else:
             wavelengths = field.spectrum.nodes_nm[0, :, None, None]
-            phasor = jnp.exp(1j * 2.0 * jnp.pi * opd[jnp.newaxis] / wavelengths)
+        phase = (opd / like(wavelengths, field.data)) * two_pi
+        phasor = jnp.exp(1j * phase)
         return Field(
             data=field.data * phasor,
             grid=field.grid,
@@ -218,10 +221,11 @@ class SampledPhaseScreen(Element, AbstractChromaticOp):
                     "SampledPhaseScreen has no wavelength; bind it with "
                     "at_wavelength() or propagate a chromatic field"
                 )
-            phasor = jnp.exp(1j * 2.0 * jnp.pi * self.opd_nm / self.wavelength_nm)
+            wavelengths = self.wavelength_nm
         else:
             wavelengths = field.spectrum.nodes_nm[0, :, None, None]
-            phasor = jnp.exp(1j * 2.0 * jnp.pi * self.opd_nm[jnp.newaxis] / wavelengths)
+        phase = (self.opd_nm / like(wavelengths, self.opd_nm)) * two_pi
+        phasor = jnp.exp(1j * phase)
         return Field(
             data=field.data * phasor,
             grid=field.grid,

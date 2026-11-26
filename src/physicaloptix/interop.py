@@ -12,6 +12,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.precision import like
 from optixstuff.apertures import DEFAULT_APERTURE_RULE, Circular, HalfMaximum
 from optixstuff.coronagraph import (
     AbstractImagingCoronagraph,
@@ -205,6 +206,20 @@ def _has_tracer(value) -> bool:
     if isinstance(value, (tuple, list)):
         return any(_has_tracer(item) for item in value)
     return False
+
+
+def _inside_nyquist(offset, limit, field):
+    """Test the open pupil-tilt interval before casting offsets to the field."""
+    if not any(isinstance(leaf, jax.Array) for leaf in jax.tree.leaves(offset)):
+        value = np.asarray(offset)
+        return np.abs(value.astype(np.result_type(value, float), copy=False)) < limit
+    value = jnp.asarray(offset)
+    if not jnp.issubdtype(value.dtype, jnp.inexact):
+        value = like(value, field)
+    magnitude = jnp.abs(value)
+    edge = magnitude.dtype.type(limit)
+    # If the host limit rounds down, that representable value is still inside.
+    return magnitude <= edge if float(edge) < limit else magnitude < edge
 
 
 class PathCoronagraph(AbstractImagingCoronagraph):
@@ -484,7 +499,9 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         """
         if hasattr(separation_lod, "unit"):
             raise TypeError("separation_lod must be dimensionless numeric values")
-        return self.uniform_sky_profile.evaluate(separation_lod)
+        return self.uniform_sky_profile.evaluate(
+            like(separation_lod, self.input_field.data)
+        )
 
     def _camera(self):
         """Prepare propagation in the native reference frame.
@@ -565,8 +582,24 @@ class PathCoronagraph(AbstractImagingCoronagraph):
             return image
         return replace(
             image,
-            data=jnp.where(jnp.asarray(stellar_diameter_lod) == 0, image.data, jnp.nan),
+            data=jnp.where(
+                stellar_diameter_lod == 0, image.data, like(jnp.nan, image.data)
+            ),
         )
+
+    def off_axis_psf(self, wavelength_nm, separation_lod, grid: PixelGrid) -> Image:
+        """Read one source along the positive x axis in detector cells.
+
+        Args:
+            wavelength_nm: Serving wavelength in nanometers.
+            separation_lod: Source separation in lambda/D.
+            grid: Target detector grid.
+
+        Returns:
+            Flux fraction per cell, zero for a source outside the pupil domain.
+        """
+        image = self.source_psfs(wavelength_nm, separation_lod, 0, grid=grid).image
+        return replace(image, data=image.data[0], leading_axes=())
 
     def source_psfs(self, wavelength_nm, x_lod, y_lod, *, grid=None):
         """Native point densities or target pixel fractions for each pupil tilt.
@@ -595,19 +628,23 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         def one(x, y):
             return self._psf(science, place((x, y)), energy, grid)
 
-        x, y = jnp.broadcast_arrays(
-            jnp.atleast_1d(jnp.asarray(x_lod)), jnp.atleast_1d(jnp.asarray(y_lod))
-        )
         nyquist_lod = (
             0.5
             / self.input_field.grid.step
             * (self.low_nm / self.frame.reference_wavelength_nm)
         )
-        valid = (jnp.abs(x) < nyquist_lod) & (jnp.abs(y) < nyquist_lod)
+        valid = jnp.atleast_1d(
+            _inside_nyquist(x_lod, nyquist_lod, self.input_field.data)
+            & _inside_nyquist(y_lod, nyquist_lod, self.input_field.data)
+        )
+        x, y = jnp.broadcast_arrays(
+            jnp.atleast_1d(like(x_lod, self.input_field.data)),
+            jnp.atleast_1d(like(y_lod, self.input_field.data)),
+        )
         images = jax.vmap(one)(jnp.where(valid, x, 0), jnp.where(valid, y, 0))
         keep = valid.reshape((-1,) + (1,) * (images.data.ndim - 1))
         images = replace(
-            images, data=jnp.where(keep, images.data, 0.0), leading_axes=("source",)
+            images, data=jnp.where(keep, images.data, 0), leading_axes=("source",)
         )
         return SourcePSFs(images, valid)
 

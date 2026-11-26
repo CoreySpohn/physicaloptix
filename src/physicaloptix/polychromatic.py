@@ -16,6 +16,7 @@ from dataclasses import replace
 
 import equinox as eqx
 import numpy as np
+from hwoutils.precision import like
 from optixstuff.grids import Image, Measure
 
 from physicaloptix.core import Field
@@ -132,18 +133,18 @@ class PolychromaticPath(eqx.Module):
                     f"spectral_weights has {source.spectral_weights.shape[0]} "
                     f"entries for {n_nodes} nodes"
                 )
-        weights = np.asarray(self.weights) / np.sum(self.weights)
+        total_weight = sum(self.weights)
         unit = eqx.filter_checkpoint(_node_image) if self.checkpoint else _node_image
         first_grid = None
         shortest_nm = min(self.wavelengths_nm)
         total = None
         for k, (wavelength_nm, weight) in enumerate(
-            zip(self.wavelengths_nm, weights, strict=True)
+            zip(self.wavelengths_nm, self.weights, strict=True)
         ):
             for source in sources:
-                scale = weight * source.flux
+                scale = (weight / total_weight) * like(source.flux, self.entrance.data)
                 if source.spectral_weights is not None:
-                    scale = scale * source.spectral_weights[k]
+                    scale = scale * like(source.spectral_weights[k], self.entrance.data)
                 image = unit(
                     self.path,
                     self.entrance,

@@ -25,6 +25,7 @@ import jax.numpy as jnp
 import numpy as np
 from hwoutils.constants import m2nm, nm2m
 from hwoutils.numerics import COARSEST
+from hwoutils.precision import complex_of
 from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind, validate_field
@@ -167,23 +168,25 @@ class Fresnel(eqx.Module):
         """
         if self.method == "fresnel" or self.distance_m == 0:
             return np.empty(0)
-        nu2 = np.unique(self._nu2(self.grid.shape[0] * self.npad, xp=np))
+        nu2 = np.unique(self._nu2(self.grid.shape[0] * self.npad))
         return (self.beam_diameter_m * m2nm / np.sqrt(nu2[nu2 > 0]))[::-1]
 
     def _alpha(self, wavelength_nm):
         """The dimensionless Fresnel parameter ``lambda * z / D^2``."""
         return (wavelength_nm * nm2m) * self.distance_m / self.beam_diameter_m**2
 
-    def _nu2(self, npix, xp=jnp):
+    def _nu2(self, npix, dtype=None):
         """Squared dimensionless frequency on an ``npix`` grid (cycles/diameter).
 
         The pitch ``dx`` is unchanged by padding, so a larger ``npix`` only
         refines the frequency grid (which is why padding improves sampling).
         """
-        nu = xp.fft.fftfreq(npix, d=self.grid.step)
+        nu = np.fft.fftfreq(npix, d=self.grid.step)
+        if dtype is not None:
+            nu = jnp.asarray(nu, dtype=dtype)
         return nu[:, None] ** 2 + nu[None, :] ** 2
 
-    def _transfer(self, wavelength_nm, npix):
+    def _transfer(self, wavelength_nm, npix, dtype=None):
         """The angular-spectrum transfer function for one wavelength on ``npix``.
 
         Paraxial (``method="fresnel"``): ``exp(-i pi alpha nu^2)``. Exact
@@ -192,8 +195,10 @@ class Fresnel(eqx.Module):
         (``beta^2 nu^2 > 1``) the wave DECAYS (magnitude set by ``|z|``, so the
         branch attenuates and never amplifies), rather than clamping to unity.
         """
+        if dtype is None:
+            dtype = jnp.result_type(wavelength_nm, 0.0)
         if self.method == "fresnel":
-            nu2 = self._nu2(npix)
+            nu2 = self._nu2(npix, dtype=dtype)
             return jnp.exp(-1j * jnp.pi * self._alpha(wavelength_nm) * nu2)
 
         # For a monochromatic design the whole kernel is static. In particular,
@@ -201,7 +206,7 @@ class Fresnel(eqx.Module):
         # float32 field can narrow either one. Spectral nodes may be traced.
         static = isinstance(wavelength_nm, float | np.floating)
         xp = np if static else jnp
-        nu2 = self._nu2(npix, xp=np)
+        nu2 = self._nu2(npix)
         diameter_nm = self.beam_diameter_m * m2nm
         cutoff = diameter_nm / np.sqrt(np.where(nu2 == 0, 1.0, nu2))
         # Only the equivalent phase formulas share a decision grid. The
@@ -219,8 +224,8 @@ class Fresnel(eqx.Module):
             0,
             int(exponent) + int(np.ceil(np.log2(m2nm))) - np.finfo(COARSEST).maxexp + 1,
         )
-        distance = np.ldexp(self.distance_m, -shift) * m2nm
-        scale = np.ldexp(1.0, -shift)
+        distance = float(np.ldexp(self.distance_m, -shift) * m2nm)
+        scale = float(np.ldexp(1.0, -shift))
         wavelength = wavelength_nm * scale
         if static:
             remainder = np.fmod(distance, wavelength)
@@ -230,9 +235,9 @@ class Fresnel(eqx.Module):
             middle = float(COARSEST(residual))
             low = residual - middle
             remainder = (
-                jnp.fmod(high, wavelength)
-                + jnp.fmod(middle, wavelength)
-                + jnp.fmod(low, wavelength)
+                jnp.fmod(jnp.asarray(high, dtype=dtype), wavelength)
+                + jnp.fmod(jnp.asarray(middle, dtype=dtype), wavelength)
+                + jnp.fmod(jnp.asarray(low, dtype=dtype), wavelength)
             )
         carrier = remainder / wavelength
         path_cycles = distance / wavelength
@@ -270,13 +275,14 @@ class Fresnel(eqx.Module):
             -2
             * xp.pi
             * xp.abs(path_cycles)
-            * xp.sqrt(xp.where(evanescent, -radicand, 1.0))
+            * xp.sqrt(xp.where(evanescent, -radicand, 1))
         )
         return jnp.asarray(
             xp.exp(
-                2j * xp.pi * xp.where(propagating, cycles, 0.0)
-                + xp.where(evanescent, decay, 0.0)
-            )
+                2j * xp.pi * xp.where(propagating, cycles, 0)
+                + xp.where(evanescent, decay, 0)
+            ),
+            dtype=complex_of(dtype),
         )
 
     def _apply_data(self, data, transfer):
@@ -301,7 +307,7 @@ class Fresnel(eqx.Module):
         """Apply the (optionally conjugated) transfer function per wavelength."""
         n = self.grid.shape[0] * self.npad
         if field.spectrum is None:
-            transfer = self._transfer(self.wavelength_nm, n)
+            transfer = self._transfer(self.wavelength_nm, n, field.data.real.dtype)
             if conjugate:
                 transfer = jnp.conj(transfer)
             return self._apply_data(field.data, transfer)
@@ -320,8 +326,8 @@ class Fresnel(eqx.Module):
         else:
             if len(host_nodes) != nodes.size:
                 raise ValueError("spectral_nodes_nm must match the field's node axis")
-            transfers = jnp.stack([self._transfer(wl, n) for wl in host_nodes]).astype(
-                field.data.dtype
+            transfers = jnp.stack(
+                [self._transfer(wl, n, field.data.real.dtype) for wl in host_nodes]
             )
             transfers = eqx.error_if(
                 transfers,
