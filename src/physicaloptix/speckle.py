@@ -222,8 +222,8 @@ class AnalyticSpeckleField(LinearSpeckleField):
             elapsed_s: Seconds since the field's clock origin; any shape.
 
         Returns:
-            Mode coefficients of shape (*time_shape, n_modes), in the mode units of the
-            response.
+            Mode coefficients of shape ``(*time_shape, n_modes)``, in the mode units of
+            the response.
         """
         t = like(elapsed_s, self.frequencies_hz)
         phase = 2.0 * jnp.pi * self.frequencies_hz * t[..., None, None] + self.phases
@@ -408,7 +408,8 @@ class SpeckleMoments(eqx.Module):
         grid: Focal grid of the maps.
         mean_map: E[delta] per pixel, in flux-fraction units.
         var_map: Var[delta] per pixel, in flux-fraction units squared.
-        gamma_pixel_map: Gamma = sum_k rms_k^2 |g_k|^2 per pixel, real and nonnegative.
+        gamma_pixel_map: ``Gamma = sum_k rms_k^2 |g_k|^2`` per pixel, real and
+            nonnegative.
         p_pixel_map: P = sum_k rms_k^2 g_k^2 per pixel, the complex pseudo-covariance.
         var_x_pixel_map: Var(X) per pixel, the pinning-quadrature variance.
         annulus_mean: Mask-averaged E[delta], or None when no mask was given.

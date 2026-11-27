@@ -23,6 +23,7 @@ import warnings
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.interpolation import interp_linear
 from hwoutils.leaves import as_float_leaf
 from hwoutils.numerics import same_tolerance
 from jaxtyping import Array
@@ -291,7 +292,7 @@ class BeamSplitter(eqx.Module):
                 "a dichroic BeamSplitter needs a chromatic field (a spectrum "
                 "defines the colors to route)"
             )
-        transmit = jnp.interp(
+        transmit = interp_linear(
             field.spectrum.nodes_nm[0],
             self.wavelengths_nm,
             self.transmit_table,
