@@ -905,8 +905,17 @@ class TestPerturbationStage:
             perturbation_stage="q_drift",
             wavelengths_nm=wavelengths,
         )
+        # Use the Fresnel butterfly and screen phase roundoff budget from
+        # the pupil-stage comparison, scaled to the peak reference amplitude.
+        roundoff = ulps(
+            4 * int(np.ceil(np.log2(field.grid.shape[0]))) + 4,
+            abs(lin_jvp.G).max(),
+        )
         np.testing.assert_allclose(
-            np.asarray(lin_fwd.G), np.asarray(lin_jvp.G), atol=1e-11
+            np.asarray(lin_fwd.G),
+            np.asarray(lin_jvp.G),
+            rtol=0,
+            atol=max(1e-11, float(roundoff)),
         )
         # and the bands genuinely differ (the chromatic physics is present)
         assert not np.allclose(

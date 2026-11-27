@@ -642,7 +642,7 @@ class TestBandFromBundle:
             ({"files": {"f": np.arange(3)}}, TypeError, "['files']['f']"),
             ({"check": np.float64(1.0)}, TypeError, "['check']"),
             ({"check": Decimal("NaN")}, TypeError, "['check']"),
-            ({"t": [np.datetime64("NaT")]}, TypeError, "['t'][0]"),
+            ({"t": [np.datetime64("NaT", "ns")]}, TypeError, "['t'][0]"),
             ({"tags": frozenset({1, 2})}, TypeError, "['tags']"),
             ({"raw": [_ArrayEqual()]}, TypeError, "['raw'][0]"),
             ({"check": {"max": float("nan")}}, ValueError, "['check']['max']"),
