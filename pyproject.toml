@@ -61,6 +61,8 @@ test = [
     "pytest-fail-slow>=0.1.0",
     "scipy>=1.13",
     "hcipy>=0.7.0",
+    # The jaxedith rate cross-check in test_path_coronagraph.
+    "jaxedith>=4.0.0",  # unreleased: next release, see .github/sibling-pins.txt
 ]
 # hwostyle is a DIRECT import of viz/train.py and viz/modes.py (cmaps.opd,
 # palette, roles), so it is declared here rather than relied on transitively
