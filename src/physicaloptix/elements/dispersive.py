@@ -7,6 +7,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.interpolation import interp_linear
 from hwoutils.leaves import as_complex_leaf, as_float_leaf
 from hwoutils.precision import complex_of
 from jaxtyping import Array
@@ -35,9 +36,9 @@ class DispersiveScreen(AbstractCommandableElement, AbstractChromaticOp):
     nodes, linear interpolation of ``1/lambda`` carries a small convexity
     error). The kernel is tabulated at ``table_wavelengths_nm`` (strictly
     increasing) and linearly interpolated at the incoming field's
-    wavelengths; wavelengths outside the table span CLAMP to the end values
-    (the ``jnp.interp`` convention, same as ``BeamSplitter.dichroic``). A
-    monochromatic field evaluates at the static ``wavelength_nm``.
+    wavelengths. Wavelengths outside the table span clamp to the end values,
+    as in ``BeamSplitter.dichroic``. A monochromatic field evaluates at the
+    static ``wavelength_nm``.
     ``basis.kind`` is deliberately not checked: the kernel semantics is
     kind-agnostic.
 
@@ -174,7 +175,7 @@ class DispersiveScreen(AbstractCommandableElement, AbstractChromaticOp):
         kernel = self.kernel.astype(complex_of(dtype))
 
         def interpolate(query, nodes):
-            return jax.vmap(lambda row: jnp.interp(query, nodes, row))(kernel)
+            return jax.vmap(lambda row: interp_linear(query, nodes, row))(kernel)
 
         if not device_dtypes:
             host = np.atleast_1d(wavelengths_nm)
