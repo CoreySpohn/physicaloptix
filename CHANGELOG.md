@@ -1,5 +1,108 @@
 # Changelog
 
+## [4.0.0](https://github.com/CoreySpohn/physicaloptix/compare/v3.0.0...v4.0.0) (2026-11-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* **physicaloptix:** close propagation, instrument and IFS forwards at their working precision
+* **physicaloptix:** keep Fresnel detuning and spatial phase across the float32 grid, condition OU exposure averaging, refuse float64-only statistics only
+* **detector:** ReparameterizedDetector raises on photon_counting=True, because its draws and log_prob follow the Gaussian density.
+* **speckle:** a monochromatic linearization becomes an opd or amplitude FocalResponse by its basis kind and refuses an unknown kind; DispersiveScreen.command_kind is None, so a dispersive command is linearized on wavelength nodes; AnalyticSpeckleField refuses amplitudes, phases or frequencies whose shapes do not match the response modes; at_wavelength no longer precompensates the interpolated sensitivity.
+* **interop:** PathCoronagraph.lyot_field, input_energy, _records and _sky are removed in favour of calibration and recalibrated(); an explicit grid always returns pixel integrals, including at native pitch; from_path refuses a native pitch above lambda_min / (2 L lambda_ref) and an extent outside the pupil Nyquist radius at the shortest active wavelength; PolychromaticPath.image raises on unequal node grids; point_source takes a traced position and an explicitly positioned chromatic source requires reference_wavelength_nm.
+* **ifs:** psflet_pack passes template_origin to PsfletPack and requires an optixstuff that declares it; the pack preflight uses the shortest wavelength; psflet_template is host-side (no jit or vmap).
+* **ifs:** center PSFlet templates on their centroid and write pack format 2
+* **nircam:** a provenance record now compares equal only to another provenance record; compare it with a plain mapping through to_dict(). NIRCamInputs and NIRCamBand have explicit constructors with the same parameters and order as before, and complex FITS header values are recorded as {"real": float, "imag": float}.
+* **speckle:** AnalyticSpeckleField.coefficients and peak_contrast, and ChromaticAnalyticSpeckleField.realize and peak_contrast, take keyword-only elapsed_s, seconds since the field's clock origin, in place of time_d; positional coefficients(t) raises TypeError. Synthesis no longer reads epoch_d; convert scene days with field.elapsed_s(time_d). prepare_speckles and the boiling views pass times_s to realize as elapsed_s unchanged, so a protocol field must accept the elapsed_s keyword.
+* **nircam:** NIRCamInputs.provenance and NIRCamBand.provenance refuse at construction, naming the key path, any key that is not a str and any value other than an exact str, bool, int, finite float or None, or a list, tuple or str-keyed mapping of them: NumPy scalars and arrays, Decimal, NaT and other datetime values, sets and frozensets, complex, bytes, infinite floats (NaN was already refused) and objects with their own hashing or equality. Records holding 1, 1.0 and True now compare unequal. to_dict() returns the record as plain dicts and lists for JSON.
+* **leaves:** PointSource position_arcsec and spectral_weights, BeamSplitter wavelengths_nm and transmit_table, NIRCamInputs ote_opd_nm and si_opd_nm, and NIRCamBand si_opd_nm are strong float leaves of the active dtype (complex input is refused); RomanCompact pupil and lyot, and NIRCamInputs pupil_amplitude, lyot_amplitude and si_support, are strong leaves of their own kind in the active precision.
+* **nircam:** NIRCamInputs and NIRCamBand refuse at construction a provenance holding a NumPy array, a set or another unhashable value, a NaN number, or a mapping whose keys mix types or cannot be ordered; each refusal names the key.
+* **leaves:** SampledOptic transmission (float or complex) and shift_px, SampledPhaseScreen opd_nm, PointSource flux, BeamSplitter t and r, RomanCompact pupil_mask, fpm and the four DM maps, and every RomanFull arrays value change from NumPy or weakly typed arrays to strong jax.Array leaves (kind kept: a complex phasor stays complex, a mask stays boolean). NIRCamInputs.provenance and NIRCamBand.provenance change from a dict leaf to a static read-only hashable mapping: item reads work, mutation and json.dumps on it no longer do, lists inside become tuples.
+* **interop:** render only what the model holds, zero invalid sources, bound product grids by pupil Nyquist
+* **interop:** public uniform_sky_profile on PathCoronagraph
+* **yip:** yippy spellings for emit_yip arguments and dark_zone_mask working angles
+* **interop:** rename sep_step_lod to separation_step_lod and follow the trimmed slot
+* **coronagraph:** serve the finite-star check from stellar_map only
+* **coronagraph:** drop the outer working angle field and make uniform_sky_response a concrete method on PathCoronagraph
+* **transforms:** name the Fraunhofer and Fresnel wavelength range ends low_nm and high_nm
+* name every wavelength interval end low_nm and high_nm
+* use the single Rates type
+* read quadrature weights by name
+* import grids, spectral and radial_profile from optixstuff and own the random fields module
+* psflet_pack returns an optixstuff PsfletPack
+* store YIP and field intensities with explicit measures and integrate through footprints
+* replace Spectrum with one-row quadratures
+* compute the live uniform-sky response from the incoherent pupil screen and expose point energy separately
+* differentiate commanded elements through their own call with command_response and hold speckle fields as a FocalResponse
+* write YIP products through yippy and integrate hard-edged leakage over the exact region in tests
+* take raster extents, radii and radial profiles from the hwoutils grid
+* take photometry from optixstuff and reject finite stars in PathCoronagraph.stellar_map
+* **ifs:** remove save_psflet_pack; coronachrome owns the PSFlet pack format
+* build PSD surfaces on hwoutils random fields; add ou_exposure_neff; colours from eyepiece
+* binning from hwoutils, one FFT and MFT helper each, and no propagator call aliases
+* drop the deprecated path renderer and the unweighted speckle option; geometric centres come from hwoutils
+* **speckle:** build analytic speckle fields on the shared linear speckle field
+* build fields, spectra, coronagraph records and detectors on the shared grid, quadrature and detector types
+
+### Features
+
+* build fields, spectra, coronagraph records and detectors on the shared grid, quadrature and detector types ([e5c9ccc](https://github.com/CoreySpohn/physicaloptix/commit/e5c9ccc70a0deab3b530d93a67c63e1151dfa655))
+* compute the live uniform-sky response from the incoherent pupil screen and expose point energy separately ([0a3df8d](https://github.com/CoreySpohn/physicaloptix/commit/0a3df8d2933b77abbfb3af7842c71a30613a0d79))
+* **coronagraph:** drop the outer working angle field and make uniform_sky_response a concrete method on PathCoronagraph ([96a26a7](https://github.com/CoreySpohn/physicaloptix/commit/96a26a7fb41acbcec7aaf357c395f995992ca594))
+* **coronagraph:** serve the finite-star check from stellar_map only ([c122012](https://github.com/CoreySpohn/physicaloptix/commit/c122012932cf883ab874865af8523d6da4c80ad2))
+* differentiate commanded elements through their own call with command_response and hold speckle fields as a FocalResponse ([44c9e9b](https://github.com/CoreySpohn/physicaloptix/commit/44c9e9b1e90b518bd36921df456fc48703e1c260))
+* **interop:** attach the uniform-sky profile to every calibrated performance record ([5d813ff](https://github.com/CoreySpohn/physicaloptix/commit/5d813ff913b234cc654e38dc4302a11cb5311ffe))
+* **interop:** declare a path coronagraph band-averaged when its build spectrum has width ([29d07f4](https://github.com/CoreySpohn/physicaloptix/commit/29d07f40406b006e95c4272704ac8c7db7ea8008))
+* **interop:** public uniform_sky_profile on PathCoronagraph ([3dc4520](https://github.com/CoreySpohn/physicaloptix/commit/3dc4520c9302e9c8e9ac8b9568249aa11fa07a97))
+* **interop:** serve the live path on one fixed-angle grid with pixel-integral reads and a calibration snapshot ([fc75b24](https://github.com/CoreySpohn/physicaloptix/commit/fc75b241c8bd177cd4d696144b53f4593b82a48c))
+* optical products declare band-limited reconstruction so resampling preserves aperture photometry ([19f0fbc](https://github.com/CoreySpohn/physicaloptix/commit/19f0fbc98fa8ed257995236c584ed15b87f560e9))
+* **speckle:** analytic speckle fields take elapsed seconds on their own clock ([2853631](https://github.com/CoreySpohn/physicaloptix/commit/28536313a9b57258dae66918e10aa871877fc66f))
+* **speckle:** build analytic speckle fields on the shared linear speckle field ([dfaa8f3](https://github.com/CoreySpohn/physicaloptix/commit/dfaa8f3dcc64fec39fb2f077093bc441405d0c78))
+* **speckle:** carry the basis wavelength law into speckle responses ([b88cbfe](https://github.com/CoreySpohn/physicaloptix/commit/b88cbfef811f134da8479b3f594c19e1edc4f60b))
+* stellar and sky maps declare that they continue past the field ([2f96c35](https://github.com/CoreySpohn/physicaloptix/commit/2f96c35c3f1249373c9790ae90e23fa405d52eed))
+* **yip:** yippy spellings for emit_yip arguments and dark_zone_mask working angles ([6155ec2](https://github.com/CoreySpohn/physicaloptix/commit/6155ec271a7de9c3086850c2ea4d3edfc9e2a654))
+
+
+### Bug Fixes
+
+* **detector:** refuse photon counting on the reparameterized Gaussian detector ([ac6e4c1](https://github.com/CoreySpohn/physicaloptix/commit/ac6e4c1dc58825cf4b2049e6fe173e45bad26706))
+* **ifs:** center PSFlet templates on their centroid and write pack format 2 ([461814a](https://github.com/CoreySpohn/physicaloptix/commit/461814a181fb3493b451a9cd0c0d1f400330aa67))
+* **ifs:** declare the centroid template origin and check both shifted band endpoints ([2f040aa](https://github.com/CoreySpohn/physicaloptix/commit/2f040aae52119c12b2dc91f2e74e0022f63458b1))
+* **interop:** render only what the model holds, zero invalid sources, bound product grids by pupil Nyquist ([4a48561](https://github.com/CoreySpohn/physicaloptix/commit/4a48561deb1788ba2e5c995100df399c71059c99))
+* **interop:** resample the sky map on a traced grid instead of comparing it on the host ([47e2a41](https://github.com/CoreySpohn/physicaloptix/commit/47e2a41aaf1c09e4149ca2f030e81c370a5bbe6c))
+* **interop:** scale products to the build band centre; float32 build-wavelength and splitter tolerances ([2be2cf8](https://github.com/CoreySpohn/physicaloptix/commit/2be2cf83570f9c2a1801fb4d3f9cc4e137bb6ca9))
+* **interop:** state calibration records, aperture rules and YIP geometry in build-centre lambda/D ([d240fc5](https://github.com/CoreySpohn/physicaloptix/commit/d240fc5e9070694ce5e3250e2d1731d5c47c59da))
+* **leaves:** store sampled optics, sources, splitters and Roman arrays as strong leaves; freeze NIRCam provenance ([5d0199e](https://github.com/CoreySpohn/physicaloptix/commit/5d0199e379e682def7d83d0a725c34f32c45f991))
+* **leaves:** store source positions, dichroic tables, Roman pupils and NIRCam prescription arrays as strong leaves ([c793618](https://github.com/CoreySpohn/physicaloptix/commit/c79361854cd049aee3cf7bc912059b62fcf8d716))
+* **nircam:** compare provenance only to records and forward subclass fields ([0dd3359](https://github.com/CoreySpohn/physicaloptix/commit/0dd33599e830a69587c1e74449bc01542d1d000a))
+* **nircam:** hold only plain JSON-like values in provenance and add to_dict ([6d8ffde](https://github.com/CoreySpohn/physicaloptix/commit/6d8ffded591ea06086acdc6195d46d2882d98ee9))
+* **nircam:** record complex FITS cards and report provenance refusals by key path ([aac1adf](https://github.com/CoreySpohn/physicaloptix/commit/aac1adf457849d705bf960be11ceddf8588007fa))
+* **nircam:** refuse provenance values that cannot hash stably, naming the key ([7511550](https://github.com/CoreySpohn/physicaloptix/commit/7511550ee0b4f22bbf21e5a3ef3858987d3c2b8b))
+* **physicaloptix:** close propagation, instrument and IFS forwards at their working precision ([b0e778b](https://github.com/CoreySpohn/physicaloptix/commit/b0e778ba33bd40ff3eed309ac26c5304a637020e))
+* **physicaloptix:** keep Fresnel detuning and spatial phase across the float32 grid, condition OU exposure averaging, refuse float64-only statistics only ([b638b80](https://github.com/CoreySpohn/physicaloptix/commit/b638b803fb4e727e5d8861999614ace95057d0c2))
+* **physicaloptix:** read dispersive kernels and dichroic tables with interp_linear for jax 0.12.1 ([cc91f58](https://github.com/CoreySpohn/physicaloptix/commit/cc91f581de8a06696c211064c082d0248688ec45))
+* **precision:** derive working dtypes from the inputs and enforce the precision guard ([f96b05e](https://github.com/CoreySpohn/physicaloptix/commit/f96b05ed9e1d486cd75bb06bdae2d32eaeb3e760))
+
+
+### Code Refactoring
+
+* binning from hwoutils, one FFT and MFT helper each, and no propagator call aliases ([836336f](https://github.com/CoreySpohn/physicaloptix/commit/836336ffed8448bd0b5f85abb1e6f67b4186d8e0))
+* build PSD surfaces on hwoutils random fields; add ou_exposure_neff; colours from eyepiece ([71ce0e4](https://github.com/CoreySpohn/physicaloptix/commit/71ce0e434081190936c543ad6ad70f7aeaad0e7f))
+* drop the deprecated path renderer and the unweighted speckle option; geometric centres come from hwoutils ([a39de1a](https://github.com/CoreySpohn/physicaloptix/commit/a39de1a1488e5ff3709dfe3f72796658afca7dd9))
+* **ifs:** remove save_psflet_pack; coronachrome owns the PSFlet pack format ([ca5ee67](https://github.com/CoreySpohn/physicaloptix/commit/ca5ee676fd0a9f38e2844a56066bf2c3b8de5f5a))
+* import grids, spectral and radial_profile from optixstuff and own the random fields module ([7494b78](https://github.com/CoreySpohn/physicaloptix/commit/7494b78e15dda9d15e8985bdb796ad43f391eaad))
+* **interop:** rename sep_step_lod to separation_step_lod and follow the trimmed slot ([eeefac6](https://github.com/CoreySpohn/physicaloptix/commit/eeefac615b5e824b973c4e835ae12b1f23ea6bbf))
+* name every wavelength interval end low_nm and high_nm ([3c7dda4](https://github.com/CoreySpohn/physicaloptix/commit/3c7dda4445dec5abdfb67887471643888a9bdc26))
+* psflet_pack returns an optixstuff PsfletPack ([5807e81](https://github.com/CoreySpohn/physicaloptix/commit/5807e8191eae9b3706b4cb0f04281f461896fbbc))
+* read quadrature weights by name ([29411fe](https://github.com/CoreySpohn/physicaloptix/commit/29411fe91db33cfd7ad53ea72d6eaa08f322cc69))
+* replace Spectrum with one-row quadratures ([50281de](https://github.com/CoreySpohn/physicaloptix/commit/50281de72058a2345c6fa76fba054d5934cb127a))
+* store YIP and field intensities with explicit measures and integrate through footprints ([fe6177c](https://github.com/CoreySpohn/physicaloptix/commit/fe6177caf9d87a008382bdf02596fb225272b87a))
+* take photometry from optixstuff and reject finite stars in PathCoronagraph.stellar_map ([1baa198](https://github.com/CoreySpohn/physicaloptix/commit/1baa1980b15f09508768f5b749efe66ea55feb1c))
+* take raster extents, radii and radial profiles from the hwoutils grid ([fd5847e](https://github.com/CoreySpohn/physicaloptix/commit/fd5847ee8fed0b0e7fbe2bc183d6571f882f7b5d))
+* **transforms:** name the Fraunhofer and Fresnel wavelength range ends low_nm and high_nm ([400f867](https://github.com/CoreySpohn/physicaloptix/commit/400f867ac7aee3d9e68dc20f73e95651476ca7e5))
+* use the single Rates type ([7dd4306](https://github.com/CoreySpohn/physicaloptix/commit/7dd4306cbb829dc1d1f1f551aee37056edb70581))
+* write YIP products through yippy and integrate hard-edged leakage over the exact region in tests ([d06d18f](https://github.com/CoreySpohn/physicaloptix/commit/d06d18f3147369bc89bbd5d82bfaa25aca4abf98))
+
 ## [3.0.0](https://github.com/CoreySpohn/physicaloptix/compare/v2.3.1...v3.0.0) (2026-11-16)
 
 
