@@ -121,7 +121,7 @@ def segment_ptt_basis(primary, grid, *, ptt_nm=1.0, supersample=16):
     segment-phasing basis for a segmented aperture (the PASTIS control set).
 
     Args:
-        primary: A ``SegmentedPrimary`` with an exact segment size.
+        primary: A ``SegmentedPupil`` with an exact segment size.
         grid: The pupil ``PixelGrid`` the field is sampled on (sets ``npix`` and the
             dimensionless tilt coordinates).
         ptt_nm: Per-mode RMS amplitude in nanometers for a unit coefficient.

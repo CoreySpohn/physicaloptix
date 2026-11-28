@@ -1,5 +1,6 @@
 """Tests for PathCoronagraph: the OpticalPath-backed AbstractCoronagraph."""
 
+import hashlib
 from dataclasses import replace
 
 import equinox as eqx
@@ -12,8 +13,16 @@ from conftest import TEST_FRAME
 from hwoutils.leaves import canonical
 from hwoutils.numerics import eps, roundoff
 from hwoutils.precision import like
+from hwoutils.provenance import StampMismatchError, bind_reads, stale_reads
 from hwoutils.testing import assert_precision_closed, precision_pair, ulps
-from optixstuff import SimplePrimary
+from optixstuff import (
+    IdealDetector,
+    Instrument,
+    Observatory,
+    SimplePupil,
+    Telescope,
+)
+from optixstuff.apertures import HalfMaximum
 from optixstuff.coronagraph import (
     AbstractImagingCoronagraph,
     AbstractSceneCoronagraph,
@@ -23,24 +32,25 @@ from optixstuff.grids import Measure, PixelGrid, resample
 from optixstuff.radial import radial_profile
 from optixstuff.spectral import Band, Quadrature
 
+from physicaloptix import __version__
 from physicaloptix.core import Field, PlaneKind
 from physicaloptix.core.grid import _grid_axis
 from physicaloptix.elements import MultiScaleVortex, PhaseScreen, SampledOptic
 from physicaloptix.elements.modes import zernike_basis
-from physicaloptix.interop import PathCoronagraph
+from physicaloptix.interop import PathCoronagraph, _tree_digest
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.transforms import Fraunhofer
 
 NPUP = 64
 DIAMETER_M = 6.0
 OWA = 10.0
-PRIMARY = SimplePrimary(
+PUPIL = SimplePupil(
     circumscribed_diameter_m=DIAMETER_M, collecting_area_m2=np.pi * DIAMETER_M**2 / 4
 )
 
 
 def _grid(shape, step):
-    return PixelGrid.regular(shape, step, "lod", frame=PRIMARY.frame(600.0))
+    return PixelGrid.regular(shape, step, "lod", frame=PUPIL.frame(600.0))
 
 
 def _disk(grid, radius):
@@ -80,7 +90,7 @@ def vortex_coronagraph():
     return PathCoronagraph.from_path(
         core_path,
         field,
-        primary=PRIMARY,
+        pupil=PUPIL,
         reference_wavelength_nm=600.0,
         max_separation_lod=OWA,
         pixel_scale_lod=0.5,
@@ -113,7 +123,7 @@ def bare_telescope():
     return PathCoronagraph.from_path(
         core_path,
         field,
-        primary=PRIMARY,
+        pupil=PUPIL,
         reference_wavelength_nm=600.0,
         max_separation_lod=OWA,
         pixel_scale_lod=0.5,
@@ -127,7 +137,7 @@ def band_telescope(small_path, chromatic_field):
     return PathCoronagraph.from_path(
         OpticalPath(stages=small_path.stages[:1]),
         chromatic_field,
-        primary=PRIMARY,
+        pupil=PUPIL,
         reference_wavelength_nm=500.0,
         max_separation_lod=1.0,
         pixel_scale_lod=0.4,
@@ -181,7 +191,7 @@ class TestConformance:
             return PathCoronagraph.from_path(
                 path,
                 chromatic_field,
-                primary=PRIMARY,
+                pupil=PUPIL,
                 reference_wavelength_nm=reference_nm,
                 pixel_scale_lod=pitch,
                 separation_step_lod=pitch / 2,
@@ -246,7 +256,7 @@ class TestConformance:
         coro = PathCoronagraph.from_path(
             OpticalPath(stages=small_path.stages[:1]),
             chromatic_field if band_average else mono_field,
-            primary=PRIMARY,
+            pupil=PUPIL,
             reference_wavelength_nm=600.0,
             wavelength_nm=None if band_average else 500.0,
             max_separation_lod=1.0,
@@ -357,7 +367,7 @@ class TestNormalization:
         c = PathCoronagraph.from_path(
             bare_telescope.core_path,
             bare_telescope.input_field,
-            primary=PRIMARY,
+            pupil=PUPIL,
             reference_wavelength_nm=600.0,
             max_separation_lod=2.0,
             fov_margin_lod=NPUP / 2 - 2.0,
@@ -469,7 +479,7 @@ class TestConstruction:
             PathCoronagraph.from_path(
                 bad_path,
                 field,
-                primary=PRIMARY,
+                pupil=PUPIL,
                 reference_wavelength_nm=600.0,
                 max_separation_lod=OWA,
             )
@@ -626,7 +636,7 @@ class TestSamplingExplicitContract:
             PathCoronagraph.from_path(
                 c.core_path,
                 c.input_field,
-                primary=PRIMARY,
+                pupil=PUPIL,
                 reference_wavelength_nm=600.0,
                 max_separation_lod=NPUP / 2,
                 pixel_scale_lod=0.5,
@@ -714,7 +724,7 @@ def _aberrated(build_wavelength_nm, screen_wavelength_nm=600.0, amplitude_nm=3.0
     return PathCoronagraph.from_path(
         core_path,
         field,
-        primary=PRIMARY,
+        pupil=PUPIL,
         reference_wavelength_nm=build_wavelength_nm or 600.0,
         max_separation_lod=OWA,
         pixel_scale_lod=0.5,
@@ -742,7 +752,7 @@ class TestChromaticBuild:
         coro = PathCoronagraph.from_path(
             OpticalPath(stages=(Stage("stop", stop),)),
             Field(data=pupil, grid=grid, plane=PlaneKind.PUPIL),
-            primary=PRIMARY,
+            pupil=PUPIL,
             reference_wavelength_nm=600.2,
             wavelength_nm=600.2,
             max_separation_lod=1.0,
@@ -1053,7 +1063,7 @@ def square_telescope():
     return PathCoronagraph.from_path(
         OpticalPath((Stage("stop", stop),)),
         field,
-        primary=PRIMARY,
+        pupil=PUPIL,
         reference_wavelength_nm=600.0,
         max_separation_lod=2.5,
         pixel_scale_lod=0.25,
@@ -1136,7 +1146,7 @@ def test_uniform_sky_transmission_uses_sky_area(square_telescope):
     blue = PathCoronagraph.from_path(
         c.core_path,
         c.input_field,
-        primary=PRIMARY,
+        pupil=PUPIL,
         reference_wavelength_nm=600.0,
         wavelength_nm=500.0,
         max_separation_lod=ratio * c.max_separation_lod,
@@ -1172,7 +1182,13 @@ def test_local_zodi_rate_reads_the_record_sky(vortex_coronagraph):
     pytest.importorskip("skyscapes")
     from hwoutils.conversions import arcsec_to_rad
     from hwoutils.epoch import Epoch
-    from optixstuff import ConstantThroughput, IdealDetector, Instrument
+    from optixstuff import (
+        ConstantThroughput,
+        IdealDetector,
+        Instrument,
+        Observatory,
+        Telescope,
+    )
     from optixstuff.spectral import Resolution
     from skyscapes import AYOZodi
     from skyscapes.physical_model import GridPhysicalModel
@@ -1214,15 +1230,20 @@ def test_local_zodi_rate_reads_the_record_sky(vortex_coronagraph):
         Resolution.build(quadrature, *scene.spectral_tables()),
         np.array([0.0]),
     )
+    observatory = Observatory(
+        Telescope(PUPIL),
+        (
+            Instrument(
+                "imager",
+                attenuating_elements=(ConstantThroughput(optics),),
+                detector=IdealDetector(pixel_scale_arcsec=0.01, shape=(8, 8)),
+            ),
+        ),
+    )
     rates = jaxedith.rates(
         record,
         scene,
-        Instrument(
-            PRIMARY,
-            (ConstantThroughput(optics),),
-            None,
-            IdealDetector(pixel_scale_arcsec=0.01, shape=(8, 8)),
-        ),
+        observatory.select("imager"),
         quadrature,
         east,
         north,
@@ -1233,7 +1254,7 @@ def test_local_zodi_rate_reads_the_record_sky(vortex_coronagraph):
     node = quadrature.nodes_nm[0, 0]
     separation = np.hypot(east, north) * arcsec_to_rad(1.0) / _lod_rad(600.0)
     expected = (
-        PRIMARY.collecting_area_m2
+        PUPIL.collecting_area_m2
         * optics
         * scene.local_zodi.photon_radiance(node, scene.sky_frame, 0.0)
         * c.uniform_sky_response(separation)
@@ -1345,3 +1366,369 @@ def test_coronagraph_precision(bare_telescope, read):
     args = bare_telescope, jnp.array([0.0, 0.375])
     precision_pair(read, args, bound=ulps(16 * NPUP, np.float32(1)))
     assert_precision_closed(read, *canonical(args, precision="float32"))
+
+
+LYOT = "core_path.stages[stop].op.transmission"
+BOUND_OWNER = "observatory.instruments[imager].coronagraph"
+
+
+def _scaled_stop(model, factor):
+    """Scale the stop amplitude, the one free leaf of the square train."""
+    return eqx.tree_at(
+        lambda c: c.core_path.stages[-1].op.transmission,
+        model,
+        replace_fn=lambda t: factor * t,
+    )
+
+
+def _pupil_with(diameter=DIAMETER_M, pupil_id=None):
+    return SimplePupil(
+        circumscribed_diameter_m=diameter,
+        collecting_area_m2=np.pi * diameter**2 / 4,
+        pupil_id=pupil_id,
+    )
+
+
+def _observatory(coronagraph, pupil=PUPIL):
+    return Observatory(
+        Telescope(pupil),
+        (
+            Instrument(
+                "imager",
+                coronagraph=coronagraph,
+                detector=IdealDetector(pixel_scale_arcsec=0.01, shape=(8, 8)),
+            ),
+        ),
+    )
+
+
+@pytest.fixture(scope="module")
+def mono_square(square_telescope):
+    """The square train built at one wavelength, so it carries a spectrum."""
+    c = square_telescope
+    return PathCoronagraph.from_path(
+        c.core_path,
+        c.input_field,
+        pupil=PUPIL,
+        reference_wavelength_nm=600.0,
+        wavelength_nm=600.0,
+        max_separation_lod=2.5,
+        pixel_scale_lod=0.25,
+        n_sky_screens=4,
+        seed=17,
+    )
+
+
+def test_for_telescope_serves_the_calibrated_pupil(square_telescope):
+    """Fails if binding rebuilds the path, skips a check or trusts a bad pupil.
+
+    Rules: a matching pupil returns the same object, a diameter off by one
+    part in 1e5 or two known, different identifiers refuse, one unknown
+    identifier passes and is reported unverified. All exact host checks. The
+    bound call adds no operation under jit or vmap over a batched telescope.
+    """
+    c = replace(square_telescope, calibrated_pupil_id="design-a")
+    assert c.pupil_id == "design-a"
+    assert c.for_telescope(Telescope(_pupil_with(pupil_id="design-a"))) is c
+    with pytest.raises(ValueError, match="differs from the PathCoronagraph"):
+        c.for_telescope(Telescope(_pupil_with(DIAMETER_M * (1 + 1e-5))))
+    with pytest.raises(StampMismatchError, match="pupil_id"):
+        c.for_telescope(Telescope(_pupil_with(pupil_id="design-b")))
+    unknown = Telescope(_pupil_with())
+    assert c.for_telescope(unknown) is c
+    assert _observatory(c, unknown.pupil).select("imager").pupil_match == "unverified"
+    known = _pupil_with(pupil_id="design-a")
+    assert _observatory(c, known).select("imager").pupil_match == "matched"
+
+    batched = Telescope(
+        SimplePupil(
+            circumscribed_diameter_m=jnp.full(2, DIAMETER_M),
+            collecting_area_m2=jnp.full(2, np.pi * DIAMETER_M**2 / 4),
+        )
+    )
+    single = Telescope(PUPIL)
+    for transform, tele in ((jax.jit, single), (jax.vmap, batched)):
+        bound = str(jax.make_jaxpr(transform(lambda t: c.for_telescope(t)))(tele))
+        unbound = str(jax.make_jaxpr(transform(lambda t: c))(tele))
+        assert bound == unbound
+
+
+@vv.case("live-path-gradient", "code-verification", basis="floating-point")
+def test_live_readers_follow_a_free_lyot_leaf(square_telescope):
+    """The star and point sources are quadratic in the stop amplitude.
+
+    Truth: for a scalar multiplier a on the stop amplitude the intensity is
+    a**2 times its value at a = 1, so the map is a**2 I(1) and its derivative
+    with respect to a is 2 a I(1) per pixel. Eight rounding operations at the
+    peak cover the scaling, and the derivative gets sixteen for the product of
+    the doubled factor with the compiled propagation. The live readers declare
+    no frozen reads, so a fit that frees the leaf is not refused for them.
+
+    Args:
+        square_telescope: Calibrated square pupil.
+    """
+    c = square_telescope
+    a = 0.7
+    target = _grid((5, 5), 0.25)
+    base = c.stellar_map(600.0, 0.0, grid=target).data
+    peak = base.max()
+    assert peak > 0
+
+    def star(factor):
+        return _scaled_stop(c, factor).stellar_map(600.0, 0.0, grid=target).data
+
+    def source(factor):
+        return _scaled_stop(c, factor).source_psfs(600.0, 0.0, 0.0, grid=target)
+
+    np.testing.assert_allclose(
+        star(a), a**2 * base, rtol=0, atol=float(ulps(8, a**2 * peak))
+    )
+    np.testing.assert_allclose(
+        source(a).image.data[0], a**2 * base, rtol=0, atol=float(ulps(8, a**2 * peak))
+    )
+    np.testing.assert_allclose(
+        jax.jacfwd(star)(jnp.asarray(a)),
+        2 * a * base,
+        rtol=0,
+        atol=float(ulps(16, 2 * a * peak)),
+    )
+    assert c.frozen_reads("stellar_map") == ()
+    assert c.frozen_reads("source_psfs") == ()
+
+
+def test_cached_readers_stay_frozen_and_refuse_when_stale(
+    square_telescope, mono_square
+):
+    """Fails if a cached reader remeasures, or a live one is refused.
+
+    Truth: the released snapshot behavior. After the stop changes, the sky
+    map, response and curves return the previous arrays bit for bit, the
+    stale label is the path numbers, and only the cached readers refuse. A
+    model built with stamps from another path is stale with no edit at all and
+    still renders through the live reader.
+    """
+    c = square_telescope
+    edited = _scaled_stop(c, 0.5)
+    separations = jnp.array([0.5, 1.0])
+    for reader, read in (
+        ("curves", lambda m: jax.tree.leaves(m.curves())),
+        ("uniform_sky_response", lambda m: [m.uniform_sky_response(separations)]),
+        ("uniform_sky_map", lambda m: [m.uniform_sky_map(600.0, grid=c.grid).data]),
+    ):
+        for old, new in zip(read(c), read(edited), strict=True):
+            np.testing.assert_array_equal(old, new)
+        assert c.require_fresh_calibration(reader=reader) is None
+        with pytest.raises(StampMismatchError, match="recalibrated"):
+            edited.require_fresh_calibration(reader=reader)
+    assert edited.stale_calibration() == ("core_path",)
+    assert edited.require_fresh_calibration(reader="stellar_map") is None
+    assert c.stale_calibration() == ()
+
+    foreign = replace(
+        c, calibration=replace(c.calibration, built_at=mono_square.calibration.built_at)
+    )
+    assert foreign.stale_calibration()
+    with pytest.raises(StampMismatchError, match="recalibrated"):
+        foreign.require_fresh_calibration(reader="curves")
+    target = _grid((5, 5), 0.25)
+    np.testing.assert_array_equal(
+        foreign.stellar_map(600.0, 0.0, grid=target).data,
+        c.stellar_map(600.0, 0.0, grid=target).data,
+    )
+    with pytest.raises(ValueError, match="unknown reader"):
+        c.require_fresh_calibration(reader="nonsense")
+
+
+def test_frozen_reads_are_selective(square_telescope):
+    """Fails if the blanket refusal returns or a cached reader loses its reads.
+
+    A fit that writes the stop is flagged for a cached reader's bound reads and
+    not for a live reader's, through the shared path comparison. Exact.
+    """
+    c = square_telescope
+    expected = ("coronagraph.core_path", "coronagraph.input_field")
+    for reader in (
+        "uniform_sky_profile",
+        "performance_record",
+        "curves",
+        "uniform_sky_response",
+        "uniform_sky_map",
+    ):
+        assert c.frozen_reads(reader) == expected
+    for reader in ("stellar_map", "off_axis_psf", "source_psfs"):
+        assert c.frozen_reads(reader) == ()
+    with pytest.raises(ValueError, match=r"cached readers.*live readers"):
+        c.frozen_reads("nonsense")
+    write = f"{BOUND_OWNER}.{LYOT}"
+    roots = {"coronagraph": BOUND_OWNER}
+    cached = stale_reads(bind_reads(c.frozen_reads("curves"), roots), (write,))
+    assert cached == ((write, f"{BOUND_OWNER}.core_path"),)
+    assert stale_reads(bind_reads(c.frozen_reads("stellar_map"), roots), (write,)) == ()
+
+
+def test_digest_encodes_dtype_shape_and_bytes():
+    """Fails if a digest ignores the dtype tag or drifts from its encoding.
+
+    The same twelve bytes as float32 and as int32 digest differently, and the
+    committed value is the SHA-256 of the dtype string, the shape and the
+    C-order bytes, encoded independently of the code under test.
+    """
+    floats = np.array([1, 2, 3], dtype="<f4")
+    ints = floats.view("<i4")
+    assert floats.tobytes() == ints.tobytes()
+    assert _tree_digest((floats,), "x") != _tree_digest((ints,), "x")
+    assert _tree_digest((floats,), "x").hex == (
+        "3cc30fe60529339754c2b5ec4e24d414a05f43958c256678e51d4739867645b2"
+    )
+    assert _tree_digest((ints,), "x").hex == (
+        "9284e80a13ee4445c3628287f43f462b48fa045d0c5346704cccfd5122b916c6"
+    )
+    assert hashlib.sha256(b"<i4:(3,):" + ints.tobytes()).hexdigest() == (
+        _tree_digest((ints,), "x").hex
+    )
+
+
+def _with_bands(model):
+    spectrum = model.input_field.spectrum
+    band = spectrum.bands[0]
+    moved = replace(spectrum, bands=(Band(band.low_nm - 1.0, band.high_nm + 1.0),))
+    field = model.input_field
+    return replace(model, input_field=Field(field.data, field.grid, field.plane, moved))
+
+
+def _with_convention(model):
+    frame = replace(model.grid.frame, diameter_convention="inscribed")
+    return replace(model, grid=replace(model.grid, frame=frame))
+
+
+def _with_shift_order(model):
+    return eqx.tree_at(
+        lambda c: c.core_path.stages[-1].op,
+        model,
+        replace_fn=lambda op: replace(op, shift_order=3),
+    )
+
+
+@pytest.mark.parametrize(
+    ("which", "edit", "labels"),
+    [
+        (
+            "mono",
+            lambda c: eqx.tree_at(
+                lambda m: m.input_field.spectrum.nodes_nm,
+                c,
+                replace_fn=lambda n: 1.001 * n,
+            ),
+            ("spectrum",),
+        ),
+        ("mono", _with_bands, ("bands", "path_structure")),
+        (
+            "square",
+            lambda c: replace(
+                c, grid=PixelGrid.focal(c.grid.shape[0] // 2, 0.5, c.grid.frame)
+            ),
+            ("grid", "path_structure"),
+        ),
+        ("square", _with_convention, ("path_structure",)),
+        ("square", _with_shift_order, ("path_structure",)),
+        (
+            "square",
+            lambda c: replace(c, rules=(c.rules[0], HalfMaximum(0.4))),
+            ("rules",),
+        ),
+        ("square", lambda c: replace(c, n_sky_screens=5), ("n_sky_screens",)),
+        ("square", lambda c: replace(c, seed=18), ("seed",)),
+        ("square", lambda c: replace(c, leakage_rule="other"), ("leakage_rule",)),
+        (
+            "square",
+            lambda c: eqx.tree_at(
+                lambda m: m.input_field.data, c, replace_fn=lambda d: 1.0001 * d
+            ),
+            ("input_field",),
+        ),
+    ],
+    ids=[
+        "spectrum",
+        "bands",
+        "grid",
+        "convention",
+        "shift_order",
+        "rule",
+        "n_sky_screens",
+        "seed",
+        "leakage_rule",
+        "input_field",
+    ],
+)
+def test_calibration_stamp_binds_exactly_what_changed(
+    which, edit, labels, square_telescope, mono_square
+):
+    """Fails if a setting, the operator or a spectrum can change unnoticed.
+
+    Each edit moves only its own labels, every other array digest stays
+    equal, and a build compared with itself is fresh. Exact: the stamps are
+    typed strings and digests of concrete bytes.
+    """
+    model = square_telescope if which == "square" else mono_square
+    assert model.stale_calibration() == ()
+    assert model.calibration_stamps() == model._current_stamps()
+    assert edit(model).stale_calibration() == labels
+
+
+def test_calibration_names_its_producer_and_reads(square_telescope):
+    """Fails if the producer version is not stamped on the snapshot."""
+    stamps = dict(square_telescope.calibration_stamps())
+    assert stamps["producer"] == "str:physicaloptix.PathCoronagraph"
+    assert stamps["producer_version"] == f"str:{__version__}"
+    assert square_telescope.calibration.reads == (
+        "coronagraph.core_path",
+        "coronagraph.input_field",
+    )
+
+
+def test_recalibration_after_an_edit_is_fresh_and_deterministic(square_telescope):
+    """Fails if a refresh keeps the old stamps or is not replayable.
+
+    The seeded screens make a second refresh reproduce every calibration leaf
+    bit for bit and the stamps exactly, and the refreshed sky moves.
+    """
+    c = square_telescope
+    edited = _scaled_stop(c, 0.5)
+    assert edited.stale_calibration() == ("core_path",)
+    fresh = edited.recalibrated()
+    assert fresh.stale_calibration() == ()
+    assert not np.array_equal(fresh.calibration.sky.data, c.calibration.sky.data)
+    again = edited.recalibrated()
+    assert again.calibration.built_at == fresh.calibration.built_at
+    for one, two in zip(
+        jax.tree.leaves(fresh.calibration),
+        jax.tree.leaves(again.calibration),
+        strict=True,
+    ):
+        np.testing.assert_array_equal(one, two)
+    assert c.recalibrated().calibration.built_at == c.calibration.built_at
+
+
+def test_traced_leaf_refuses_a_digest_but_live_readers_differentiate(
+    square_telescope,
+):
+    """Fails if staleness under trace is decided by a digest of tracers.
+
+    A traced stop raises TypeError from the staleness question, while the live
+    reader differentiates through the same leaf to a finite nonzero value.
+    """
+    c = square_telescope
+    target = _grid((5, 5), 0.25)
+
+    def ask(factor):
+        _scaled_stop(c, factor).stale_calibration()
+        return factor
+
+    with pytest.raises(TypeError, match="traced"):
+        jax.jit(ask)(1.0)
+
+    def total(factor):
+        return _scaled_stop(c, factor).stellar_map(600.0, 0.0, grid=target).data.sum()
+
+    slope = jax.grad(total)(jnp.asarray(0.7))
+    assert np.isfinite(slope) and float(slope) > 0

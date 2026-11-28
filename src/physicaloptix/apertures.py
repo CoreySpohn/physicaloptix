@@ -2,7 +2,7 @@
 
 ``load_primary_yaml`` reads a hexagonal ring, segment, and gap geometry
 YAML into an optixstuff
-``SegmentedPrimary``, deriving the collecting area from the segment geometry.
+``SegmentedPupil``, deriving the collecting area from the segment geometry.
 The EAC-1 parameters ship with the package (``eac1_primary``), sourced from
 the design-survey baseline pupil FITS headers.
 
@@ -19,13 +19,13 @@ from pathlib import Path
 import numpy as np
 import yaml
 from hwoutils.radial import get_center
-from optixstuff import SegmentedPrimary
+from optixstuff import SegmentedPupil
 
 _EAC1_YAML = Path(__file__).parent / "data" / "eac1_primary.yaml"
 
 
 def load_primary_yaml(path):
-    """Load a pupil-geometry YAML into a ``SegmentedPrimary``.
+    """Load a pupil-geometry YAML into a ``SegmentedPupil``.
 
     The schema::
 
@@ -44,7 +44,7 @@ def load_primary_yaml(path):
         path: Path to the YAML file.
 
     Returns:
-        The ``SegmentedPrimary``.
+        The ``SegmentedPupil``.
     """
     with open(path, encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
@@ -56,7 +56,7 @@ def load_primary_yaml(path):
             f"{segmentation.get('type')!r}"
         )
     n_rings = int(segmentation["n_rings"])
-    return SegmentedPrimary(
+    return SegmentedPupil(
         n_rings=n_rings,
         segment_gap_m=float(segmentation["gap_m"]),
         segment_point_to_point_m=float(segmentation["segment_point_to_point_m"]),
@@ -126,7 +126,7 @@ def rasterize_primary(primary, npix, *, extent_m=None, supersample=16):
     """Render a segmented primary to a gray-pixel pupil array.
 
     Args:
-        primary: A ``SegmentedPrimary`` with an exact segment size
+        primary: A ``SegmentedPupil`` with an exact segment size
             (``segment_point_to_point_m``).
         npix: Output array side length in pixels.
         extent_m: Spatial extent of the array in meters; defaults to the
@@ -158,7 +158,7 @@ def rasterize_segments(primary, npix, *, extent_m=None, supersample=16):
     ``rasterize_primary``, and for a nonzero gap the masks are disjoint.
 
     Args:
-        primary: A ``SegmentedPrimary`` with an exact segment size.
+        primary: A ``SegmentedPupil`` with an exact segment size.
         npix: Output side length in pixels.
         extent_m: Spatial extent in meters; defaults to the circumscribed
             diameter.

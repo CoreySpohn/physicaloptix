@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from conftest import TEST_FRAME
+from conftest import EPOCH, TEST_FRAME
 from hwoutils.testing import ulps
 from jax.test_util import check_grads
 from optixstuff.grids import PixelGrid
@@ -139,7 +139,7 @@ class TestLinearizationProduct:
         lin = path.linearize(field, basis, wavelength_nm=WL_NM)
         assert lin.grid.step == 0.5  # the focal grid's dx
         assert lin.input_energy == pytest.approx(float(field.energy()))
-        proc = lin.to_speckle_process(per_mode_rms=1.0, knee_hz=1e-3)
+        proc = lin.to_speckle_process(per_mode_rms=1.0, knee_hz=1e-3, epoch=EPOCH)
         assert proc.response.grid.step == 0.5
         assert proc.response.grid == lin.grid
         np.testing.assert_allclose(
@@ -186,7 +186,7 @@ class TestSpeckleBridge:
     def test_to_speckle_process_round_trip(self, setup):
         path, field, basis = setup
         lin = path.linearize(field, basis, wavelength_nm=WL_NM)
-        process = lin.to_speckle_process(decorr_hours=1.0, total_rms=0.01)
+        process = lin.to_speckle_process(decorr_hours=1.0, total_rms=0.01, epoch=EPOCH)
         assert isinstance(process, SpeckleProcess)
         np.testing.assert_array_equal(np.asarray(process.response.G), np.asarray(lin.G))
         speckle_field = process.draw(jax.random.PRNGKey(0))
@@ -240,7 +240,7 @@ def test_realize_is_flux_fraction_end_to_end(setup):
     stored ratio anywhere. Scale- and convention-visible by construction."""
     path, field, basis = setup
     lin = path.linearize(field, basis, wavelength_nm=WL_NM)
-    process = lin.to_speckle_process(per_mode_rms=0.01, knee_hz=1e-3)
+    process = lin.to_speckle_process(per_mode_rms=0.01, knee_hz=1e-3, epoch=EPOCH)
     drawn = process.draw(jax.random.PRNGKey(0))
     t = 30.0
     got = drawn.realize(wavelength_nm=WL_NM, elapsed_s=t).data
@@ -285,9 +285,11 @@ def test_mono_response_matches_perturbed_pupil_at_1000_nm(setup, kind, record_pr
         pupil_increment = jnp.expm1(1j * opd_phase * mode)
     basis = ModeBasis(B=mode[None], coeffs=jnp.zeros(1), kind=kind)
     lin = path.linearize(field, basis, wavelength_nm=500.0)
-    process = lin.to_speckle_process(per_mode_rms=1.0, knee_hz=1e-3, coherent=True)
+    process = lin.to_speckle_process(
+        per_mode_rms=1.0, knee_hz=1e-3, coherent=True, epoch=EPOCH
+    )
     frozen = AnalyticSpeckleField(
-        process.response, jnp.ones((1, 1)), jnp.zeros(1), jnp.zeros((1, 1))
+        process.response, jnp.ones((1, 1)), jnp.zeros(1), jnp.zeros((1, 1)), epoch=EPOCH
     )
     got = frozen.realize(wavelength_nm=1000.0).data
 
@@ -319,7 +321,9 @@ def test_mono_process_requires_known_basis_kind(setup):
     path, field, basis = setup
     lin = path.linearize(field, basis, wavelength_nm=500.0)
     with pytest.raises(ValueError, match="wavelengths_nm"):
-        replace(lin, kind=None).to_speckle_process(per_mode_rms=1.0, knee_hz=1e-3)
+        replace(lin, kind=None).to_speckle_process(
+            per_mode_rms=1.0, knee_hz=1e-3, epoch=EPOCH
+        )
 
 
 def test_rejects_chromatic_field(setup):
@@ -452,7 +456,7 @@ class TestChromaticLinearize:
 
         # Propagated chromaticity is retained, rather than a reference/lambda model.
         field = lin.to_speckle_process(
-            per_mode_rms=0.2, knee_hz=1e-3, coherent=True
+            per_mode_rms=0.2, knee_hz=1e-3, coherent=True, epoch=EPOCH
         ).draw(jax.random.PRNGKey(0))
         eps = field.coefficients(elapsed_s=0.0)
         exact_node = field.realize(wavelength_nm=wavelengths[-1]).data
@@ -502,7 +506,7 @@ class TestChromaticLinearize:
             wavelengths_nm=wavelengths,
             dispersion=screen.kernel_at(wavelengths),
         )
-        process = lin.to_speckle_process(per_mode_rms=1.0, knee_hz=1e-3)
+        process = lin.to_speckle_process(per_mode_rms=1.0, knee_hz=1e-3, epoch=EPOCH)
         assert process.response.wavelength_law is None
 
         def run(coeffs):
@@ -539,7 +543,7 @@ class TestChromaticLinearize:
         )
         assert mono.kind is None
         with pytest.raises(ValueError, match="wavelengths_nm"):
-            mono.to_speckle_process(per_mode_rms=1.0, knee_hz=1e-3)
+            mono.to_speckle_process(per_mode_rms=1.0, knee_hz=1e-3, epoch=EPOCH)
 
         screen = PhaseScreen(opd_basis, path.stages[0].op.grid, wavelength_nm=500.0)
         mixed = OpticalPath(
@@ -549,7 +553,7 @@ class TestChromaticLinearize:
             mixed, chromatic_field, ("coating", "drift"), wavelengths_nm=wavelengths
         )
         assert merged.kind is None
-        process = merged.to_speckle_process(per_mode_rms=1.0, knee_hz=1e-3)
+        process = merged.to_speckle_process(per_mode_rms=1.0, knee_hz=1e-3, epoch=EPOCH)
         assert process.response.wavelength_law is None
 
     def test_dispersion_table_matches_jacfwd(

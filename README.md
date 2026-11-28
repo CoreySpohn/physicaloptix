@@ -49,21 +49,33 @@ Requires a configured optical path, pupil field, and output sampling.
 ```python notest
 import physicaloptix as po
 from optixstuff.grids import PixelGrid
-from optixstuff import SimplePrimary
+from optixstuff import IdealDetector, Instrument, Observatory, SimplePupil, Telescope
 
-primary = SimplePrimary(circumscribed_diameter_m=6.0, collecting_area_m2=28.0)
+pupil = SimplePupil(circumscribed_diameter_m=6.0, collecting_area_m2=28.0)
 
 coro = po.PathCoronagraph.from_path(
     core_path,
     pupil_field,
-    primary=primary,
+    pupil=pupil,
     reference_wavelength_nm=600.0,
     max_separation_lod=32.0,
 )
-target = PixelGrid.focal(npix, 0.25, primary.frame(600.0))
+target = PixelGrid.focal(npix, 0.25, pupil.frame(600.0))
 psf = coro.on_axis_psf(600.0, target)  # per-pixel flux-fraction Image
 eta = coro.curves().evaluate("throughput", 6.0)  # derived, not declared
+
+# serve the path through an observatory: the telescope shares the pupil
+detector = IdealDetector(pixel_scale_arcsec=0.01, shape=(64, 64))
+observatory = Observatory(
+    Telescope(pupil), (Instrument("imager", coronagraph=coro, detector=detector),)
+)
+imager = observatory.select("imager")
 ```
+
+The star and point sources follow the path live, while the aperture curves and the
+uniform-sky response are measured once when the model is built. After editing the
+path, `coro.stale_calibration()` names what changed, and `coro.recalibrated()`
+measures the edited path again.
 
 ## What physicaloptix is *not*
 

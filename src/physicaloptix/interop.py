@@ -6,13 +6,25 @@ Time is in days from the scene epoch; this static model ignores its value.
 """
 
 import dataclasses
+import enum
+import hashlib
 from dataclasses import replace
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.leaves import HostGrid
 from hwoutils.precision import like
+from hwoutils.provenance import (
+    Digest,
+    StampMismatchError,
+    Stamps,
+    build_stamps,
+    compare_stamps,
+    qualify,
+    stamp_value,
+)
 from optixstuff.apertures import DEFAULT_APERTURE_RULE, Circular, HalfMaximum
 from optixstuff.coronagraph import (
     AbstractImagingCoronagraph,
@@ -29,8 +41,20 @@ from physicaloptix._sky import (
     entrance_energy,
     uniform_sky_image,
 )
+from physicaloptix._version import __version__
 from physicaloptix.core import Field, PlaneKind
 from physicaloptix.sources import _fixed_angle_camera
+
+CACHED_READERS = (
+    "uniform_sky_profile",
+    "performance_record",
+    "curves",
+    "uniform_sky_response",
+    "uniform_sky_map",
+)
+LIVE_READERS = ("stellar_map", "off_axis_psf", "source_psfs")
+
+_FROZEN_FIELDS = ("core_path", "input_field")
 
 
 def _native_psf(core_path, science, source, energy):
@@ -86,11 +110,17 @@ class PathCalibration(eqx.Module):
         records: Performance curves in build-centre lambda/D for a tagged field.
         sky: Dimensionless uniform-sky transmission image.
         uniform_sky_profile: Annular means of the sky transmission.
+        reads: Owner-qualified model paths the snapshot was measured through,
+            relative to the owner named ``coronagraph``; empty when unknown.
+        built_at: Build facts of the measurement, made with
+            ``hwoutils.provenance.build_stamps``; empty when unknown.
     """
 
     records: tuple
     sky: Image
     uniform_sky_profile: SampledProfile
+    reads: tuple[str, ...] = eqx.field(static=True, default=())
+    built_at: Stamps = eqx.field(static=True, default=())
 
     @classmethod
     def _measure(
@@ -106,6 +136,7 @@ class PathCalibration(eqx.Module):
         leakage_rule,
         n_sky_screens,
         seed,
+        built_at=(),
     ):
         """Measure aperture photometry and uniform-sky transmission.
 
@@ -123,6 +154,8 @@ class PathCalibration(eqx.Module):
             leakage_rule: Reduction applied to the stellar map.
             n_sky_screens: Number of independent sky illumination screens.
             seed: Seed for drawing those screens.
+            built_at: Build facts of this measurement, kept on the snapshot with
+                the reads that produced it.
 
         Returns:
             The train's performance records, sky map and radial sky profile.
@@ -190,8 +223,173 @@ class PathCalibration(eqx.Module):
                 for record, rule in zip(records, rules, strict=True)
             )
         return cls(
-            jax.tree.map(jnp.asarray, records), sky, jax.tree.map(jnp.asarray, profile)
+            jax.tree.map(jnp.asarray, records),
+            sky,
+            jax.tree.map(jnp.asarray, profile),
+            reads=qualify("coronagraph", _FROZEN_FIELDS),
+            built_at=built_at,
         )
+
+
+def _tree_digest(tree, what) -> Digest:
+    """Digest the concrete array leaves of a tree, in tree order.
+
+    Each leaf enters as its dtype string, its shape and its C-order bytes, so
+    equal bytes under another dtype or shape give another digest.
+
+    Args:
+        tree: Pytree whose leaves are arrays or numbers.
+        what: Name of the tree for the error message.
+
+    Returns:
+        The SHA-256 digest of the leaves.
+
+    Raises:
+        TypeError: A leaf is traced; staleness under trace is decided by the
+            declared reads, never by a digest.
+    """
+    state = hashlib.sha256()
+    for leaf in jax.tree.leaves(tree):
+        if isinstance(leaf, jax.core.Tracer):
+            raise TypeError(
+                f"{what} holds a traced leaf; digests need concrete values, so "
+                "decide staleness from the declared reads"
+            )
+        array = np.ascontiguousarray(np.asarray(leaf))
+        state.update(f"{array.dtype.str}:{array.shape}:".encode())
+        state.update(array.tobytes())
+    return Digest(state.hexdigest())
+
+
+def _structure(value) -> str:
+    """Encode the operator-defining structure of a value as deterministic text.
+
+    Dataclass and Equinox fields enter by name, including every static field,
+    and a grid enters through its full affine description. An array enters by
+    dtype and shape only: its values belong to the numerical digests.
+
+    Args:
+        value: Path element, grid, field metadata or scalar.
+
+    Returns:
+        The encoding.
+
+    Raises:
+        TypeError: The value has no deterministic encoding.
+    """
+    if value is None or isinstance(value, (bool, str)):
+        return repr(value)
+    if isinstance(value, (int, np.integer)):
+        return f"int:{int(value)}"
+    if isinstance(value, (float, np.floating)):
+        return f"float:{float(value).hex()}"
+    if isinstance(value, complex):
+        return f"complex:{value.real.hex()}:{value.imag.hex()}"
+    if isinstance(value, enum.Enum):
+        return f"{type(value).__qualname__}.{value.name}"
+    if isinstance(value, (jax.Array, np.ndarray)):
+        return f"array:{np.dtype(value.dtype).str}:{tuple(value.shape)}"
+    if isinstance(value, HostGrid):
+        return stamp_value(value)
+    if isinstance(value, (tuple, list)):
+        return "(" + ",".join(_structure(item) for item in value) + ")"
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        items = ",".join(
+            f"{f.name}={_structure(getattr(value, f.name))}"
+            for f in dataclasses.fields(value)
+        )
+        cls = type(value)
+        return f"{cls.__module__}.{cls.__qualname__}({items})"
+    if isinstance(value, (np.dtype, type)) or callable(value):
+        name = getattr(value, "__qualname__", None) or str(value)
+        return f"{getattr(value, '__module__', '')}.{name}"
+    raise TypeError(f"no deterministic structure for {type(value).__name__}")
+
+
+def _field_structure(field) -> str:
+    """Encode an entrance field without its values or spectrum nodes.
+
+    Args:
+        field: The entrance field.
+
+    Returns:
+        Its class, grid, plane, leading axes, spectrum class, band metadata and
+        quadrature layout.
+    """
+    spectrum = field.spectrum
+    bands = () if spectrum is None else spectrum.bands
+    spectrum_class = "none" if spectrum is None else type(spectrum).__qualname__
+    return (
+        f"{type(field).__qualname__}(grid={_structure(field.grid)},"
+        f"plane={_structure(field.plane)},axes={_structure(field.leading_axes)},"
+        f"spectrum={spectrum_class},bands={_structure(bands)},"
+        f"pieces={_structure(() if spectrum is None else spectrum.pieces)})"
+    )
+
+
+def _grid_facts(grid) -> HostGrid:
+    """The shape, centre, basis and frame numbers of a grid as one host vector."""
+    frame = grid.frame
+    frame_numbers = (
+        () if frame is None else (frame.reference_wavelength_nm, frame.diameter_m)
+    )
+    return HostGrid(
+        [*grid.shape, grid.center_x, grid.center_y]
+        + [x for row in grid.basis for x in row]
+        + list(frame_numbers)
+    )
+
+
+def _calibration_stamps(
+    core_path,
+    input_field,
+    grid,
+    *,
+    wavelength_nm,
+    low_nm,
+    max_separation_lod,
+    separation_step_lod,
+    fov_margin_lod,
+    rules,
+    leakage_rule,
+    n_sky_screens,
+    seed,
+    pupil_id,
+) -> Stamps:
+    """Build facts of everything a calibration depends on.
+
+    Raises:
+        TypeError: A leaf of the path or the field is traced.
+    """
+    spectrum = input_field.spectrum
+    bands = () if spectrum is None else spectrum.bands
+    return build_stamps(
+        producer="physicaloptix.PathCoronagraph",
+        producer_version=__version__,
+        core_path=_tree_digest(core_path, "core_path"),
+        input_field=_tree_digest(input_field.data, "input_field"),
+        path_structure=Digest(
+            hashlib.sha256(
+                f"{_structure(core_path)}|{_field_structure(input_field)}|"
+                f"{_structure(grid)}".encode()
+            ).hexdigest()
+        ),
+        spectrum="none"
+        if spectrum is None
+        else _tree_digest((spectrum.nodes_nm, spectrum.weights_nm), "spectrum"),
+        bands=tuple(float(x) for band in bands for x in (band.low_nm, band.high_nm)),
+        wavelength_nm=wavelength_nm,
+        low_nm=low_nm,
+        grid=_grid_facts(grid),
+        max_separation_lod=max_separation_lod,
+        separation_step_lod=separation_step_lod,
+        fov_margin_lod=fov_margin_lod,
+        rules=tuple(repr(rule) for rule in rules),
+        leakage_rule=leakage_rule,
+        n_sky_screens=n_sky_screens,
+        seed=seed,
+        pupil_id=pupil_id,
+    )
 
 
 def _has_tracer(value) -> bool:
@@ -239,7 +437,10 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         leakage_rule: Method for reducing stellar leakage to a curve.
         n_sky_screens: Number of independent screens in the sky estimate.
         seed: Seed used to reproduce the sky illumination.
-        calibration: Snapshot of the train's performance records and sky products.
+        calibrated_pupil_id: Identifier of the pupil prescription the model was
+            built on, or None when that pupil declared none.
+        calibration: Snapshot of the train's performance records and sky products,
+            with the reads and build facts it froze.
     """
 
     core_path: object
@@ -254,6 +455,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
     leakage_rule: str = eqx.field(static=True)
     n_sky_screens: int = eqx.field(static=True)
     seed: int = eqx.field(static=True)
+    calibrated_pupil_id: str | None = eqx.field(static=True)
     calibration: PathCalibration
 
     @property
@@ -293,7 +495,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
         core_path,
         input_field,
         *,
-        primary,
+        pupil,
         max_separation_lod,
         reference_wavelength_nm,
         pixel_scale_lod=0.25,
@@ -307,7 +509,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
     ):
         """Compile a point-star model from an entrance-to-Lyot path.
 
-        primary.frame(reference_wavelength_nm) defines the native angular
+        pupil.frame(reference_wavelength_nm) defines the native angular
         grid, and max_separation_lod sets how far out the records are sampled.
         wavelength_nm binds monochromatic OPD screens when supplied.
         DEFAULT_APERTURE_RULE and HalfMaximum(0.5) are always prepared; rules adds
@@ -320,8 +522,9 @@ class PathCoronagraph(AbstractImagingCoronagraph):
                 last stage must end in the pupil plane.
             input_field: Entrance field; a field without a spectrum is made
                 monochromatic at wavelength_nm.
-            primary: Primary geometry; its frame at the reference wavelength defines the
-                native angular grid.
+            pupil: Pupil geometry; its frame at the reference wavelength defines the
+                native angular grid, and its ``pupil_id`` is recorded as the
+                prescription the model was calibrated on.
             max_separation_lod: Largest separation in lambda/D at which the records are
                 sampled.
             reference_wavelength_nm: Reference wavelength in nanometers of the angular
@@ -362,7 +565,7 @@ class PathCoronagraph(AbstractImagingCoronagraph):
             raise ValueError("core_path must end in the pupil (Lyot) plane")
         npix = 2 * int(np.ceil((max_separation_lod + fov_margin_lod) / pixel_scale_lod))
         grid = PixelGrid.focal(
-            npix, pixel_scale_lod, primary.frame(reference_wavelength_nm)
+            npix, pixel_scale_lod, pupil.frame(reference_wavelength_nm)
         )
         spectrum = input_field.spectrum
         low_nm = float(reference_wavelength_nm)
@@ -389,14 +592,21 @@ class PathCoronagraph(AbstractImagingCoronagraph):
             n_sky_screens=n_sky_screens,
             seed=seed,
         )
+        facts = dict(
+            wavelength_nm=None if wavelength_nm is None else float(wavelength_nm),
+            fov_margin_lod=float(fov_margin_lod),
+            pupil_id=pupil.pupil_id,
+        )
+        built_at = _calibration_stamps(core_path, input_field, grid, **facts, **options)
         return cls(
             core_path=core_path,
             input_field=input_field,
             grid=grid,
-            wavelength_nm=None if wavelength_nm is None else float(wavelength_nm),
-            fov_margin_lod=float(fov_margin_lod),
+            wavelength_nm=facts["wavelength_nm"],
+            fov_margin_lod=facts["fov_margin_lod"],
+            calibrated_pupil_id=facts["pupil_id"],
             calibration=PathCalibration._measure(
-                core_path, input_field, grid, **options
+                core_path, input_field, grid, built_at=built_at, **options
             ),
             **options,
         )
@@ -418,8 +628,125 @@ class PathCoronagraph(AbstractImagingCoronagraph):
             leakage_rule=self.leakage_rule,
             n_sky_screens=self.n_sky_screens,
             seed=self.seed,
+            built_at=self._current_stamps(),
         )
         return eqx.tree_at(lambda model: model.calibration, self, calibration)
+
+    @property
+    def pupil_id(self) -> str | None:
+        """Identifier of the pupil prescription the model was calibrated on."""
+        return self.calibrated_pupil_id
+
+    def for_telescope(self, telescope) -> "PathCoronagraph":
+        """Serve a telescope without rebinding the path.
+
+        A complete path contains its own entrance pupil, so it serves the
+        calibrated baseline and nothing is rebound. The checks are the default
+        ones: the frame diameter must equal the pupil diameter, and two known,
+        different pupil identifiers refuse the pairing. The call does no array
+        work, so it is legal under ``jit``, ``vmap`` and ``grad``.
+
+        Args:
+            telescope: The ``Telescope`` that supplies the pupil.
+
+        Returns:
+            This model.
+
+        Raises:
+            ValueError: The frame diameter differs from the pupil diameter.
+            StampMismatchError: Both pupil identifiers are known and differ.
+        """
+        super().for_telescope(telescope)
+        return self
+
+    def _current_stamps(self) -> Stamps:
+        """Build facts of the path and settings as they are now (host only)."""
+        return _calibration_stamps(
+            self.core_path,
+            self.input_field,
+            self.grid,
+            wavelength_nm=self.wavelength_nm,
+            low_nm=self.low_nm,
+            max_separation_lod=self.max_separation_lod,
+            separation_step_lod=self.separation_step_lod,
+            fov_margin_lod=self.fov_margin_lod,
+            rules=self.rules,
+            leakage_rule=self.leakage_rule,
+            n_sky_screens=self.n_sky_screens,
+            seed=self.seed,
+            pupil_id=self.calibrated_pupil_id,
+        )
+
+    def calibration_stamps(self) -> Stamps:
+        """The build facts the calibration froze.
+
+        Returns:
+            Sorted build stamps, empty when they are unknown.
+        """
+        return self.calibration.built_at
+
+    def frozen_reads(self, reader: str) -> tuple[str, ...]:
+        """Owner-qualified paths a reader takes from the calibration snapshot.
+
+        A cached reader returns the snapshot's reads; a live reader follows the
+        path and returns an empty tuple. Pass the result to
+        ``hwoutils.provenance.bind_reads`` and ``stale_reads``.
+
+        Args:
+            reader: One of ``CACHED_READERS`` or ``LIVE_READERS``.
+
+        Returns:
+            The reads, relative to the owner named ``coronagraph``.
+
+        Raises:
+            ValueError: The reader is not known.
+        """
+        if reader in LIVE_READERS:
+            return ()
+        if reader in CACHED_READERS:
+            return self.calibration.reads
+        raise ValueError(
+            f"unknown reader {reader!r}; cached readers are {CACHED_READERS}, "
+            f"live readers are {LIVE_READERS}"
+        )
+
+    def stale_calibration(self) -> tuple[str, ...]:
+        """Labels whose present value differs from what the calibration froze.
+
+        Host only. A calibration without stamps, or a label unknown on either
+        side, is unverified and never reported.
+
+        Returns:
+            Sorted mismatched labels, empty when the snapshot matches the path.
+
+        Raises:
+            TypeError: A leaf of the path or the entrance field is traced.
+        """
+        comparison = compare_stamps(self.calibration_stamps(), self._current_stamps())
+        return tuple(label for label, _, _ in comparison.mismatched)
+
+    def require_fresh_calibration(self, *, reader: str) -> None:
+        """Refuse a cached read of a calibration that no longer matches the path.
+
+        A live reader follows the current path and always passes.
+
+        Args:
+            reader: One of ``CACHED_READERS`` or ``LIVE_READERS``.
+
+        Raises:
+            ValueError: The reader is not known.
+            StampMismatchError: A cached reader is asked of a stale calibration;
+                the message names the stale labels and ``recalibrated()``.
+        """
+        if not self.frozen_reads(reader):
+            return
+        stale = self.stale_calibration()
+        if stale:
+            raise StampMismatchError(
+                f"{reader} reads a calibration measured on a different path; "
+                f"stale facts: {', '.join(stale)}. Call recalibrated() to "
+                "measure the current path."
+            )
 
     @property
     def uniform_sky_profile(self):

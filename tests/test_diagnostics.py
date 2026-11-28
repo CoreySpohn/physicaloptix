@@ -3,7 +3,7 @@
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from conftest import speckle_grid
+from conftest import EPOCH, speckle_grid
 from hwoutils.numerics import eps
 from optixstuff import FocalResponse
 
@@ -199,6 +199,7 @@ class TestQuadratureAudit:
             ),
             rms,
             1e-3,
+            epoch=EPOCH,
         )
         reference = float(np.median(np.asarray(proc.moments().impropriety())))
         rep = quadrature_audit(modes, _propagate, per_mode_rms=rms)

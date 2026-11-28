@@ -2,7 +2,7 @@
 
 import jax.numpy as jnp
 import matplotlib
-from conftest import speckle_grid
+from conftest import EPOCH, speckle_grid
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -72,6 +72,7 @@ def _process(npix=8, m=3, knee_hz=1e-4, slope=-2.0, **kwargs):
         knee_hz=knee_hz,
         slope=slope,
         **kwargs,
+        epoch=EPOCH,
     )
 
 

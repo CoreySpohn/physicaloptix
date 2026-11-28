@@ -9,7 +9,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from optixstuff import SimplePrimary
+from optixstuff import SimplePupil
 from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind
@@ -46,13 +46,13 @@ def implementer():
     field = Field(
         data=jnp.asarray(disk).astype(complex), grid=grid, plane=PlaneKind.PUPIL
     )
-    primary = SimplePrimary(
+    pupil = SimplePupil(
         circumscribed_diameter_m=diameter, collecting_area_m2=np.pi * diameter**2 / 4
     )
     coro = PathCoronagraph.from_path(
         path,
         field,
-        primary=primary,
+        pupil=pupil,
         reference_wavelength_nm=600.0,
         max_separation_lod=10.0,
         pixel_scale_lod=0.5,

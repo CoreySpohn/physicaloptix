@@ -13,6 +13,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+from hwoutils.epoch import Epoch
 from hwoutils.numerics import COARSEST
 from hwoutils.precision import float_dtype, like
 from jaxtyping import Array
@@ -333,6 +334,7 @@ class ChromaticAnalyticSpeckleField(AnalyticSpeckleField):
                 response.reference_wavelength_nm,
                 wavelength_law="amplitude",
             ),
+            epoch=self.epoch,
             epoch_d=self.epoch_d,
             amplitudes=self.amplitudes,
             frequencies_hz=self.frequencies_hz,
@@ -652,7 +654,8 @@ class SpeckleProcess(eqx.Module):
         per_mode_rms: RMS drift per mode, shape (m,), in the mode units of the response.
         knee_hz: Temporal PSD knee frequency per mode in Hz, shape (m,).
         slope: High-frequency PSD slope per mode, shape (m,).
-        epoch_d: Days from the scene epoch at which elapsed time is zero.
+        epoch: Day zero of the drawn fields' clock; static host metadata.
+        epoch_d: Days from ``epoch`` at which elapsed time is zero.
         wavelengths_nm: Channel wavelengths in nanometers, shape (w,), or None for a
             monochromatic process.
         coherent: Whether drawn fields include the pinning cross term.
@@ -667,6 +670,7 @@ class SpeckleProcess(eqx.Module):
     per_mode_rms: Array  # float (m,): rms drift per mode
     knee_hz: Array  # float (m,): per-mode temporal PSD knee
     slope: Array  # float (m,): per-mode high-frequency PSD slope
+    epoch: Epoch = eqx.field(static=True)
     epoch_d: float = eqx.field(static=True)
     wavelengths_nm: Array | None
     coherent: bool = eqx.field(static=True)
@@ -681,6 +685,7 @@ class SpeckleProcess(eqx.Module):
         per_mode_rms,
         knee_hz,
         *,
+        epoch,
         slope=-2.0,
         epoch_d=0.0,
         coherent=False,
@@ -699,9 +704,11 @@ class SpeckleProcess(eqx.Module):
                 (``1 / (2 pi tau)`` for a decorrelation time ``tau``);
                 scalar (shared by every mode) or shape ``(m,)`` for
                 per-mode timescales.
+            epoch: Day zero of the drawn fields' clock, an ``Epoch``. Pass the
+                scene epoch to keep the meaning of ``epoch_d``.
             slope: High-frequency PSD power-law slope. Default -2; scalar
                 or shape ``(m,)`` for per-mode slopes.
-            epoch_d: Days from the scene epoch at which elapsed time is zero.
+            epoch_d: Days from ``epoch`` at which elapsed time is zero.
                 Default 0.0.
             coherent: Drawn fields include the pinning cross term.
             n_freq: Number of spectral-synthesis frequencies.
@@ -731,6 +738,7 @@ class SpeckleProcess(eqx.Module):
             bool(jnp.all(self.knee_hz == self.knee_hz[0]))
             and bool(jnp.all(self.slope == self.slope[0]))
         )
+        self.epoch = epoch
         self.epoch_d = float(epoch_d)
         self.wavelengths_nm = (
             None if wavelengths_nm is None else jnp.asarray(wavelengths_nm, dtype=dtype)
@@ -1018,6 +1026,7 @@ class SpeckleProcess(eqx.Module):
             response = replace(response, e_nom=jnp.zeros_like(response.e_nom))
         common = dict(
             response=response,
+            epoch=self.epoch,
             epoch_d=self.epoch_d,
             amplitudes=amp,
             frequencies_hz=f,

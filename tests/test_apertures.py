@@ -2,7 +2,7 @@
 
 import numpy as np
 import pytest
-from optixstuff import SegmentedPrimary
+from optixstuff import SegmentedPupil
 
 from physicaloptix.apertures import (
     eac1_primary,
@@ -17,7 +17,7 @@ class TestYamlLoader:
     def test_bundled_eac1_geometry(self):
         """Fails for rounded supplied diameters; hexagon geometry at 8-eps floor."""
         primary = eac1_primary()
-        assert isinstance(primary, SegmentedPrimary)
+        assert isinstance(primary, SegmentedPupil)
         assert primary.n_rings == 2
         assert primary.n_segments == 19
         a = 1.65 / 2
@@ -113,7 +113,7 @@ class TestRasterizer:
 
     def test_requires_exact_segment_size(self):
         with pytest.raises(ValueError, match="segment size"):
-            SegmentedPrimary(n_rings=2, segment_point_to_point_m=0.0)
+            SegmentedPupil(n_rings=2, segment_point_to_point_m=0.0)
 
 
 class TestSegmentRasterizer:
@@ -155,7 +155,7 @@ class TestSegmentRasterizer:
 
     def test_requires_exact_segment_size(self):
         with pytest.raises(ValueError, match="segment size"):
-            SegmentedPrimary(n_rings=2, segment_point_to_point_m=0.0)
+            SegmentedPupil(n_rings=2, segment_point_to_point_m=0.0)
 
 
 class TestNormalization:

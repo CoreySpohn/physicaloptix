@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from hwoutils.numerics import eps
 from hwoutils.testing import ulps
-from optixstuff import SimplePrimary
+from optixstuff import SimplePupil
 from optixstuff.grids import Measure, PixelGrid
 from optixstuff.spectral import Band, Quadrature
 from yippy import open_yip
@@ -20,7 +20,7 @@ from physicaloptix.transforms import Fraunhofer
 from physicaloptix.yip import emit_yip
 
 REFERENCE_NM = 600.0
-PRIMARY = SimplePrimary(circumscribed_diameter_m=1.0, collecting_area_m2=np.pi / 4)
+PUPIL = SimplePupil(circumscribed_diameter_m=1.0, collecting_area_m2=np.pi / 4)
 
 
 def _path(grid, stop):
@@ -35,7 +35,7 @@ def _live(path, entrance, pixel_scale_lod=0.25):
     return PathCoronagraph.from_path(
         path,
         entrance,
-        primary=PRIMARY,
+        pupil=PUPIL,
         reference_wavelength_nm=REFERENCE_NM,
         max_separation_lod=4,
         fov_margin_lod=2,

@@ -92,9 +92,9 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import numpy as np
 from optixstuff.grids import PixelGrid
-from optixstuff import SimplePrimary
+from optixstuff import SimplePupil
 
-primary = SimplePrimary(
+primary = SimplePupil(
     circumscribed_diameter_m=1.0, collecting_area_m2=0.7853981633974483
 )
 from physicaloptix import Field, Fraunhofer, OpticalPath, PlaneKind, Stage

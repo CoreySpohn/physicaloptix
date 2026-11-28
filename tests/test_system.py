@@ -481,12 +481,12 @@ class TestOptixstuffSeam:
             data=jnp.asarray(disk).astype(complex), grid=grid, plane=PlaneKind.PUPIL
         )
         flat, _ = system.as_channel_path("sci")
-        from optixstuff import SimplePrimary
+        from optixstuff import SimplePupil
 
         coronagraph = PathCoronagraph.from_path(
             flat,
             field,
-            primary=SimplePrimary(
+            pupil=SimplePupil(
                 circumscribed_diameter_m=6.0, collecting_area_m2=9 * np.pi
             ),
             reference_wavelength_nm=600.0,

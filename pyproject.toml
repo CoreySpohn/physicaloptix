@@ -22,13 +22,13 @@ classifiers = [
 dependencies = [
     "astropy>=6.1",
     "equinox>=0.13.2",
-    "hwoutils[jax]>=3.0.0",
+    "hwoutils[jax]>=3.1.0",
     "pyyaml>=6.0.1",
     "jax>=0.8.1",
     "jaxlib>=0.8.1",
     "jaxtyping>=0.3.3",
     "numpy>=2.0",
-    "optixstuff>=7.0.0",
+    "optixstuff>=8.0.0",
     "scipy>=1.13",
     "yippy>=4.0.0",
 ]

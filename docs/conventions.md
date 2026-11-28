@@ -334,8 +334,8 @@ temporal PSD is the knee form $(1 + (f/f_{\mathrm{knee}})^2)^{s/2}$, and a
 decorrelation time $\tau$ maps to $f_{\mathrm{knee}} = 1/(2\pi\tau)$ (the
 Ornstein-Uhlenbeck identification, exact for $s = -2$). A field runs on
 its own clock: its methods take `elapsed_s`, seconds since the clock origin,
-and synthesis never reads `epoch_d`. `epoch_d` places that origin on the scene
-clock in days from the scene epoch and defaults to 0.0; `field.elapsed_s(time_d)`
+and synthesis never reads `epoch_d`. `epoch` is the day zero the clock is counted from and `epoch_d` places the origin
+on it in days; `epoch_d` defaults to 0.0 and `epoch` is required (pass the scene epoch); `field.elapsed_s(time_d)`
 converts scene days, subtracting the static binary64 epoch, and refuses a
 float32 time at a nonzero epoch.
 
@@ -381,7 +381,7 @@ use `measure=Measure.intensive()`, `quantity="transmission"`, and no area factor
 `integrate_detector_pixels` takes and returns a per-pixel `Image`, preserving
 its quantity. `plot_field` accepts these Images directly.
 
-Construct `PathCoronagraph.from_path` with `primary`,
+Construct `PathCoronagraph.from_path` with `pupil`,
 `reference_wavelength_nm`, and `max_separation_lod`, the largest separation at which
 the records are sampled. The adapter exposes
 its native `grid` and prepares `curves(Circular(0.7))` and
@@ -393,6 +393,48 @@ Reduce any coarser build pitch and pass the detector pitch on the caller grid.
 For code that previously read a cached Lyot field, use
 `coro.core_path.propagate(coro.input_field)[0]` for the current complex field.
 Use `coro.calibration` for the measured photometry and sky response.
+
+### Live and measured readers
+
+A `PathCoronagraph` serves some products by following its path every time and
+others from a snapshot taken when it was built. The star (`stellar_map`), a single
+off-axis source (`off_axis_psf`) and a set of sources (`source_psfs`) are live: edit
+the Lyot stop and the star image moves. The aperture records (`curves`,
+`performance_record`) and the uniform-sky products (`uniform_sky_response`,
+`uniform_sky_map`, `uniform_sky_profile`) are measured once. They keep describing
+the path that was measured until you ask for a new measurement.
+
+The snapshot records which parts of the model it was measured through
+(`coro.frozen_reads(reader)` for a cached reader, an empty tuple for a live one) and
+the build facts of that measurement (`coro.calibration_stamps()`): the numbers of
+the path and the entrance field, the spectrum, the bands, the grid, every sampling
+and aperture setting, the seed, and a digest of the path structure, which catches a
+change of operator such as an interpolation order that leaves every array equal.
+`coro.stale_calibration()` compares those facts with the model as it is now and
+names the ones that differ.
+
+```python notest
+import equinox as eqx
+
+# Edit the Lyot stop: halve its amplitude.
+edited = eqx.tree_at(
+    lambda c: c.core_path.stages[-1].op.transmission, coro, replace_fn=lambda t: t / 2
+)
+
+star = edited.stellar_map(600.0, 0.0, grid=target)  # live: a quarter of the flux
+edited.uniform_sky_response(6.0)  # measured: unchanged
+
+edited.stale_calibration()  # ("core_path",)
+edited.require_fresh_calibration(reader="stellar_map")  # live reader: passes
+edited.require_fresh_calibration(reader="curves")  # raises, naming recalibrated()
+
+fresh = edited.recalibrated()  # measure the edited path, same seed
+fresh.stale_calibration()  # ()
+```
+
+A fit that frees the Lyot stop and evaluates only the live readers is valid. The
+same fit through a cached reader is refused where the product is frozen, with the
+declared reads as the comparison.
 
 All coronagraph image methods take a target `PixelGrid`. Scalar performance
 methods take `time_d`; speckle methods take `elapsed_s`, seconds on the field's

@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from conftest import TEST_FRAME, speckle_grid
+from conftest import EPOCH, TEST_FRAME, speckle_grid
 from hwoutils.precision import PrecisionError
 from optixstuff import FocalResponse
 from optixstuff.grids import PixelGrid
@@ -118,6 +118,7 @@ class TestMonteCarloConsistency:
             ),
             per_mode_rms=rms,
             knee_hz=1e-3,
+            epoch=EPOCH,
         )
         keys = jax.random.split(jax.random.PRNGKey(0), 400)
         # Each draw is one frozen realization; sample its eps at a fixed time.

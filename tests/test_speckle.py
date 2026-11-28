@@ -8,8 +8,9 @@ import jax.numpy as jnp
 import numpy as np
 import optixstuff as ox
 import pytest
-from conftest import TEST_FRAME, analytic_from_density, speckle_grid
+from conftest import EPOCH, TEST_FRAME, analytic_from_density, speckle_grid
 from hwoutils.constants import d2s, s2d
+from hwoutils.epoch import Epoch
 from hwoutils.numerics import roundoff
 from hwoutils.testing import precision_pair, ulps
 from optixstuff import FocalResponse
@@ -96,7 +97,11 @@ def test_synthesis_requires_one_row_per_mode(
     )
     with pytest.raises(ValueError, match=message):
         AnalyticSpeckleField(
-            response, jnp.ones(amp_shape), jnp.zeros(freq_shape), jnp.zeros(phase_shape)
+            response,
+            jnp.ones(amp_shape),
+            jnp.zeros(freq_shape),
+            jnp.zeros(phase_shape),
+            epoch=EPOCH,
         )
 
 
@@ -125,7 +130,7 @@ class TestSpeckleProcess:
             response=response, per_mode_rms=0.1, knee_hz=1e-4, epoch_d=_EPOCH_D
         )
         defaults.update(kwargs)
-        return SpeckleProcess(**defaults)
+        return SpeckleProcess(**defaults, epoch=EPOCH)
 
     def test_draw_returns_field_with_shared_parameters(self):
         proc = self._process(coherent=True, epoch_d=2.0)
@@ -198,6 +203,7 @@ class TestSpeckleProcess:
             ),
             decorr_hours=10.0,
             total_rms=0.3,
+            epoch=EPOCH,
         )
         tau_s = 10.0 * 3600.0
         # knee_hz broadcasts to (m,) now (per-mode timescales are expressible).
@@ -220,16 +226,23 @@ class TestInterface:
 
     def test_attaches_to_instrument(self):
         sp = _field()
-        op = ox.Instrument(
-            primary=ox.SimplePrimary(
-                circumscribed_diameter_m=TEST_FRAME.diameter_m,
-                collecting_area_m2=28.0,
+        obs = ox.Observatory(
+            ox.Telescope(
+                ox.SimplePupil(
+                    circumscribed_diameter_m=TEST_FRAME.diameter_m,
+                    collecting_area_m2=28.0,
+                )
             ),
-            attenuating_elements=(),
-            coronagraph=_mock_coro(),
-            detector=ox.IdealDetector(pixel_scale_arcsec=0.01, shape=(16, 16)),
-            speckle=sp,
+            (
+                ox.Instrument(
+                    "imager",
+                    coronagraph=_mock_coro(),
+                    detector=ox.IdealDetector(pixel_scale_arcsec=0.01, shape=(16, 16)),
+                    speckle=sp,
+                ),
+            ),
         )
+        op = obs.select("imager")
         assert op.speckle is sp
         assert op.speckle.grid.step == 0.25
         assert op.speckle.epoch_d == _EPOCH_D
@@ -256,7 +269,7 @@ def _small_process(m=_M, dims=_DIMS, **kwargs):
     )
     defaults = dict(per_mode_rms=0.1, knee_hz=1e-4)
     defaults.update(kwargs)
-    return SpeckleProcess(response, **defaults)
+    return SpeckleProcess(response, **defaults, epoch=EPOCH)
 
 
 class TestPerModePSD:
@@ -450,6 +463,7 @@ def _oracle_process(coherent, m=6, dims=8):
         per_mode_rms=rms,
         knee_hz=1e-3,
         coherent=coherent,
+        epoch=EPOCH,
     )
 
 
@@ -575,6 +589,7 @@ class TestMoments:
             knee_hz=1e-3,
             slope=0.0,
             n_freq=2,
+            epoch=EPOCH,
         )
         kappa = flat.renormalization_kurtosis()
         assert kappa.shape == (3,)
@@ -818,9 +833,10 @@ class TestFluxFractionNormalization:
                 sp.frequencies_hz,
                 sp.phases,
                 normalization=10.0,
+                epoch=EPOCH,
             )
         with pytest.raises(TypeError):
-            SpeckleProcess(sp.response, 0.1, 1e-4, normalization=10.0)
+            SpeckleProcess(sp.response, 0.1, 1e-4, normalization=10.0, epoch=EPOCH)
 
     def test_realize_is_flux_fraction_of_primitives(self):
         """realize == raw intensity delta * du^2 / E_in, from primitives."""
@@ -913,6 +929,7 @@ class TestChromaticProcess:
             1e-3,
             wavelengths_nm=jnp.array([500.0, 1500.0]),
             n_freq=2,
+            epoch=EPOCH,
         )
         node = process.draw(jax.random.PRNGKey(0)).at_wavelength(1000.0)
         coeff = node.coefficients(elapsed_s=0.0)[0]
@@ -939,6 +956,7 @@ class TestChromaticProcess:
             100.0,
             1e-4,
             wavelengths_nm=wavelengths,
+            epoch=EPOCH,
         )
         field = process.draw(jax.random.PRNGKey(1))
         assert field.wavelengths_nm is not None
@@ -976,6 +994,7 @@ class TestChromaticProcess:
             100.0,
             1e-4,
             wavelengths_nm=wavelengths,
+            epoch=EPOCH,
         )
         vector = SpeckleProcess(
             FocalResponse(
@@ -989,6 +1008,7 @@ class TestChromaticProcess:
             100.0,
             1e-4,
             wavelengths_nm=wavelengths,
+            epoch=EPOCH,
         )
         f_s = scalar.draw(jax.random.PRNGKey(1))
         f_v = vector.draw(jax.random.PRNGKey(1))
@@ -1017,6 +1037,7 @@ class TestChromaticProcess:
             decorr_hours=10.0,
             total_rms=0.3,
             wavelengths_nm=jnp.array([500.0, 550.0, 600.0]),
+            epoch=EPOCH,
         )
         assert proc.per_mode_rms.shape == (m,)
         np.testing.assert_allclose(proc.per_mode_rms, 0.3 / jnp.sqrt(m))
@@ -1039,6 +1060,7 @@ class TestChromaticProcess:
             100.0,
             1e-4,
             wavelengths_nm=jnp.array([500.0, 550.0, 600.0]),
+            epoch=EPOCH,
         )
         with pytest.raises(NotImplementedError, match="monochromatic"):
             proc.moments()
@@ -1061,6 +1083,7 @@ class TestChromaticProcess:
                 100.0,
                 1e-4,
                 wavelengths_nm=jnp.array([500.0, 550.0]),
+                epoch=EPOCH,
             )
 
     def test_mono_process_unchanged(self):
@@ -1079,6 +1102,7 @@ class TestChromaticProcess:
             ),
             100.0,
             1e-4,
+            epoch=EPOCH,
         )
         assert type(process.draw(jax.random.PRNGKey(1))) is AnalyticSpeckleField
 
@@ -1091,7 +1115,7 @@ class TestChromaticProcess:
         lin = linearize(
             small_path, chromatic_field, opd_basis, wavelengths_nm=wavelengths
         )
-        process = lin.to_speckle_process(per_mode_rms=100.0, knee_hz=1e-4)
+        process = lin.to_speckle_process(per_mode_rms=100.0, knee_hz=1e-4, epoch=EPOCH)
         assert process.wavelengths_nm is not None
         np.testing.assert_allclose(
             np.asarray(process.response.input_energy),
@@ -1191,6 +1215,7 @@ def _chromatic_process(coherent, e_scale=0.5, seed=0):
         1e-3,
         coherent=coherent,
         wavelengths_nm=jnp.array(_CROSS_WLS),
+        epoch=EPOCH,
     )
 
 
@@ -1237,6 +1262,7 @@ class TestCrossBandMoments:
                 proc.per_mode_rms,
                 proc.knee_hz,
                 coherent=coherent,
+                epoch=EPOCH,
             ).moments(renormalized=renormalized)
             gamma = mono.gamma_pixel_map
             e_pixel, g_pixel = proc.response.per_pixel()
@@ -1344,6 +1370,7 @@ class TestCrossBandMoments:
             1e-3,
             coherent=False,
             wavelengths_nm=jnp.array(self._WLS),
+            epoch=EPOCH,
         )
         cov = proc.cross_band_moments().cov_map
         d = jnp.sqrt(jnp.einsum("iiyx->iyx", cov))
@@ -1422,6 +1449,7 @@ class TestCrossBandMoments:
             ),
             1.0,
             1e-3,
+            epoch=EPOCH,
         )
         with pytest.raises(ValueError, match="chromatic"):
             mono.cross_band_moments()
@@ -1468,6 +1496,7 @@ class TestCrossBandViews:
             1e-3,
             coherent=False,
             wavelengths_nm=jnp.array(self._WLS),
+            epoch=EPOCH,
         )
         n_eff = np.asarray(proc.cross_band_moments().n_eff())
         n_ops = 4 * m + 2 * len(self._WLS) ** 2 + 8
@@ -1603,6 +1632,7 @@ class TestCrossBandViews:
             ),
             proc.per_mode_rms,
             proc.knee_hz,
+            epoch=EPOCH,
         )
         with pytest.raises(ValueError, match="chromatic"):
             mono.joint_covariance(jnp.ones((1, 12), dtype=bool))
@@ -1636,6 +1666,7 @@ class TestSingleBandImpropriety:
             ),
             rms,
             1e-3,
+            epoch=EPOCH,
         )
 
     def test_matches_kernels(self):
@@ -1729,6 +1760,7 @@ class TestPhotometryReport:
             ),
             1.0,
             1e-3,
+            epoch=EPOCH,
         )
 
     def test_reports_the_primitives_and_the_derived_divisor(self):
@@ -1789,6 +1821,7 @@ class TestPhotometryReport:
             1.0,
             1e-3,
             wavelengths_nm=wls,
+            epoch=EPOCH,
         )
         rep = proc.photometry()
         assert np.asarray(rep.input_energy).shape == (2,)
@@ -2235,3 +2268,25 @@ def test_data_mask_contract(chromatic):
     assert mask.dtype == bool and mask.shape == field.grid.shape
     data = np.asarray(field.realize(wavelength_nm=wavelength_nm, elapsed_s=3.0).data)
     assert np.all(data[..., ~mask] == 0.0)
+
+
+@pytest.mark.float64_only(reason="scene days need binary64")
+def test_one_instant_on_two_epochs_realizes_equally():
+    """Fails if the field ignores the epoch that its origin is counted from.
+
+    A field whose origin sits 2 days after epoch E and one counted from an
+    epoch 10 days later with an origin at -8 days are the same clock. The same
+    instant, stated on each epoch, gives bitwise equal realizations. The days
+    are dyadic, so the binary64 subtraction is exact.
+    """
+    shift = 10.0
+    field = replace(_field(coherent=True), epoch_d=2.0)
+    other = replace(
+        field, epoch=Epoch(EPOCH.jd1 + shift, EPOCH.jd2), epoch_d=field.epoch_d - shift
+    )
+    assert other.epoch != field.epoch
+    days = np.array([3.25, 4.5, 17.0])
+    first = field.realize(wavelength_nm=500.0, elapsed_s=field.elapsed_s(days))
+    second = other.realize(wavelength_nm=500.0, elapsed_s=other.elapsed_s(days - shift))
+    assert np.ptp(np.asarray(first.data)) > 0
+    np.testing.assert_array_equal(first.data, second.data)

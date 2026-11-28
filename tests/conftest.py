@@ -8,6 +8,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from hwoutils import set_platform
+from hwoutils.epoch import Epoch
 from hypothesis import settings
 from optixstuff import FocalResponse
 from optixstuff.grids import Frame, PixelGrid
@@ -36,6 +37,7 @@ settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "quick"))
 set_platform("cpu")
 
 TEST_FRAME = Frame(500.0, 1.0, "circumscribed")
+EPOCH = Epoch(2451545.0)
 
 EAC1_CACHE_ENV = "PHYSICALOPTIX_EAC1_CACHE"
 _DATA_DIRS = (Path(__file__).parent / "data",)
@@ -259,6 +261,7 @@ def analytic_from_density(
         coherent=coherent,
         wavelengths_nm=wavelengths_nm,
         n_freq=max(2, amplitudes.shape[-1]),
+        epoch=EPOCH,
     )
     field = process.draw(jax.random.PRNGKey(0))
     return eqx.tree_at(

@@ -3,7 +3,7 @@
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from conftest import TEST_FRAME
+from conftest import EPOCH, TEST_FRAME
 from hwoutils.testing import ulps
 from optixstuff.grids import PixelGrid
 from optixstuff.spectral import Band, Quadrature
@@ -266,7 +266,7 @@ class TestSpeckleProcessWiring:
         assert np.asarray(lin.G).shape == (3, 6, 64, 64)
         assert slices == {"a_drift": slice(0, 3), "b_drift": slice(3, 6)}
         process = lin.to_speckle_process(
-            per_mode_rms=0.05 * jnp.ones(6), knee_hz=1e-3, slope=-2.0
+            per_mode_rms=0.05 * jnp.ones(6), knee_hz=1e-3, slope=-2.0, epoch=EPOCH
         )
         realization = process.draw(jax.random.PRNGKey(0))
         # the chromatic draw carries every channel through

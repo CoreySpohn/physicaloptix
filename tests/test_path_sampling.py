@@ -4,7 +4,7 @@ import ineedvalidation as vv
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from optixstuff import SimplePrimary
+from optixstuff import SimplePupil
 from optixstuff.grids import Measure, PixelGrid, coverage
 from optixstuff.spectral import Band, Quadrature
 from scipy.integrate import quad
@@ -41,7 +41,7 @@ def _square(npix=16, *, extent=1.0, spectrum=None, pitch=0.25, reach=6.5):
     return PathCoronagraph.from_path(
         OpticalPath((Stage("stop", stop),)),
         field,
-        primary=SimplePrimary(circumscribed_diameter_m=1.0, collecting_area_m2=1.0),
+        pupil=SimplePupil(circumscribed_diameter_m=1.0, collecting_area_m2=1.0),
         reference_wavelength_nm=REFERENCE_NM,
         max_separation_lod=1.0,
         separation_step_lod=1.0,
