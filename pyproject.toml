@@ -30,7 +30,7 @@ dependencies = [
     "numpy>=2.0",
     "optixstuff>=7.0.0",
     "scipy>=1.13",
-    "yippy>=4.0.0",  # unreleased: next release
+    "yippy>=4.0.0",
 ]
 
 [project.optional-dependencies]
@@ -62,7 +62,7 @@ test = [
     "scipy>=1.13",
     "hcipy>=0.7.0",
     # The jaxedith rate cross-check in test_path_coronagraph.
-    "jaxedith>=4.0.0",  # unreleased: next release, see .github/sibling-pins.txt
+    "jaxedith>=4.0.0",
 ]
 # hwostyle is a DIRECT import of viz/train.py and viz/modes.py (cmaps.opd,
 # palette, roles), so it is declared here rather than relied on transitively
