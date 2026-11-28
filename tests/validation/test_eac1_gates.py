@@ -19,7 +19,7 @@ from conftest import TEST_FRAME
 from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.elements import MultiScaleVortex, SampledOptic
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.transforms import Fraunhofer, cmft_fwd
@@ -71,7 +71,7 @@ def aavc(eac1_cache):
     )
 
     pupil = jnp.asarray(z["pupil"], float).astype(complex)
-    x = jnp.asarray(_grid_axis(pupil_grid))
+    x = jnp.asarray(grid_axis(pupil_grid))
 
     def source(separation_lod=0.0):
         tilt = jnp.exp(2j * jnp.pi * separation_lod * x)[None, :]
@@ -82,7 +82,7 @@ def aavc(eac1_cache):
         return np.asarray(out.intensity().data), tapped
 
     tele = (
-        np.abs(np.asarray(cmft_fwd(pupil, x, jnp.asarray(_grid_axis(science_grid)))))
+        np.abs(np.asarray(cmft_fwd(pupil, x, jnp.asarray(grid_axis(science_grid)))))
         ** 2
     )
 

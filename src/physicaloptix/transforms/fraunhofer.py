@@ -35,7 +35,7 @@ from hwoutils.precision import like
 from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind, validate_field
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.diagnostics import mft_sampling_parameter
 from physicaloptix.transforms.cmft import cmft_bwd, cmft_fwd
 
@@ -113,11 +113,11 @@ class Fraunhofer(eqx.Module):
         self.reference_wavelength_nm = (
             None if reference_wavelength_nm is None else float(reference_wavelength_nm)
         )
-        gate_coords = _grid_axis(grid_out)
+        gate_coords = grid_axis(grid_out)
         if self.reference_wavelength_nm is not None and low_nm:
             gate_coords = gate_coords * (self.reference_wavelength_nm / float(low_nm))
         self.sampling_parameter = mft_sampling_parameter(
-            _grid_axis(grid_in), gate_coords
+            grid_axis(grid_in), gate_coords
         )
         if self.sampling_parameter < 1.0:
             message = (
@@ -157,8 +157,8 @@ class Fraunhofer(eqx.Module):
         validate_field(
             field, plane=self.plane_in, grid=self.grid_in, context="Fraunhofer"
         )
-        x = _grid_axis(self.grid_in)
-        u = like(_grid_axis(self.grid_out), field.data)
+        x = grid_axis(self.grid_in)
+        u = like(grid_axis(self.grid_out), field.data)
         scaling = self._chromatic_scaling(field)
         if scaling is None:
             data = cmft_fwd(field.data, x, u)
@@ -195,8 +195,8 @@ class Fraunhofer(eqx.Module):
         validate_field(
             field, plane=self.plane_out, grid=self.grid_out, context="Fraunhofer"
         )
-        x = _grid_axis(self.grid_in)
-        u = like(_grid_axis(self.grid_out), field.data)
+        x = grid_axis(self.grid_in)
+        u = like(grid_axis(self.grid_out), field.data)
         scaling = self._chromatic_scaling(field)
         if scaling is None:
             data = cmft_bwd(field.data, x, u)

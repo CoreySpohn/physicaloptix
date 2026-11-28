@@ -22,7 +22,7 @@ from physicaloptix.apertures import (
     rasterize_primary,
 )
 from physicaloptix.core import Field, PlaneKind
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.elements import MultiScaleVortex, SampledOptic
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.transforms import Fraunhofer, cmft_fwd
@@ -118,8 +118,8 @@ class TestGatesOnSynthesizedPupil:
     def test_gates_hold_on_synthesized_pupil(self, chain, eac1_cache):
         path, field, pupil_grid, science_grid = chain
         z = eac1_cache
-        x = jnp.asarray(_grid_axis(pupil_grid))
-        u = jnp.asarray(_grid_axis(science_grid))
+        x = jnp.asarray(grid_axis(pupil_grid))
+        u = jnp.asarray(grid_axis(science_grid))
 
         tele = np.abs(np.asarray(cmft_fwd(field.data, x, u))) ** 2
 

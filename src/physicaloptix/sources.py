@@ -8,16 +8,19 @@ wavelength. Downstream, a ``Fraunhofer`` stage with the same reference
 wavelength projects every slice onto one fixed angular grid.
 """
 
+import dataclasses
+
 import equinox as eqx
 import jax.numpy as jnp
 from hwoutils.conversions import arcsec_to_lambda_d
 from hwoutils.leaves import as_float_leaf
 from hwoutils.precision import like
 from jaxtyping import Array
+from optixstuff.grids import Image, Measure, footprint_overlap, integrate_footprints
 
 from physicaloptix.core import Field
-from physicaloptix.core.grid import _grid_axis
-from physicaloptix.elements.base import _optional_float_leaf
+from physicaloptix.core.grid import grid_axis
+from physicaloptix.elements.base import optional_float_leaf
 from physicaloptix.transforms import Fraunhofer
 
 
@@ -90,7 +93,7 @@ def point_source(
             "define the fixed angle"
         )
     px, py = (0.0, 0.0) if position_lod is None else position_lod
-    coords = like(_grid_axis(field.grid), field.data)
+    coords = like(grid_axis(field.grid), field.data)
     px, py = like(px, field.data), like(py, field.data)
     if reference_wavelength_nm is not None:
         reference_wavelength_nm = like(reference_wavelength_nm, field.data)
@@ -176,7 +179,7 @@ class PointSource(eqx.Module):
     position_arcsec: Array = eqx.field(converter=as_float_leaf)
     flux: Array = eqx.field(default=1.0, converter=as_float_leaf)
     spectral_weights: Array | None = eqx.field(
-        default=None, converter=_optional_float_leaf
+        default=None, converter=optional_float_leaf
     )
 
     def __check_init__(self):
@@ -213,7 +216,7 @@ class PointSource(eqx.Module):
         Returns:
             The tilted entrance ``Field``.
         """
-        x = like(_grid_axis(entrance.grid), entrance.data)
+        x = like(grid_axis(entrance.grid), entrance.data)
         lod = arcsec_to_lambda_d(
             like(self.position_arcsec, entrance.data),
             like(wavelength_nm, entrance.data),
@@ -227,3 +230,59 @@ class PointSource(eqx.Module):
             plane=entrance.plane,
             spectrum=entrance.spectrum,
         )
+
+
+def integrate_detector_pixels(image, oversample):
+    """Integrate an oversampled energy image over detector pixels, once.
+
+    Each detector pixel is the sum of its ``oversample x oversample``
+    samples: with samples at the sub-pixel centers and values that are
+    fractions of energy per sample, this is the composite midpoint rule for
+    the pixel integral (error falling as ``oversample**-2``) and the
+    usual detector-sampling rule. The result is the integrated detector image; applying
+    another pixel kernel afterwards would integrate twice.
+
+    This is a block SUM of energies, not a mean. It differs from
+    ``physicaloptix.ifs.pixel_integrate(intensity, n_quad, stride)``, which
+    returns the window MEAN of an intensity (the pixel-averaged value): for a
+    square image, ``integrate_detector_pixels(image, q)`` equals
+    ``q**2 * ifs.pixel_integrate(image.data, q, q)`` in its data.
+
+    Args:
+        image: Square cell-integrated Image, ``(n, n)`` with ``n`` a multiple of
+            ``oversample``, as returned by a band-image builder or an
+            explicitly constructed energy Image.
+        oversample: Samples per detector pixel along each axis.
+
+    Returns:
+        The cell-integrated Image on the coarser detector grid, retaining quantity.
+        Coarsening a band-limited source declares linear reconstruction;
+        oversample=1 retains its declaration, as do other reconstructions.
+
+    Raises:
+        ValueError: The image is not square 2D or does not tile into pixels.
+    """
+    source = image
+    if not isinstance(source, Image) or source.measure != Measure.integral():
+        raise ValueError("image must be a cell-integrated Image")
+    image = source.data
+    if image.ndim != 2 or image.shape[0] != image.shape[1]:
+        raise ValueError(f"image must be square 2D, got shape {image.shape}")
+    if oversample < 1 or image.shape[0] % oversample:
+        raise ValueError(
+            f"a {image.shape[0]}-sample image does not tile into pixels of "
+            f"{oversample} samples"
+        )
+    n_pix = image.shape[0] // oversample
+    grid = dataclasses.replace(
+        source.grid,
+        shape=(n_pix, n_pix),
+        center_x=(source.grid.center_x + 0.5) / oversample - 0.5,
+        center_y=(source.grid.center_y + 0.5) / oversample - 0.5,
+        basis=tuple(tuple(v * oversample for v in row) for row in source.grid.basis),
+    )
+    collected = integrate_footprints(source, footprint_overlap(source.grid, grid))
+    reconstruction = source.reconstruction
+    if oversample > 1 and reconstruction == "band_limited":
+        reconstruction = "linear"
+    return dataclasses.replace(collected, reconstruction=reconstruction)

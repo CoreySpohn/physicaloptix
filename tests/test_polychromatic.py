@@ -33,7 +33,7 @@ from jax.test_util import check_grads
 from optixstuff.grids import Frame, PixelGrid
 
 from physicaloptix.core import ChromaticTable, Field, PlaneKind
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.elements import (
     ModeBasis,
     PhaseScreen,
@@ -62,7 +62,7 @@ def _grids(pitches_arcsec=(0.04, 0.04)):
 
 
 def _pupil_amplitude():
-    x = np.asarray(_grid_axis(PixelGrid.pupil(NPUP)))
+    x = np.asarray(grid_axis(PixelGrid.pupil(NPUP)))
     xx, yy = np.meshgrid(x, x)
     amp = ((xx**2 + yy**2) <= 0.25).astype(float)
     amp[(np.abs(xx) < 0.05) & (yy > 0)] = 0.0
@@ -77,7 +77,7 @@ def _fixed_opd_basis():
 
 
 def _stop():
-    x = np.asarray(_grid_axis(PixelGrid.pupil(NPUP)))
+    x = np.asarray(grid_axis(PixelGrid.pupil(NPUP)))
     xx, yy = np.meshgrid(x, x)
     return jnp.asarray(((xx**2 + yy**2) <= 0.2).astype(float))
 

@@ -25,7 +25,7 @@ from hwoutils.testing import ulps
 from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.elements import ModeBasis, PhaseScreen
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.transforms import Fraunhofer, Fresnel
@@ -158,7 +158,7 @@ class TestTwoDeformableMirrorControl:
         x = np.asarray(_coords(npix))
         xg, yg = np.meshgrid(x, x)
         field = _pupil((xg**2 + yg**2 <= 0.25).astype(complex), npix)
-        fx = np.asarray(_grid_axis(PixelGrid.focal(_DM_NFOC, 0.5, TEST_FRAME)))
+        fx = np.asarray(grid_axis(PixelGrid.focal(_DM_NFOC, 0.5, TEST_FRAME)))
         fxg, fyg = np.meshgrid(fx, fx)
         mask = jnp.asarray((np.abs(fxg - _DM_FX0) < 1.0) & (np.abs(fyg) < 1.0))
         return self._relay_path(npix, alpha), field, mask

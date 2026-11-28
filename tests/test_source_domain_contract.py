@@ -13,7 +13,7 @@ from optixstuff import SimplePupil
 from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.elements import SampledOptic
 from physicaloptix.interop import PathCoronagraph
 from physicaloptix.path import OpticalPath, Stage
@@ -30,7 +30,7 @@ def implementer():
 
     npup, diameter = 64, 6.0
     grid = PixelGrid.pupil(npup)
-    x = np.asarray(_grid_axis(grid))
+    x = np.asarray(grid_axis(grid))
     xx, yy = np.meshgrid(x, x)
     disk = ((xx**2 + yy**2) <= 0.5**2).astype(float)
     path = OpticalPath(

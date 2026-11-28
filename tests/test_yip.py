@@ -10,7 +10,7 @@ from optixstuff.spectral import Band, Quadrature
 from yippy import open_yip
 
 from physicaloptix.core import Field, PlaneKind
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.elements import MultiScaleVortex, SampledOptic
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.yip import DEFAULT_STELLAR_DIAMETERS, emit_yip
@@ -22,7 +22,7 @@ YIP_FRAME = Frame(REF_NM, DIAMETER_M, "circumscribed")
 
 
 def _disk(grid, radius):
-    x = np.asarray(_grid_axis(grid))
+    x = np.asarray(grid_axis(grid))
     xx, yy = np.meshgrid(x, x)
     return ((xx**2 + yy**2) <= radius**2).astype(float)
 
@@ -177,7 +177,7 @@ class TestEmittedPackage:
 
     def test_offax_peaks_track_offsets(self, emitted):
         _, package = emitted
-        coords = np.asarray(_grid_axis(PixelGrid.focal(64, 0.5, YIP_FRAME)))
+        coords = np.asarray(grid_axis(PixelGrid.focal(64, 0.5, YIP_FRAME)))
         for offset, image in zip(
             (2.0, 6.0, 10.0), package["offaxis_psfs"].data, strict=True
         ):

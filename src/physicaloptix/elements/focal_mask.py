@@ -17,7 +17,16 @@ from optixstuff.grids import PixelGrid
 from physicaloptix.core import Field, PlaneKind
 from physicaloptix.transforms import Fraunhofer, FullBandFraunhofer
 
-__all__ = ["FocalPlaneMask", "mask_window", "select_mask_transform"]
+__all__ = [
+    "BandLimitedRoundMask",
+    "FocalPlaneMask",
+    "mask_window",
+    "select_mask_transform",
+]
+
+# Second positive zero of the Bessel function J1: the round band-limited
+# profile is truncated there, after its first sidelobe.
+J1_SECOND_ZERO = 7.015586669815619
 
 
 def mask_window(pupil_grid, oversample, *, frame, extent_lod=None):
@@ -177,3 +186,79 @@ class FocalPlaneMask(eqx.Module):
             plane=self.plane_out,
             spectrum=field.spectrum,
         )
+
+
+class BandLimitedRoundMask(eqx.Module):
+    """A round band-limited occulter with an optional layout of override regions.
+
+    Amplitude (electric-field) transmission, real and non-negative, after
+    Krist et al.'s band-limited design, truncated at ``clip``::
+
+        t(r) = 1 - (2 J1(s) / s)**2,  s = clip(sigma * r, tiny, clip),  t(0) = 0
+
+    (Krist et al. give the intensity transmission; the amplitude lacks the
+    outer square.) ``regions`` are then applied in order, each an open box
+    ``(x_lo, x_hi, y_lo, y_hi, amplitude)`` in arcsec relative to the mask
+    center, ``None`` meaning unbounded on that side: for example neutral
+    density squares and opaque or glass edges. Later regions override earlier
+    ones. Coordinates are in the mask-plane frame (x right, y up).
+
+    Attributes:
+        sigma_per_arcsec: Band-limit parameter sigma in 1/arcsec.
+        clip: Value of ``sigma * r`` at which the profile is truncated
+            (default: the second zero of J1).
+        regions: Rectangular override regions, in application order.
+        center_arcsec: ``(x, y)`` mask center in arcsec.
+    """
+
+    sigma_per_arcsec: float = eqx.field(static=True)
+    clip: float = eqx.field(static=True, default=J1_SECOND_ZERO)
+    regions: tuple = eqx.field(static=True, default=(), converter=tuple)
+    center_arcsec: tuple[float, float] = eqx.field(
+        static=True, default=(0.0, 0.0), converter=tuple
+    )
+
+    def __check_init__(self):
+        """Validate the profile parameters and region layout."""
+        if not self.sigma_per_arcsec > 0 or not self.clip > 0:
+            raise ValueError(
+                "sigma_per_arcsec and clip must be positive, got "
+                f"{self.sigma_per_arcsec} and {self.clip}"
+            )
+        if len(self.center_arcsec) != 2:
+            raise ValueError(f"center_arcsec must be (x, y), got {self.center_arcsec}")
+        for region in self.regions:
+            if len(region) != 5:
+                raise ValueError(
+                    "each region must be (x_lo, x_hi, y_lo, y_hi, amplitude), "
+                    f"got {region}"
+                )
+
+    def transmission(self, x_arcsec, y_arcsec):
+        """Amplitude transmission at mask-plane positions (host-side NumPy).
+
+        Args:
+            x_arcsec: x positions in arcsec (broadcast against ``y_arcsec``).
+            y_arcsec: y positions in arcsec.
+
+        Returns:
+            The real amplitude transmission, float64, broadcast shape.
+        """
+        from scipy.special import j1
+
+        xr = np.asarray(x_arcsec, dtype=float) - self.center_arcsec[0]
+        yr = np.asarray(y_arcsec, dtype=float) - self.center_arcsec[1]
+        xr, yr = np.broadcast_arrays(xr, yr)
+        r = np.sqrt(xr**2 + yr**2)
+        s = np.clip(self.sigma_per_arcsec * r, np.finfo(float).tiny, self.clip)
+        t = np.array(1.0 - (2.0 * j1(s) / s) ** 2)
+        t[r == 0] = 0.0
+        for x_lo, x_hi, y_lo, y_hi, amplitude in self.regions:
+            inside = np.ones(t.shape, dtype=bool)
+            for value, lo, hi in ((xr, x_lo, x_hi), (yr, y_lo, y_hi)):
+                if lo is not None:
+                    inside &= value > lo
+                if hi is not None:
+                    inside &= value < hi
+            t[inside] = amplitude
+        return t

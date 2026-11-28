@@ -17,7 +17,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from physicaloptix.apertures import rasterize_segments
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.elements.basis import ModeBasis
 
 _ZERNIKE_NAMES = {
@@ -133,7 +133,7 @@ def segment_ptt_basis(primary, grid, *, ptt_nm=1.0, supersample=16):
     """
     npix = grid.shape[0]
     masks = rasterize_segments(primary, npix, supersample=supersample)
-    coords = np.asarray(_grid_axis(grid))
+    coords = np.asarray(grid_axis(grid))
     x_grid, y_grid = np.meshgrid(coords, coords)
     centers = np.asarray(primary.segment_centers_m, dtype=float) / float(
         primary.diameter("circumscribed")
@@ -182,7 +182,7 @@ def fourier_dm_basis(grid, *, n_actuators, k_min=1.0, k_max=None, rms_nm=1.0):
     """
     nyquist = n_actuators / 2.0
     upper = nyquist if k_max is None else min(k_max, nyquist)
-    coords = np.asarray(_grid_axis(grid))
+    coords = np.asarray(grid_axis(grid))
     x_grid, y_grid = np.meshgrid(coords, coords)
     aperture = (x_grid**2 + y_grid**2) <= 0.25
 
@@ -224,7 +224,7 @@ def zernike_basis(grid, n_modes, *, rms_nm=1.0, diameter=1.0):
         A ``ModeBasis`` with ``B`` of shape ``(n_modes, npix, npix)`` in
         nanometers, zero coefficients, and ``kind="opd"``.
     """
-    coords = np.asarray(_grid_axis(grid))
+    coords = np.asarray(grid_axis(grid))
     x_grid, y_grid = np.meshgrid(coords, coords)
     radius = diameter / 2.0
     r = np.sqrt(x_grid**2 + y_grid**2)

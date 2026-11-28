@@ -10,7 +10,7 @@ from optixstuff.grids import PixelGrid
 from optixstuff.spectral import Band, Quadrature
 
 from physicaloptix.core import Field, PlaneKind
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.sources import broadcast_to_spectrum, point_source
 from physicaloptix.transforms import Fraunhofer
 
@@ -21,7 +21,7 @@ REF_NM = 1000.0
 @pytest.fixture
 def pupil_field():
     grid = PixelGrid.pupil(NPUP)
-    x = np.asarray(_grid_axis(grid))
+    x = np.asarray(grid_axis(grid))
     xx, yy = np.meshgrid(x, x)
     disk = ((xx**2 + yy**2) <= 0.25).astype(np.complex128)
     return Field(data=jnp.asarray(disk), grid=grid, plane=PlaneKind.PUPIL)
@@ -112,7 +112,7 @@ class TestSources:
             separation_lod=5.0,
             reference_wavelength_nm=REF_NM,
         )
-        x = jnp.asarray(_grid_axis(pupil_field.grid))
+        x = jnp.asarray(grid_axis(pupil_field.grid))
         for i, wl in enumerate(np.asarray(band.nodes_nm[0])):
             tilt = jnp.exp(2j * jnp.pi * 5.0 * (REF_NM / wl) * x)[None, :]
             np.testing.assert_allclose(
@@ -195,7 +195,7 @@ class TestFixedAngularPropagation:
         outward with wavelength on the fixed angular grid, and its lobe
         energy scales as (lambda_ref / lambda)^2 (the OPD sideband energy)."""
         k = 8.0
-        x = np.asarray(_grid_axis(pupil_field.grid))
+        x = np.asarray(grid_axis(pupil_field.grid))
         ripple = np.broadcast_to(np.cos(2 * np.pi * k * x), (NPUP, NPUP))
         source = point_source(
             pupil_field, spectrum=band, opd_nm=jnp.asarray(3.0 * ripple)
@@ -206,7 +206,7 @@ class TestFixedAngularPropagation:
         # difference isolates |G eps|^2 exactly (the linear speckle identity).
         delta = out.data - angular_prop.forward(nominal).data
         intensity = np.asarray(delta.real**2 + delta.imag**2)
-        coords = np.asarray(_grid_axis(out.grid))
+        coords = np.asarray(grid_axis(out.grid))
         wavelengths = np.asarray(band.nodes_nm[0])
         mid = intensity.shape[1] // 2
         peak_positions, peak_values = [], []

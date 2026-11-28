@@ -72,21 +72,43 @@ def _amplitude_leaf(value):
     return as_complex_leaf(value) if np.iscomplexobj(value) else as_float_leaf(value)
 
 
-def _optional_float_leaf(value):
-    """A float leaf of the active dtype, or None."""
+def optional_float_leaf(value):
+    """A float leaf of the active dtype, or None.
+
+    Args:
+        value: A real value, or ``None``.
+
+    Returns:
+        A strong float array of the active dtype, or ``None``.
+    """
     return None if value is None else as_float_leaf(value)
 
 
-def _array_leaf(value):
-    """Retain the precision of strong amplitudes and the kind of discrete masks."""
+def array_leaf(value):
+    """Retain the precision of strong amplitudes and the kind of discrete masks.
+
+    Args:
+        value: An amplitude, phasor or discrete mask.
+
+    Returns:
+        A strong array: inexact JAX arrays keep their precision, other values
+        keep their kind in the active precision.
+    """
     if isinstance(value, jax.Array) and jnp.issubdtype(value.dtype, jnp.inexact):
         return _amplitude_leaf(value)
     return as_leaf(value)
 
 
-def _optional_leaf(value):
-    """A strong leaf of the value's own kind, or None."""
-    return None if value is None else _array_leaf(value)
+def optional_leaf(value):
+    """A strong leaf of the value's own kind, or None.
+
+    Args:
+        value: An amplitude, phasor or discrete mask, or ``None``.
+
+    Returns:
+        The strong array from ``array_leaf``, or ``None``.
+    """
+    return None if value is None else array_leaf(value)
 
 
 class SampledOptic(Element):
@@ -120,7 +142,7 @@ class SampledOptic(Element):
     transmission: Array = eqx.field(converter=_amplitude_leaf)
     grid: PixelGrid
     plane: PlaneKind = eqx.field(static=True)
-    shift_px: Array | None = eqx.field(default=None, converter=_optional_float_leaf)
+    shift_px: Array | None = eqx.field(default=None, converter=optional_float_leaf)
     shift_order: int = eqx.field(static=True, default=1)
 
     def spectral_breaks_nm(self) -> np.ndarray:

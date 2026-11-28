@@ -1,4 +1,4 @@
-physicaloptix
+instrumentarium
 Copyright (c) 2026 Corey Spohn, released under the MIT License (see LICENSE).
 
 Third-party notices
@@ -10,10 +10,10 @@ Parts of physicaloptix are ports of routines from the PROPER optical propagation
 library (John Krist, Jet Propulsion Laboratory; Python translation by Navtej Saini,
 with Luis Marchen and Nikta Amiri):
 
-- physicaloptix/instruments/_proper_ops.py: ellipse_mask (from prop_ellipse),
+- physicaloptix/proper/ops.py: ellipse_mask (from prop_ellipse),
   cubic_conv_weights and resample_map (the prop_cubic_conv edge rule),
   szoom_weights (from prop_szoom_c).
-- physicaloptix/instruments/_proper_beam.py: the pilot-beam schedule and its
+- physicaloptix/proper/beam.py: the pilot-beam schedule and its
   operations (from prop_propagate, prop_lens, prop_ptp, prop_stw and prop_wts).
 
 PROPER carries the following notice, reproduced as its terms require:
@@ -80,11 +80,8 @@ SOFTWARE.
 
 Roman Preflight PROPER prescription
 -----------------------------------
-The Roman Coronagraph models in physicaloptix/instruments/roman.py and
-roman_full.py, and the prescription helpers in _proper_ops.py (ffts, mft2,
-noll_z6), follow the public version of the Roman Preflight PROPER prescription
+The prescription helpers in physicaloptix/proper/ops.py (ffts, mft2, noll_z6)
+follow the public version of the Roman Preflight PROPER prescription
 (roman_preflight_proper, John Krist; Copyright 2019-2026 California Institute of
 Technology). That prescription is distributed publicly by the Roman Coronagraph
-team. No prescription source files or data files are included in physicaloptix;
-the models take the prescription's masks, maps and DM data as inputs supplied by
-the user.
+team. No prescription source files or data files are included in physicaloptix.

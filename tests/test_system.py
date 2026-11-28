@@ -12,11 +12,8 @@ from optixstuff.grids import PixelGrid
 from optixstuff.spectral import Band, Quadrature
 
 from physicaloptix.core import Field, PlaneKind
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.elements import SampledOptic, SampledPhaseScreen
-from physicaloptix.instruments.nircam import NIRCamBand, NIRCamInputs
-from physicaloptix.instruments.roman import RomanCompact
-from physicaloptix.instruments.roman_full import RomanFull
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.sources import PointSource, broadcast_to_spectrum
 from physicaloptix.system import BeamSplitter, Branch, OpticalSystem
@@ -27,7 +24,7 @@ NPIX = 16
 
 def _pupil_field(npix=NPIX):
     grid = PixelGrid.pupil(npix)
-    x = np.asarray(_grid_axis(grid))
+    x = np.asarray(grid_axis(grid))
     xx, yy = np.meshgrid(x, x)
     disk = ((xx**2 + yy**2) <= 0.25).astype(complex)
     ramp = np.exp(1j * 2 * np.pi * 1.5 * xx)  # structure, so ports differ
@@ -36,7 +33,7 @@ def _pupil_field(npix=NPIX):
 
 
 def _binary_mask(npix=NPIX, radius=0.2):
-    x = np.asarray(_grid_axis(PixelGrid.pupil(npix)))
+    x = np.asarray(grid_axis(PixelGrid.pupil(npix)))
     xx, yy = np.meshgrid(x, x)
     return ((xx**2 + yy**2) <= radius**2).astype(float)
 
@@ -434,7 +431,7 @@ class TestOptixstuffSeam:
 
         npup = 32
         grid = PixelGrid.pupil(npup)
-        x = np.asarray(_grid_axis(grid))
+        x = np.asarray(grid_axis(grid))
         xx, yy = np.meshgrid(x, x)
         disk = ((xx**2 + yy**2) <= 0.25).astype(float)
         lyot = ((xx**2 + yy**2) <= 0.45**2).astype(float)
@@ -502,27 +499,6 @@ class TestOptixstuffSeam:
         assert np.all(np.isfinite(np.asarray(coronagraph.curves().throughput)))
 
 
-def _roman_compact(fpm, cast):
-    flat = cast(np.zeros((4, 4)))
-    return RomanCompact(
-        pupil=flat,
-        lyot=flat,
-        pupil_mask=flat,
-        fpm=cast(fpm),
-        kind="hlc",
-        n_small=4,
-        n_big=4,
-        pupil_diam_pix=2.0,
-        fpm_sampling_lod=1.0,
-        fpm_lam0_nm=500.0,
-        lam0_nm=500.0,
-        dm1_surface_m=flat,
-        dm2_surface_m=flat,
-        dm1_wfe_m=flat,
-        dm2_wfe_m=flat,
-    )
-
-
 def _leaf_cases(cast):
     grid = PixelGrid.pupil(NPIX)
     flat = cast(np.ones((NPIX, NPIX)))
@@ -560,53 +536,6 @@ def _leaf_cases(cast):
             ["wavelengths_nm", "transmit_table"],
             "float",
         ),
-        "roman_compact": (
-            _roman_compact(np.ones((3, 3)), cast),
-            [
-                "pupil",
-                "lyot",
-                "pupil_mask",
-                "fpm",
-                "dm1_surface_m",
-                "dm2_surface_m",
-                "dm1_wfe_m",
-                "dm2_wfe_m",
-            ],
-            "float",
-        ),
-        "roman_compact_complex_mask": (
-            _roman_compact(np.ones((3, 3), complex), cast),
-            ["fpm"],
-            "complex",
-        ),
-        "nircam_inputs": (
-            NIRCamInputs(
-                pupil_amplitude=flat,
-                pupil_diameter_m=6.5,
-                ote_opd_nm=flat,
-                lyot_amplitude=flat,
-                si_opd_nm=flat,
-                si_support=flat,
-                si_wavelength_nm=3300.0,
-            ),
-            [
-                "pupil_amplitude",
-                "ote_opd_nm",
-                "lyot_amplitude",
-                "si_opd_nm",
-                "si_support",
-            ],
-            "float",
-        ),
-        "nircam_band": (
-            NIRCamBand(
-                wavelengths_nm=(3300.0,),
-                weights=(1.0,),
-                si_opd_nm=cast(np.zeros((1, 4, 4))),
-            ),
-            ["si_opd_nm"],
-            "float",
-        ),
     }
 
 
@@ -638,27 +567,3 @@ def test_converted_fields_are_strong_leaves(case, precision):
         assert isinstance(leaf, jax.Array), name
         assert leaf.dtype == expected, name
         assert not leaf.weak_type, name
-
-
-@pytest.mark.float32_only(
-    reason="checks narrowing of host floats and phasors to float32 and complex64"
-)
-def test_roman_full_arrays_are_strong_leaves_of_their_kind_under_x32():
-    """Each array keeps its kind (a phasor stays complex, a mask stays boolean)
-    in the active precision. Truth source: the leaf rule; exact dtypes."""
-    model = RomanFull(
-        arrays={
-            "tilt": np.ones((2, 2), complex),
-            "map": np.zeros((2, 2)),
-            "mask": np.ones((2, 2), bool),
-        },
-        program=(),
-        n=2,
-        lam_m=5e-7,
-        pupil_diam_pix=1.0,
-        final_dx_m=1e-5,
-    )
-    want = {"tilt": jnp.complex64, "map": jnp.float32, "mask": jnp.bool_}
-    for key, dtype in want.items():
-        assert model.arrays[key].dtype == dtype, key
-        assert not model.arrays[key].weak_type, key

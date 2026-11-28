@@ -14,7 +14,7 @@ from optixstuff.grids import PixelGrid
 from optixstuff.spectral import Band, Quadrature
 
 from physicaloptix.core import Field, PlaneKind
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.diagnostics import mft_sampling_parameter
 from physicaloptix.transforms import Fraunhofer, cmft_bwd, cmft_fwd
 
@@ -66,8 +66,8 @@ class TestCmftPair:
         rng = np.random.default_rng(0)
         pupil_grid = PixelGrid.pupil(npup)
         focal_grid = PixelGrid.focal(nfoc, 1.0 / q, TEST_FRAME)
-        x = jnp.asarray(_grid_axis(pupil_grid))
-        u = jnp.asarray(_grid_axis(focal_grid))
+        x = jnp.asarray(grid_axis(pupil_grid))
+        u = jnp.asarray(grid_axis(focal_grid))
         f = jnp.asarray(_rng_field(rng, npup))
         g = jnp.asarray(_rng_field(rng, nfoc))
         forward = cmft_fwd(f, x, u)
@@ -89,8 +89,8 @@ class TestCmftPair:
         focal_grid = PixelGrid.focal(
             npup * q, 1.0 / q, TEST_FRAME
         )  # num_airy = npup/2: complete
-        x = jnp.asarray(_grid_axis(pupil_grid))
-        u = jnp.asarray(_grid_axis(focal_grid))
+        x = jnp.asarray(grid_axis(pupil_grid))
+        u = jnp.asarray(grid_axis(focal_grid))
         rng = np.random.default_rng(0)
         f = jnp.asarray(_rng_field(rng, npup))
         back = cmft_bwd(cmft_fwd(f, x, u), x, u)
@@ -108,8 +108,8 @@ class TestCmftPair:
         npup, q = 32, 2
         pupil_grid = PixelGrid.pupil(npup)
         focal_grid = PixelGrid.focal(npup * q, 1.0 / q, TEST_FRAME)
-        x = jnp.asarray(_grid_axis(pupil_grid))
-        u = jnp.asarray(_grid_axis(focal_grid))
+        x = jnp.asarray(grid_axis(pupil_grid))
+        u = jnp.asarray(grid_axis(focal_grid))
         rng = np.random.default_rng(0)
         f = jnp.asarray(_rng_field(rng, npup))
         e_pupil = float(jnp.sum(jnp.abs(f) ** 2) * pupil_grid.pixel_area)
@@ -127,14 +127,14 @@ class TestCmftPair:
         """A circular aperture's first null lands at 1.22 lambda/D."""
         npix = 256
         grid = PixelGrid.pupil(npix)
-        x1 = np.asarray(_grid_axis(grid))
+        x1 = np.asarray(grid_axis(grid))
         xx, yy = np.meshgrid(x1, x1)
         pupil = ((xx**2 + yy**2) <= 0.25).astype(np.complex128)
         q = 16
         focal_grid = PixelGrid.focal(
             int(6 * 2 * q), 1.0 / q, TEST_FRAME
         )  # +-6 lambda/D
-        u1 = np.asarray(_grid_axis(focal_grid))
+        u1 = np.asarray(grid_axis(focal_grid))
         foc = cmft_fwd(jnp.asarray(pupil), jnp.asarray(x1), jnp.asarray(u1))
         psf = np.abs(np.asarray(foc)) ** 2
         # Radial profile along the row nearest the axis.
@@ -273,7 +273,7 @@ def _mono_spectrum(wavelength_nm):
 
 
 def _disk(grid):
-    x = np.asarray(_grid_axis(grid))
+    x = np.asarray(grid_axis(grid))
     xx, yy = np.meshgrid(x, x)
     return ((xx**2 + yy**2) <= 0.25).astype(np.complex128)
 
@@ -437,18 +437,18 @@ class TestMftSamplingParameter:
         for npup in (32, 128):
             q = 2
             p = mft_sampling_parameter(
-                _grid_axis(PixelGrid.pupil(npup)),
-                _grid_axis(PixelGrid.focal(npup * q, 1.0 / q, TEST_FRAME)),
+                grid_axis(PixelGrid.pupil(npup)),
+                grid_axis(PixelGrid.focal(npup * q, 1.0 / q, TEST_FRAME)),
             )
             np.testing.assert_allclose(p, 1.0, atol=2.0 / npup)
 
     def test_doubling_the_focal_extent_halves_the_ratio(self):
-        x_in = _grid_axis(PixelGrid.pupil(64))
+        x_in = grid_axis(PixelGrid.pupil(64))
         p1 = mft_sampling_parameter(
-            x_in, _grid_axis(PixelGrid.focal(64, 0.25, TEST_FRAME))
+            x_in, grid_axis(PixelGrid.focal(64, 0.25, TEST_FRAME))
         )
         p2 = mft_sampling_parameter(
-            x_in, _grid_axis(PixelGrid.focal(128, 0.25, TEST_FRAME))
+            x_in, grid_axis(PixelGrid.focal(128, 0.25, TEST_FRAME))
         )
         np.testing.assert_allclose(
             p1 / p2, (128 / 2 - 0.5) / (64 / 2 - 0.5), rtol=1e-12
@@ -457,8 +457,8 @@ class TestMftSamplingParameter:
     def test_symmetric_in_input_and_output(self):
         """The kernel is symmetric in its two directions, so swapping the
         grids leaves the min-of-both-directions ratio unchanged."""
-        a = _grid_axis(PixelGrid.pupil(48))
-        b = _grid_axis(PixelGrid.focal(96, 0.4, TEST_FRAME))
+        a = grid_axis(PixelGrid.pupil(48))
+        b = grid_axis(PixelGrid.focal(96, 0.4, TEST_FRAME))
         np.testing.assert_allclose(
             mft_sampling_parameter(a, b),
             mft_sampling_parameter(b, a),

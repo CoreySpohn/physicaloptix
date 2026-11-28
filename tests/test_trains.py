@@ -14,7 +14,7 @@ from physicaloptix import (
     PlaneKind,
     broadcast_to_spectrum,
 )
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.trains import (
     REFLECTION_OPD_FACTOR,
     MirrorSpec,
@@ -86,7 +86,7 @@ class TestSynthesizePsdSurface:
 
 
 def _aperture_field(grid, spectrum=None):
-    coords = _grid_axis(grid)
+    coords = grid_axis(grid)
     xx, yy = np.meshgrid(coords, coords)
     aperture = (np.hypot(xx, yy) <= 0.5).astype(complex)
     field = Field(data=jnp.asarray(aperture), grid=grid, plane=PlaneKind.PUPIL)
@@ -230,7 +230,7 @@ class TestSpeckleProcessWiring:
         from physicaloptix.path import OpticalPath, Stage
 
         grid = PixelGrid.pupil(96)
-        coords = _grid_axis(grid)
+        coords = grid_axis(grid)
         xx, yy = np.meshgrid(coords, coords)
         aperture = (np.hypot(xx, yy) <= 0.5).astype(complex)
         drift = ModeBasis(

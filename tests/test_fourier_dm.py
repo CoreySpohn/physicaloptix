@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from optixstuff.grids import PixelGrid
 
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.elements.modes import fourier_dm_basis
 
 
@@ -58,7 +58,7 @@ class TestFourierDmBasis:
         basis = fourier_dm_basis(
             grid, n_actuators=24, k_min=3.0, k_max=10.0, rms_nm=2.5
         )
-        coords = np.asarray(_grid_axis(grid))
+        coords = np.asarray(grid_axis(grid))
         xg, yg = np.meshgrid(coords, coords)
         aperture = (xg**2 + yg**2) <= 0.25
         for mode in np.asarray(basis.B):

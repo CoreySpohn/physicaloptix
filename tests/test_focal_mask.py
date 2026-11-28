@@ -14,8 +14,13 @@ from hwoutils.testing import ulps
 from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind
-from physicaloptix.core.grid import _grid_axis
-from physicaloptix.elements import FocalPlaneMask, mask_window, select_mask_transform
+from physicaloptix.core.grid import grid_axis
+from physicaloptix.elements import (
+    BandLimitedRoundMask,
+    FocalPlaneMask,
+    mask_window,
+    select_mask_transform,
+)
 from physicaloptix.transforms import Fraunhofer, FullBandFraunhofer
 
 CASES = [(15, 2), (16, 2), (16, 3)]
@@ -33,7 +38,7 @@ def _pupil_field(npup):
 
 def _transmission(window):
     """Compact core, a box and a strip that both reach the window edge."""
-    c = _grid_axis(window)
+    c = grid_axis(window)
     xx, yy = np.meshgrid(c, c)
     t = 1.0 - np.exp(-((xx - 0.3) ** 2 + (yy + 0.2) ** 2) / 2.0)
     t[(xx > 2.0) & (yy > 1.0)] = 0.3
@@ -158,3 +163,51 @@ class TestFullBandMaskStage:
             FullBandFraunhofer(pupil, TEST_FRAME, 0)
         with pytest.raises(ValueError, match="no sample"):
             mask_window(pupil, 2, extent_lod=0.1, frame=TEST_FRAME)
+
+
+class TestBandLimitedRoundMask:
+    """The generic round band-limited profile: defaults carry no instrument number."""
+
+    def test_defaults_are_the_profile_constants(self):
+        """The truncation default is the second zero of J1, a mathematical
+        constant; no region and no center offset by default. Truth source: the
+        Bessel-function zero, exact to float64 evaluation."""
+        from scipy.special import jn_zeros
+
+        mask = BandLimitedRoundMask(sigma_per_arcsec=1.0)
+        assert mask.clip == pytest.approx(jn_zeros(1, 2)[1], rel=1e-15, abs=0)
+        assert mask.regions == ()
+        assert mask.center_arcsec == (0.0, 0.0)
+
+    def test_profile_matches_the_analytic_form(self):
+        """t(r) = 1 - (2 J1(s) / s)**2 inside the clip, t(0) = 0, constant
+        beyond the truncation. Truth source: the closed form; float64 noise."""
+        from scipy.special import j1
+
+        sigma = 2.5
+        mask = BandLimitedRoundMask(sigma_per_arcsec=sigma)
+        r = np.array([0.0, 0.3, 1.0, 3.0, 5.0])
+        got = mask.transmission(r, np.zeros_like(r))
+        s = np.clip(sigma * r, np.finfo(float).tiny, mask.clip)
+        want = 1.0 - (2.0 * j1(s) / s) ** 2
+        want[0] = 0.0
+        np.testing.assert_allclose(got, want, rtol=1e-14, atol=0)
+        assert got[-1] == got[-2]
+
+    def test_later_regions_override_and_center_shifts(self):
+        mask = BandLimitedRoundMask(
+            sigma_per_arcsec=2.5,
+            regions=((None, None, 1.0, None, 0.25), (-0.5, 0.5, 0.5, 2.0, 0.75)),
+            center_arcsec=(1.0, 0.0),
+        )
+        t = mask.transmission(np.array([1.0, 1.0, 1.0]), np.array([0.0, 0.7, 2.5]))
+        np.testing.assert_array_equal(t[1:], [0.75, 0.25])
+        assert t[0] == 0.0
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [{"sigma_per_arcsec": 0.0}, {"sigma_per_arcsec": 1.0, "regions": ((1, 2),)}],
+    )
+    def test_refuses_bad_parameters(self, kwargs):
+        with pytest.raises(ValueError):
+            BandLimitedRoundMask(**kwargs)

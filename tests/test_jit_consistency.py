@@ -17,7 +17,7 @@ from hwoutils.testing import ulps
 from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.elements import MultiScaleVortex, PhaseScreen, SampledOptic
 from physicaloptix.elements.modes import zernike_basis
 from physicaloptix.path import OpticalPath, Stage
@@ -118,8 +118,8 @@ class TestVmapMatchesLoop:
         agree exactly."""
         rng = np.random.default_rng(0)
         npup, nfoc = 32, 48
-        x = jnp.asarray(_grid_axis(PixelGrid.pupil(npup)))
-        u = jnp.asarray(_grid_axis(PixelGrid.focal(nfoc, 0.25, TEST_FRAME)))
+        x = jnp.asarray(grid_axis(PixelGrid.pupil(npup)))
+        u = jnp.asarray(grid_axis(PixelGrid.focal(nfoc, 0.25, TEST_FRAME)))
         batch = jnp.asarray(
             rng.standard_normal((3, npup, npup))
             + 1j * rng.standard_normal((3, npup, npup))

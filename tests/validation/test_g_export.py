@@ -20,7 +20,7 @@ from conftest import TEST_FRAME
 from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.elements import ModeBasis, MultiScaleVortex, SampledOptic
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.transforms import Fraunhofer, cmft_fwd
@@ -94,7 +94,7 @@ def regenerate_basis(npup, pupil_amplitude, pupil_grid):
     ang = rng.uniform(0.0, 2 * np.pi, N_MODES)
     psi = rng.uniform(0.0, 2 * np.pi, N_MODES)
     kx, ky = kr * np.cos(ang), kr * np.sin(ang)
-    x = np.asarray(_grid_axis(pupil_grid))
+    x = np.asarray(grid_axis(pupil_grid))
     xp, yp = np.meshgrid(x, x)
 
     def mode(k):
@@ -132,8 +132,8 @@ class TestGExportReproduction:
             jnp.abs(
                 cmft_fwd(
                     field.data,
-                    jnp.asarray(_grid_axis(pupil_grid)),
-                    jnp.asarray(_grid_axis(science_grid)),
+                    jnp.asarray(grid_axis(pupil_grid)),
+                    jnp.asarray(grid_axis(science_grid)),
                 )
             )
             ** 2

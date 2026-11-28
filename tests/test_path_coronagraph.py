@@ -34,7 +34,7 @@ from optixstuff.spectral import Band, Quadrature
 
 from physicaloptix import __version__
 from physicaloptix.core import Field, PlaneKind
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.elements import MultiScaleVortex, PhaseScreen, SampledOptic
 from physicaloptix.elements.modes import zernike_basis
 from physicaloptix.interop import PathCoronagraph, _tree_digest
@@ -54,7 +54,7 @@ def _grid(shape, step):
 
 
 def _disk(grid, radius):
-    x = np.asarray(_grid_axis(grid))
+    x = np.asarray(grid_axis(grid))
     xx, yy = np.meshgrid(x, x)
     return ((xx**2 + yy**2) <= radius**2).astype(float)
 

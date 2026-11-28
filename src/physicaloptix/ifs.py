@@ -58,7 +58,7 @@ from optixstuff.grids import (
 )
 from optixstuff.psflet_pack import TEMPLATE_ORIGIN
 
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.elements.base import _amplitude_leaf
 from physicaloptix.transforms.cmft import cmft_fwd
 
@@ -263,7 +263,7 @@ class LensletChain(eqx.Module):
         return self.micropupil_px / self.pitch_lod(wavelength_nm)
 
     def _axis(self, grid):
-        return like(_grid_axis(grid), self)
+        return like(grid_axis(grid), self)
 
     def _window(self):
         c = self._axis(self.tile_grid)

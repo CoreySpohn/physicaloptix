@@ -6,12 +6,13 @@ import pytest
 from hwoutils.numerics import eps
 from hwoutils.testing import ulps
 
-from physicaloptix.instruments._proper_ops import (
+from physicaloptix.proper import (
     cubic_conv_weights,
     ellipse_mask,
     ffts,
     mft2,
     noll_z6,
+    proper_trim,
     resample_map,
     shift_center,
     szoom_weights,
@@ -106,3 +107,40 @@ def test_ffts_batched_matches_single():
     rng = np.random.default_rng(4)
     a = jnp.asarray(rng.standard_normal((2, 8, 8)) + 0j)
     assert jnp.max(jnp.abs(ffts(a, -1)[1] - ffts(a[1], -1))) < 1e-15
+
+
+@pytest.mark.parametrize(
+    "shape,n,expected_origin",
+    [
+        ((5, 5), 3, (1, 1)),
+        ((6, 6), 3, (2, 2)),
+        ((5, 5), 4, (0, 0)),
+        ((4, 4), 7, (-1, -1)),
+        ((3, 3), 6, (-2, -2)),
+    ],
+)
+def test_proper_trim_is_integer_centered(shape, n, expected_origin):
+    a = np.arange(np.prod(shape), dtype=float).reshape(shape)
+    out = np.asarray(proper_trim(a, n))
+    oy, ox = expected_origin
+    for j in range(n):
+        for i in range(n):
+            src_j, src_i = j + oy, i + ox
+            inside = 0 <= src_j < shape[0] and 0 <= src_i < shape[1]
+            assert out[j, i] == (a[src_j, src_i] if inside else 0.0)
+
+
+def test_public_names_import_from_the_package():
+    """Every public operation is reachable from ``physicaloptix.proper``."""
+    import physicaloptix.proper as proper
+
+    assert all(callable(getattr(proper, name)) for name in proper.__all__)
+    assert not hasattr(proper, "_ptp")
+
+
+def test_the_instruments_package_is_gone():
+    """The instrument models are a separate package; no shim remains here."""
+    import importlib
+
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("physicaloptix.instruments")

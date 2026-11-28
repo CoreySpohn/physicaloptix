@@ -16,7 +16,7 @@ from optixstuff.spectral import Band, Quadrature
 
 from physicaloptix import command_response
 from physicaloptix.core import Field, PlaneKind
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.elements import (
     DispersiveScreen,
     ModeBasis,
@@ -56,7 +56,7 @@ def setup():
     npup = 24
     pupil_grid = PixelGrid.pupil(npup)
     focal_grid = PixelGrid.focal(32, 0.5, TEST_FRAME)
-    x = np.asarray(_grid_axis(pupil_grid))
+    x = np.asarray(grid_axis(pupil_grid))
     xx, yy = np.meshgrid(x, x)
     disk = ((xx**2 + yy**2) <= 0.25).astype(float)
     path = OpticalPath(
@@ -769,7 +769,7 @@ class TestChromaticLinearize:
 
 def _train_and_field(nlam=None, npix=96):
     grid = PixelGrid.pupil(npix)
-    coords = _grid_axis(grid)
+    coords = grid_axis(grid)
     xx, yy = np.meshgrid(coords, coords)
     aperture = (np.hypot(xx, yy) <= 0.5).astype(complex)
     drift = ModeBasis(

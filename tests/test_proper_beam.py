@@ -9,7 +9,7 @@ from hwoutils.testing import ulps
 from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind
-from physicaloptix.instruments._proper_beam import (
+from physicaloptix.proper import (
     Op,
     PilotBeam,
     plan_lens,

@@ -13,7 +13,7 @@ from optixstuff.grids import PixelGrid
 from optixstuff.spectral import Band, Quadrature
 
 from physicaloptix.core import Field, PlaneKind
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.sources import PointSource, broadcast_to_spectrum, point_source
 from physicaloptix.transforms import (
     Fraunhofer,
@@ -73,7 +73,7 @@ def test_fourier_kernel_precision(name, check_precision):
     """
     pupil = PixelGrid.pupil(N)
     focal = PixelGrid.focal(2 * N, 0.5, TEST_FRAME)
-    x, u = _grid_axis(pupil), _grid_axis(focal)
+    x, u = grid_axis(pupil), grid_axis(focal)
     fn, n = {
         "cmft_fwd": (partial(cmft_fwd, x=x, u=u, ux=u + 0.125), N),
         "cmft_bwd": (partial(cmft_bwd, x=x, u=u), 2 * N),
@@ -94,7 +94,7 @@ def test_mask_transform_precision(kernel, dtype, check_precision):
         check_precision: Compare both working precisions and audit the narrow trace.
     """
     mask = jnp.eye(N, dtype=dtype)
-    axis = jnp.asarray(_grid_axis(PixelGrid.pupil(N)))
+    axis = jnp.asarray(grid_axis(PixelGrid.pupil(N)))
     check_precision(kernel, (mask, axis, axis), 2 * N + 8)
 
 

@@ -94,16 +94,15 @@ with any external code or transcribing any formula.
   re-expressed in upright coordinates.
 - **The one explicit exception: `CoordinateInversion`.** The transforms never
   flip parity, but a path may contain an explicit reflection stage.
-  `physicaloptix.instruments.nircam.CoordinateInversion` reverses the field
+  `physicaloptix.elements.CoordinateInversion` reverses the field
   along one axis about the optical axis (lossless on the symmetric grid), and
-  the NIRCam builder places it after the entrance pupil and the telescope
-  OPD, to reproduce the coordinate inversion in y that the reference code
+  the NIRCam builder in instrumentarium places it after the entrance pupil
+  and the telescope OPD, to reproduce the coordinate inversion in y that the reference code
   (STPSF) puts after the telescope. Planes downstream of it (the mask plane,
   the Lyot stop, the exit-pupil wavefront error, the detector) are in the
   entrance frame with y reversed, and their arrays must be given in that
   frame. The inversion is a named stage, visible in taps; nothing else in
   the library reflects a plane.
-  See [Instrument builders](instruments.md).
 - **Rows are y, ascending upward.** `data` is `(y, x)` with both axes sampled
   on the same ascending coordinates, so row 0 sits at $y = -\mathrm{extent}$.
   Display with `origin="lower"`; matplotlib's default renders every image
@@ -439,3 +438,16 @@ declared reads as the comparison.
 All coronagraph image methods take a target `PixelGrid`. Scalar performance
 methods take `time_d`; speckle methods take `elapsed_s`, seconds on the field's
 own clock, and visualization `times_s` are passed to them unchanged.
+
+## PROPER-style operations
+
+`physicaloptix.proper` holds the operations of the PROPER propagation
+library's conventions, with integer-centered samples at `n // 2`. `ops` has the
+centered transforms `shift_center`, `fft_forward`, `fft_backward`, `ffts` and
+`mft2`; the resampling tools `cubic_conv_weights`, `resample_map`,
+`szoom_weights` and `proper_trim`; and the helpers `ellipse_mask` and
+`noll_z6`. `beam` has the Gaussian pilot beam `PilotBeam`, the planners
+`plan_propagate` and `plan_lens`, and the executors `apply_op` and `run_ops`
+over an operation list `Op`. The planners resolve the schedule in NumPy when a
+model is built; the executors run it in JAX. The NIRCam and Roman models
+that use them are in the instrumentarium package.

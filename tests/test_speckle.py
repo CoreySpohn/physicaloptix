@@ -19,7 +19,7 @@ from scipy.integrate import quad
 
 from physicaloptix import AnalyticSpeckleField
 from physicaloptix.core import Field
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.linearize import linearize
 from physicaloptix.speckle import (
     SpeckleProcess,
@@ -879,7 +879,7 @@ class TestTelescopePeak:
         npup = 24
         pupil_grid = PixelGrid.pupil(npup)
         focal_grid = PixelGrid.focal(32, 0.25, TEST_FRAME)
-        x = np.asarray(_grid_axis(pupil_grid))
+        x = np.asarray(grid_axis(pupil_grid))
         xx, yy = np.meshgrid(x, x)
         disk = ((xx**2 + yy**2) <= 0.25).astype(float)
         field = Field(
@@ -888,7 +888,7 @@ class TestTelescopePeak:
             plane=PlaneKind.PUPIL,
         )
         # independent oracle: forward kernel e^{-2 i pi u x}, weights dx^2
-        u = np.asarray(_grid_axis(focal_grid))
+        u = np.asarray(grid_axis(focal_grid))
         kernel = np.exp(-2j * np.pi * np.outer(u, x))
         e = kernel @ disk @ kernel.T * pupil_grid.step**2
         expected = float((np.abs(e) ** 2).max())

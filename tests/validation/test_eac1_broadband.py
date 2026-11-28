@@ -15,7 +15,7 @@ from optixstuff.grids import PixelGrid
 from optixstuff.spectral import Band, Quadrature
 
 from physicaloptix.core import Field, PlaneKind
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.elements import MultiScaleVortex, SampledOptic
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.sources import broadcast_to_spectrum, point_source
@@ -96,11 +96,11 @@ class TestBroadbandNull:
         # The reference-wavelength slice IS the mono propagation.
         np.testing.assert_allclose(slices[2], mono_psf, rtol=1e-10)
 
-        x = jnp.asarray(_grid_axis(field.grid))
+        x = jnp.asarray(grid_axis(field.grid))
         tele = (
             np.abs(
                 np.asarray(
-                    cmft_fwd(field.data, x, jnp.asarray(_grid_axis(science.grid_out)))
+                    cmft_fwd(field.data, x, jnp.asarray(grid_axis(science.grid_out)))
                 )
             )
             ** 2
@@ -132,6 +132,6 @@ class TestBroadbandPlanet:
             for i in range(band.nodes_nm.shape[1])
         ]
         assert len({tuple(p) for p in peaks}) == 1
-        coords = np.asarray(_grid_axis(out.grid))
+        coords = np.asarray(grid_axis(out.grid))
         peak_x = coords[peaks[0][1]]
         assert abs(peak_x - 7.875) < 0.25

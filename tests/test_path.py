@@ -8,7 +8,7 @@ from conftest import TEST_FRAME
 from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.elements import SampledOptic
 from physicaloptix.path import OpticalPath, Stage
 from physicaloptix.transforms import Fraunhofer
@@ -18,7 +18,7 @@ from physicaloptix.transforms import Fraunhofer
 def simple_chain():
     pupil_grid = PixelGrid.pupil(32)
     focal_grid = PixelGrid.focal(64, 0.5, TEST_FRAME)
-    x = np.asarray(_grid_axis(pupil_grid))
+    x = np.asarray(grid_axis(pupil_grid))
     xx, yy = np.meshgrid(x, x)
     disk = ((xx**2 + yy**2) <= 0.25).astype(float)
     stop = SampledOptic(

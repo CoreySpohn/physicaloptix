@@ -9,7 +9,7 @@ from optixstuff.grids import PixelGrid
 from optixstuff.spectral import Band, Quadrature
 
 from physicaloptix.core import Field, PlaneKind
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.elements import ModeBasis, PhaseScreen, SampledOptic
 from physicaloptix.multichannel import linearize_shared, ncpa_differential_opd
 from physicaloptix.path import OpticalPath, Stage
@@ -22,7 +22,7 @@ NPIX, WL, DIAM_M = 16, 500.0, 0.02
 
 def _grid_bits(npix=NPIX):
     grid = PixelGrid.pupil(npix)
-    x = np.asarray(_grid_axis(grid))
+    x = np.asarray(grid_axis(grid))
     xx, yy = np.meshgrid(x, x)
     disk = ((xx**2 + yy**2) <= 0.25).astype(float)
     return grid, xx, yy, disk

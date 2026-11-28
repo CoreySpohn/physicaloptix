@@ -12,7 +12,7 @@ from jax.scipy.special import erf
 from optixstuff import PsfletPack, load_psflet_pack, save_psflet_pack
 from optixstuff.grids import PixelGrid
 
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.ifs import (
     LensletChain,
     _check_stop_band,
@@ -28,7 +28,7 @@ LAM_REF = 1000.0
 
 def disk_pupil(n=64):
     grid = PixelGrid.pupil(n)
-    c = _grid_axis(grid)
+    c = grid_axis(grid)
     rr2 = c[:, None] ** 2 + c[None, :] ** 2
     return jnp.asarray((rr2 <= 0.25).astype(float)), grid
 
@@ -62,7 +62,7 @@ class TestFlatSinc:
         n = chain.n_tile
         px = jnp.linspace(-4.0, 4.0, 33)
         u = np.asarray(px / chain.px_per_diffraction(LAM_REF))
-        tile = jnp.asarray(_grid_axis(chain.tile_grid))
+        tile = jnp.asarray(grid_axis(chain.tile_grid))
         direct = cmft_fwd(chain.local_field(LAM_REF), tile, jnp.asarray(u))
         intensity = np.asarray(jnp.abs(direct) ** 2)
         with np.errstate(invalid="ignore"):
@@ -89,7 +89,7 @@ class TestFlatSinc:
                 illumination="flat", mp_half_extent=extent, n_mp=n_mp, n_stop=192
             )
             u = px / chain.px_per_diffraction(LAM_REF)
-            tile = jnp.asarray(_grid_axis(chain.tile_grid))
+            tile = jnp.asarray(grid_axis(chain.tile_grid))
             direct = jnp.abs(cmft_fwd(chain.local_field(LAM_REF), tile, u)) ** 2
             through = chain.psflet_intensity(LAM_REF, px)
             direct = np.asarray(direct / direct.max())
@@ -178,7 +178,7 @@ def tilted_chain():
     base = make_chain(illumination="flat", pinhole_radius=1.5)
     # The Fourier shift theorem gives dx = OPD slope / wavelength * px per unit.
     slope = 0.3 * LAM_REF / base.px_per_diffraction(LAM_REF)
-    x = _grid_axis(base.stop_grid)
+    x = grid_axis(base.stop_grid)
     opd = np.broadcast_to(slope * x, base.stop_grid.shape)
     return make_chain(illumination="flat", pinhole_radius=1.5, stop_opd_nm=opd)
 
@@ -204,7 +204,7 @@ class TestShiftTheoremAndWavecal:
         base = make_chain(illumination="flat")
         ppd = float(base.px_per_diffraction(LAM_REF))
         grad_nm = 0.3 * LAM_REF / ppd  # a 0.3 px shift
-        x_s = np.asarray(_grid_axis(base.stop_grid))
+        x_s = np.asarray(grid_axis(base.stop_grid))
         opd = jnp.asarray(np.broadcast_to(grad_nm * x_s[None, :], (128, 128)))
         tilted = make_chain(illumination="flat", stop_opd_nm=opd)
         step = 0.05
@@ -454,7 +454,7 @@ class TestPack:
         base = make_chain()
         chain = base
         if dy:
-            y = _grid_axis(base.stop_grid)
+            y = grid_axis(base.stop_grid)
             slope = dy * LAM_REF / base.px_per_diffraction(LAM_REF)
             opd = np.broadcast_to(slope * y[:, None], base.stop_grid.shape)
             chain = make_chain(stop_opd_nm=opd)
@@ -631,7 +631,7 @@ class TestArrayScene:
         """A tilted pupil (an off-axis source) illuminates the lenslet at
         the source's sky position."""
         pupil, grid = disk_pupil()
-        c = _grid_axis(grid)
+        c = grid_axis(grid)
         tilt = np.exp(2j * np.pi * (c[None, :] * 1.0 + c[:, None] * -0.5))
         chain = LensletChain(
             jnp.asarray(np.asarray(pupil) * tilt),

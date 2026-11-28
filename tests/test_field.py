@@ -10,12 +10,13 @@ from optixstuff.spectral import Band, Quadrature
 
 from physicaloptix._sky import entrance_energy
 from physicaloptix.core import Field, PlaneKind
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
+from physicaloptix.elements import CoordinateInversion
 
 
 def disk_field(npix=64):
     grid = PixelGrid.pupil(npix)
-    x = np.asarray(_grid_axis(grid))
+    x = np.asarray(grid_axis(grid))
     xx, yy = np.meshgrid(x, x)
     data = ((xx**2 + yy**2) <= 0.25).astype(np.complex128)
     return Field(data=jnp.asarray(data), grid=grid, plane=PlaneKind.PUPIL)
@@ -141,3 +142,35 @@ class TestFieldPhysics:
         np.testing.assert_allclose(
             entrance_energy(field), mean_power * expected_area, rtol=1e-14
         )
+
+
+class TestCoordinateInversion:
+    """The one lossless axis reflection of a centred field."""
+
+    @pytest.mark.parametrize(("axis", "flipped"), [("y", 0), ("x", 1)])
+    def test_reverses_exactly_along_the_axis(self, axis, flipped):
+        grid = PixelGrid.pupil(6)
+        data = jnp.asarray(np.arange(36.0).reshape(6, 6) + 1j)
+        field = Field(data=data, grid=grid, plane=PlaneKind.PUPIL)
+        out = CoordinateInversion(grid=grid, axis=axis)(field)
+        np.testing.assert_array_equal(
+            np.asarray(out.data), np.flip(np.asarray(data), axis=flipped)
+        )
+        assert out.grid == grid and out.plane is PlaneKind.PUPIL
+
+    def test_is_an_involution(self):
+        grid = PixelGrid.pupil(4)
+        data = jnp.asarray(np.arange(16.0).reshape(4, 4) + 0j)
+        field = Field(data=data, grid=grid, plane=PlaneKind.PUPIL)
+        element = CoordinateInversion(grid=grid)
+        np.testing.assert_array_equal(
+            np.asarray(element(element(field)).data), np.asarray(data)
+        )
+
+    def test_refuses_an_unknown_axis_and_a_wrong_plane(self):
+        grid = PixelGrid.pupil(4)
+        with pytest.raises(ValueError):
+            CoordinateInversion(grid=grid, axis="z")
+        wrong = Field(data=jnp.ones((4, 4), complex), grid=grid, plane=PlaneKind.FOCAL)
+        with pytest.raises(ValueError):
+            CoordinateInversion(grid=grid)(wrong)

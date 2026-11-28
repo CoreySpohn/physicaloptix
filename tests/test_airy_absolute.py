@@ -22,7 +22,7 @@ from hwoutils.testing import ulps
 from optixstuff.grids import PixelGrid
 from scipy.special import j0, j1
 
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.transforms.cmft import cmft_fwd
 
 Q_FOC = 16
@@ -45,11 +45,11 @@ def _airy_setup(npup, supersample=16):
     grid = PixelGrid.pupil(npup)
     pupil = _gray_disk(npup, supersample)
     focal = PixelGrid.focal(int(2 * Q_FOC * NUM_AIRY), 1.0 / Q_FOC, TEST_FRAME)
-    u = np.asarray(_grid_axis(focal))
+    u = np.asarray(grid_axis(focal))
     foc = np.asarray(
         cmft_fwd(
             jnp.asarray(pupil, complex),
-            jnp.asarray(_grid_axis(grid)),
+            jnp.asarray(grid_axis(grid)),
             jnp.asarray(u),
         )
     )
@@ -105,11 +105,11 @@ class TestFourierIdentities:
         pass."""
         npup = 128
         grid = PixelGrid.pupil(npup)
-        x1 = np.asarray(_grid_axis(grid))
+        x1 = np.asarray(grid_axis(grid))
         xx, yy = np.meshgrid(x1, x1)
         pupil = _gray_disk(npup, supersample=1)
         focal = PixelGrid.focal(int(2 * Q_FOC * NUM_AIRY), 1.0 / Q_FOC, TEST_FRAME)
-        u = jnp.asarray(_grid_axis(focal))
+        u = jnp.asarray(grid_axis(focal))
         du = 1.0 / Q_FOC
         shift_x_px, shift_y_px = 24, 8
         tilt = np.exp(2j * np.pi * (shift_x_px * du * xx + shift_y_px * du * yy))
@@ -131,11 +131,11 @@ class TestFourierIdentities:
         Airy-tail leakage back to the axis."""
         npup = 256
         grid = PixelGrid.pupil(npup)
-        x1 = np.asarray(_grid_axis(grid))
+        x1 = np.asarray(grid_axis(grid))
         xx, _ = np.meshgrid(x1, x1)
         pupil = _gray_disk(npup)
         focal = PixelGrid.focal(int(2 * Q_FOC * NUM_AIRY), 1.0 / Q_FOC, TEST_FRAME)
-        u = jnp.asarray(_grid_axis(focal))
+        u = jnp.asarray(grid_axis(focal))
         x = jnp.asarray(x1)
         uu, vv = np.meshgrid(np.asarray(u), np.asarray(u))
         onaxis = np.unravel_index(np.hypot(uu, vv).argmin(), uu.shape)

@@ -7,7 +7,7 @@ from hwoutils.testing import ulps
 from optixstuff.grids import PixelGrid
 from optixstuff.spectral import Band, Quadrature
 
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 
 
 class TestGridConstruction:
@@ -15,7 +15,7 @@ class TestGridConstruction:
         grid = PixelGrid.pupil(64)
         assert grid.shape[0] == 64
         assert grid.step == 1.0 / 64
-        coords = np.asarray(_grid_axis(grid))
+        coords = np.asarray(grid_axis(grid))
         assert coords.shape == (64,)
         # Half-pixel-offset symmetric grid: no sample at 0, symmetric about 0.
         assert not np.any(coords == 0.0)
@@ -26,7 +26,7 @@ class TestGridConstruction:
         grid = PixelGrid.focal(256, 0.25, TEST_FRAME)
         assert grid.shape[0] == 256
         assert grid.step == 0.25
-        coords = np.asarray(_grid_axis(grid))
+        coords = np.asarray(grid_axis(grid))
         np.testing.assert_allclose(coords[-1], (256 / 2 - 0.5) * 0.25)
 
     def test_weights_are_cell_area(self):

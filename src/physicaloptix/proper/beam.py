@@ -1,4 +1,4 @@
-"""Pilot-beam propagation in the convention of the PROPER library (internal module).
+"""Pilot-beam propagation in the convention of the PROPER library.
 
 PROPER (Krist 2007) carries a Gaussian pilot beam beside the field. A propagation
 whose ends both lie within a Rayleigh distance of the pilot waist uses the
@@ -28,7 +28,7 @@ from typing import NamedTuple
 import jax.numpy as jnp
 import numpy as np
 
-from physicaloptix.instruments._proper_ops import (
+from physicaloptix.proper.ops import (
     fft_backward,
     fft_forward,
     shift_center,

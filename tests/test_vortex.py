@@ -7,7 +7,7 @@ from hwoutils.numerics import eps
 from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.elements import MultiScaleVortex
 from physicaloptix.elements.vortex import (
     _hann_symmetric,
@@ -177,7 +177,7 @@ class TestMultiScaleVortexElement:
             charge=2, npup=npup, q=64, scaling_factor=4, window_size=16
         )
         grid = PixelGrid.pupil(npup)
-        x = np.asarray(_grid_axis(grid))
+        x = np.asarray(grid_axis(grid))
         xx, yy = np.meshgrid(x, x)
         disk = ((xx**2 + yy**2) <= 0.25).astype(np.complex128)
         field = Field(data=jnp.asarray(disk), grid=grid, plane=PlaneKind.PUPIL)
@@ -200,7 +200,7 @@ class TestMultiScaleVortexElement:
         """In-pupil on-axis energy after the vortex << off-axis energy."""
         vortex, field, disk = setup
         grid = field.grid
-        x = jnp.asarray(_grid_axis(grid))
+        x = jnp.asarray(grid_axis(grid))
         inside = jnp.asarray(np.abs(disk) > 0)
 
         on = vortex(field)

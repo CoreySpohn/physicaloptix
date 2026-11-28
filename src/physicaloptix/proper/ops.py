@@ -1,18 +1,18 @@
-"""Array helpers in PROPER and Roman-prescription conventions (internal module).
+"""Array helpers in PROPER conventions.
 
 These reproduce reference conventions that the general transforms in hwoutils do
 not share on purpose: PROPER's cubic-convolution edge rule (the integer tap is
 clamped to ``[2, n - 2]`` while the fractional offset is kept, and taps beyond
 the array are dropped), its damped-sinc zoom, its antialiased circle, and the
-prescription's centered FFT and matrix Fourier transform. Samples are
+centered FFT and matrix Fourier transform. Samples are
 integer-centered at ``n // 2``. The weight builders and the mask run in NumPy at
 build time; the transforms are JAX.
 
 ellipse_mask, cubic_conv_weights, resample_map and szoom_weights are ported from
 PROPER (prop_ellipse, prop_cubic_conv, prop_szoom_c; Copyright California
 Institute of Technology, designated Technology and Software Publicly Available);
-ffts, mft2 and noll_z6 follow the Roman Preflight PROPER prescription. See the
-NOTICE file for the terms.
+ffts, mft2 and noll_z6 follow PROPER's centered-transform and Zernike
+conventions. See the NOTICE file for the terms.
 """
 
 import math
@@ -273,3 +273,25 @@ def noll_z6(n, dx_m, beam_radius_m):
     r2 = x[None, :] ** 2 + x[:, None] ** 2
     t = jnp.arctan2(x[:, None], x[None, :])
     return math.sqrt(6.0) * r2 * jnp.cos(2 * t)
+
+
+def proper_trim(a, n):
+    """Crop or zero-pad a square array to ``n`` about the integer center ``m // 2``.
+
+    Args:
+        a: Array whose last two axes are square, of equal size m.
+        n: Target size in samples along each of the last two axes.
+
+    Returns:
+        The array cropped or zero-padded to (n, n) about the sample m // 2.
+    """
+    a = jnp.asarray(a)
+    m = a.shape[-1]
+    if n == m:
+        return a
+    if n < m:
+        x1 = m // 2 - n // 2
+        return a[..., x1 : x1 + n, x1 : x1 + n]
+    x1 = n // 2 - m // 2
+    pad = [(0, 0)] * (a.ndim - 2) + [(x1, n - m - x1), (x1, n - m - x1)]
+    return jnp.pad(a, pad)

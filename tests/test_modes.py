@@ -11,7 +11,7 @@ from optixstuff.grids import PixelGrid
 
 from physicaloptix.apertures import eac1_primary, rasterize_primary, rasterize_segments
 from physicaloptix.core import Field, PlaneKind
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.elements import ModeBasis
 from physicaloptix.elements.modes import segment_ptt_basis, zernike_basis
 from physicaloptix.linearize import linearity_residual, linearize
@@ -25,7 +25,7 @@ def primary():
 
 
 def _aperture(grid, diameter=1.0):
-    coords = np.asarray(_grid_axis(grid))
+    coords = np.asarray(grid_axis(grid))
     x_grid, y_grid = np.meshgrid(coords, coords)
     return np.sqrt(x_grid**2 + y_grid**2) <= diameter / 2.0
 
@@ -164,7 +164,7 @@ class TestNollIdentity:
 
     @staticmethod
     def _polar(grid):
-        coords = np.asarray(_grid_axis(grid))
+        coords = np.asarray(grid_axis(grid))
         x_grid, y_grid = np.meshgrid(coords, coords)
         return 2.0 * np.hypot(x_grid, y_grid), np.arctan2(y_grid, x_grid)
 

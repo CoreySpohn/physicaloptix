@@ -19,7 +19,7 @@ from physicaloptix import (
     PlaneKind,
     broadcast_to_spectrum,
 )
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.trains import (
     REFLECTION_OPD_FACTOR,
     MirrorSpec,
@@ -35,7 +35,7 @@ ALPHAS = {"m_near": 6.9e-5, "m_mid": 4.0e-4, "m_far": 9.4e-4}
 @pytest.fixture(scope="module")
 def setup():
     grid = PixelGrid.pupil(NPIX)
-    coords = _grid_axis(grid)
+    coords = grid_axis(grid)
     xx, yy = np.meshgrid(coords, coords)
     aperture = (np.hypot(xx, yy) <= 0.5).astype(complex)
     surfaces = {
@@ -90,7 +90,7 @@ class TestMultiMirrorPhysics:
         # fraction |sin(pi alpha nu^2)| -- measure there, on the full train.
         grid, aperture, *_ = setup
         alpha, nu = 4.0e-4, 20.0
-        coords = _grid_axis(grid)
+        coords = grid_axis(grid)
         xx = np.meshgrid(coords, coords)[0]
         ripple = 0.5 * np.cos(2 * np.pi * nu * xx)  # nm surface, no aperture
         spec = (MirrorSpec(name="m", alpha=alpha, surface_nm=ripple),)

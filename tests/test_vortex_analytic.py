@@ -52,7 +52,7 @@ import pytest
 from optixstuff.grids import PixelGrid
 
 from physicaloptix.core import Field, PlaneKind
-from physicaloptix.core.grid import _grid_axis
+from physicaloptix.core.grid import grid_axis
 from physicaloptix.elements import MultiScaleVortex
 from physicaloptix.transforms.cmft import cmft_fwd
 
@@ -86,7 +86,7 @@ def _lyot_contrast(charge, supersample):
     contrast against the non-coronagraphic focal peak of the same pupil.
     """
     grid = PixelGrid.pupil(NPUP)
-    x = jnp.asarray(_grid_axis(grid))
+    x = jnp.asarray(grid_axis(grid))
     pupil = _gray_disk(NPUP, supersample)
     u, rfoc = _focal_grid()
     ref_peak = float(
@@ -155,7 +155,7 @@ def lyot_field(request):
     pupil = _gray_disk(NPUP)
     vortex = MultiScaleVortex.build(charge=charge, npup=NPUP, q=1024)
     field = Field(data=jnp.asarray(pupil, complex), grid=grid, plane=PlaneKind.PUPIL)
-    return charge, np.asarray(vortex(field).data), np.asarray(_grid_axis(grid))
+    return charge, np.asarray(vortex(field).data), np.asarray(grid_axis(grid))
 
 
 class TestEvenChargeClosedForm:

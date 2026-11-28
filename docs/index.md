@@ -53,6 +53,8 @@ reference.
 - **Not a PSF interpolator.** That is {mod}`yippy`'s job (a sampled YIP table).
   physicaloptix is its functional sibling -- live propagation -- and both back
   the same `AbstractImagingCoronagraph` slot.
+- **Not an instrument library.** The NIRCam and Roman Coronagraph models are in
+  the separate instrumentarium package, which builds on physicaloptix.
 - **Not a scene model.** Stars, planets, disks, and zodi live in
   {mod}`skyscapes`.
 
@@ -203,7 +205,6 @@ explanation/cross-band-statistics
 :hidden:
 
 conventions
-instruments
 validation
 glossary
 ```
